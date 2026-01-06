@@ -55,43 +55,54 @@ impl Pawn {
         }
     }
 
-    /// Draws the pawn's label in screen space.
-    /// Called after resetting to default camera to keep text crisp at any zoom level.
-    /// The camera is passed to convert world position to screen coordinates.
+    /// Draws the pawn's label in world space.
+    /// Uses dynamic font_size for crisp rendering and font_scale to maintain world dimensions.
+    /// Called with camera active so background/padding scale automatically.
     fn draw_label(&self, camera: &mq::Camera2D) {
         if self.label.text.is_empty() || self.label.size <= 0.0 {
             return;
         }
 
-        // Convert the bottom-center of the pawn from world space to screen space
-        let world_pos = mq::vec2(
-            self.bounds.x + self.bounds.w / 2.0,
-            self.bounds.y + self.bounds.h,
-        );
-        let screen_pos = camera.world_to_screen(world_pos);
+        // Calculate zoom scale for crisp text rendering
+        let origin_screen = camera.world_to_screen(mq::vec2(0.0, 0.0));
+        let unit_screen = camera.world_to_screen(mq::vec2(0.0, 1.0));
+        let zoom_scale = (unit_screen.y - origin_screen.y).abs();
 
-        // Measure text to center it horizontally
-        let text_dims = mq::measure_text(&self.label.text, None, self.label.size as u16, 1.0);
-        let label_x = screen_pos.x - text_dims.width / 2.0;
-        let label_y = screen_pos.y + text_dims.height + 8.0;
+        // Rasterize at screen size for crispness, scale to world size
+        let screen_font_size = (self.label.size * zoom_scale).clamp(4.0, 200.0) as u16;
+        let font_scale = self.label.size / screen_font_size as f32;
 
-        // Draw semi-transparent background behind text
-        let padding = 4.0;
+        // World-space constants (scale automatically with camera)
+        let gap = 4.0;
+        let padding = 2.0;
+
+        // Measure text in world units
+        let text_dims = mq::measure_text(&self.label.text, None, screen_font_size, font_scale);
+
+        // Position at bottom-center of pawn, centered horizontally
+        let text_x = self.bounds.x + self.bounds.w / 2.0 - text_dims.width / 2.0;
+        let text_y = self.bounds.y + self.bounds.h + gap + text_dims.height;
+
+        // Draw semi-transparent background
         mq::draw_rectangle(
-            label_x - padding,
-            label_y - text_dims.height - padding,
+            text_x - padding,
+            text_y - text_dims.height - padding,
             text_dims.width + padding * 2.0,
             text_dims.height + padding * 2.0,
             mq::Color::new(0.0, 0.0, 0.0, 0.6),
         );
 
         // Draw the label text
-        mq::draw_text(
+        mq::draw_text_ex(
             &self.label.text,
-            label_x,
-            label_y,
-            self.label.size,
-            self.label.color,
+            text_x,
+            text_y,
+            mq::TextParams {
+                font_size: screen_font_size,
+                font_scale,
+                color: self.label.color,
+                ..Default::default()
+            },
         );
     }
 }
@@ -126,20 +137,21 @@ impl Board {
     }
 
     /// Draws all pawns on the board.
-    /// Shapes are drawn in world space (affected by camera).
-    /// Labels are drawn in screen space (always crisp, fixed size).
+    /// Everything is drawn in world space with the camera active.
+    /// Labels use dynamic font sizing for crisp rendering at any zoom level.
     pub fn draw(&self, pawns: &[Pawn]) {
-        // Draw shapes in world space with camera transformation
         mq::set_camera(&self.camera);
+
         for pawn in pawns {
             pawn.draw_shape();
         }
 
-        // Draw labels in screen space to keep text crisp at any zoom level
-        mq::set_default_camera();
         for pawn in pawns {
             pawn.draw_label(&self.camera);
         }
+
+        // Reset camera for subsequent drawing (e.g., egui)
+        mq::set_default_camera();
     }
 }
 
