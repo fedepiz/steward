@@ -1,37 +1,55 @@
 use macroquad::prelude as mq;
+use util::{SpanHandle, StringPool};
 
 /// Stroke style for pawn outlines.
 /// Set thickness to 0 to disable stroke.
-#[derive(Default)]
+#[derive(Clone, Copy, Default)]
 pub struct Stroke {
     pub color: mq::Color,
     pub thickness: f32,
 }
 
-/// Text label displayed below a pawn.
-/// Set size to 0 or text to empty to disable label.
-#[derive(Default)]
-pub struct Label {
-    pub text: String,
-    pub size: f32,
+/// Label descriptor for creating pawns. Takes text by reference.
+#[derive(Clone, Copy, Default)]
+pub struct LabelDesc<'a> {
+    pub text: &'a str,
+    pub size: u16,
     pub color: mq::Color,
 }
 
-/// A drawable game piece on the board.
-/// Features are disabled via zero/default values rather than Option types.
-#[derive(Default)]
-pub struct Pawn {
+/// Pawn descriptor for adding pawns to the board. A POD that borrows label text.
+#[derive(Clone, Copy, Default)]
+pub struct PawnDesc<'a> {
     pub bounds: mq::Rect,
     pub fill: mq::Color,
     pub stroke: Stroke,
-    pub label: Label,
+    pub label: LabelDesc<'a>,
+}
+
+/// Handle to a pawn in the board. Valid only for the current frame.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PawnId(pub usize);
+
+/// Internal label storage with text as a span into the shared buffer.
+#[derive(Clone, Copy, Default)]
+struct Label {
+    text_span: SpanHandle,
+    size: u16,
+    color: mq::Color,
+}
+
+/// Internal pawn storage. All data is Copy.
+#[derive(Clone, Copy, Default)]
+struct Pawn {
+    bounds: mq::Rect,
+    fill: mq::Color,
+    stroke: Stroke,
+    label: Label,
 }
 
 impl Pawn {
     /// Draws the pawn's shape (fill and stroke) in world space.
-    /// Called with the camera active.
     fn draw_shape(&self) {
-        // Draw fill only if alpha > 0 (not transparent)
         if self.fill.a > 0.0 {
             mq::draw_rectangle(
                 self.bounds.x,
@@ -42,7 +60,6 @@ impl Pawn {
             );
         }
 
-        // Draw stroke only if thickness > 0 and not transparent
         if self.stroke.thickness > 0.0 && self.stroke.color.a > 0.0 {
             mq::draw_rectangle_lines(
                 self.bounds.x,
@@ -56,28 +73,28 @@ impl Pawn {
     }
 
     /// Draws the pawn's label in world space.
-    /// Uses dynamic font_size for crisp rendering and font_scale to maintain world dimensions.
-    /// Called with camera active so background/padding scale automatically.
-    fn draw_label(&self, camera: &mq::Camera2D) {
-        if self.label.text.is_empty() || self.label.size <= 0.0 {
+    /// Uses fixed font_size with inverse zoom scaling for constant screen size.
+    fn draw_label(&self, camera: &mq::Camera2D, font: Option<&mq::Font>, strings: &StringPool) {
+        let text = strings.get(self.label.text_span);
+        if text.is_empty() || self.label.size == 0 {
             return;
         }
 
-        // Calculate zoom scale for crisp text rendering
+        // Calculate zoom scale (screen pixels per world unit)
         let origin_screen = camera.world_to_screen(mq::vec2(0.0, 0.0));
         let unit_screen = camera.world_to_screen(mq::vec2(0.0, 1.0));
         let zoom_scale = (unit_screen.y - origin_screen.y).abs();
 
-        // Rasterize at screen size for crispness, scale to world size
-        let screen_font_size = (self.label.size * zoom_scale).clamp(4.0, 200.0) as u16;
-        let font_scale = self.label.size / screen_font_size as f32;
+        // Inverse scale to maintain constant screen size
+        let inv_scale = 1. / zoom_scale;
 
-        // World-space constants (scale automatically with camera)
-        let gap = 4.0;
-        let padding = 2.0;
+        // Screen-space constants, scaled to world space
+        let padding = 4. * inv_scale;
+        let gap = 2. * padding;
 
-        // Measure text in world units
-        let text_dims = mq::measure_text(&self.label.text, None, screen_font_size, font_scale);
+        // Use fixed font_size, scale down to world space
+        let font_scale = inv_scale;
+        let text_dims = mq::measure_text(text, font, self.label.size, font_scale);
 
         // Position at bottom-center of pawn, centered horizontally
         let text_x = self.bounds.x + self.bounds.w / 2.0 - text_dims.width / 2.0;
@@ -89,16 +106,17 @@ impl Pawn {
             text_y - text_dims.height - padding,
             text_dims.width + padding * 2.0,
             text_dims.height + padding * 2.0,
-            mq::Color::new(0.0, 0.0, 0.0, 0.6),
+            mq::Color::default().with_alpha(0.6),
         );
 
         // Draw the label text
         mq::draw_text_ex(
-            &self.label.text,
+            text,
             text_x,
-            text_y,
+            text_y - text_dims.height + text_dims.offset_y,
             mq::TextParams {
-                font_size: screen_font_size,
+                font,
+                font_size: self.label.size,
                 font_scale,
                 color: self.label.color,
                 ..Default::default()
@@ -107,22 +125,82 @@ impl Pawn {
     }
 }
 
-/// The game board, managing camera and rendering of pawns.
+/// The game board, managing camera, pawns, and their text storage.
+/// Renders to an internal texture rather than directly to screen.
 pub struct Board {
-    pub camera: mq::Camera2D,
+    camera: mq::Camera2D,
+    render_target: mq::RenderTarget,
+    pawns: Vec<Pawn>,
+    strings: StringPool,
+    font: mq::Font,
 }
 
 impl Board {
-    pub fn new() -> Self {
+    pub fn new(width: u32, height: u32, font: mq::Font) -> Self {
+        let render_target = mq::render_target(width, height);
+        render_target.texture.set_filter(mq::FilterMode::Linear);
+
+        // Zoom so that (width/2 x height/2) world units are visible
+        let mut zoom = mq::vec2(2.0 / width as f32, 2.0 / height as f32);
+        // For some unfathomable and probably buggy reason, the zoom's y axis is flipped by default.
+        zoom.y *= -1.;
+
         Self {
             camera: mq::Camera2D {
                 target: mq::vec2(0.0, 0.0),
-                // Zoom is set so that ~800x450 world units are visible
-                // (half of 1600x900 window, since zoom is relative to center)
-                zoom: mq::vec2(1.0 / 400.0, 1.0 / 225.0),
+                zoom,
+                render_target: Some(render_target.clone()),
                 ..Default::default()
             },
+            render_target,
+            pawns: Vec::new(),
+            strings: StringPool::default(),
+            font,
         }
+    }
+
+    /// Returns the texture that the board renders to.
+    pub fn texture(&self) -> mq::Texture2D {
+        self.render_target.texture.clone()
+    }
+
+    /// Returns the PawnId of the topmost pawn at the given screen coordinates, or None.
+    pub fn pick_pawn(&self, screen_pos: mq::Vec2) -> Option<PawnId> {
+        let world_pos = self.camera.screen_to_world(screen_pos);
+
+        // Iterate in reverse to get topmost (last drawn) pawn first
+        for (i, pawn) in self.pawns.iter().enumerate().rev() {
+            if pawn.bounds.contains(world_pos) {
+                return Some(PawnId(i));
+            }
+        }
+        None
+    }
+
+    /// Clears all pawns and text for a new frame.
+    pub fn reset(&mut self) {
+        self.pawns.clear();
+        self.strings.clear();
+    }
+
+    /// Adds a pawn to the board and returns its ID.
+    pub fn add_pawn(&mut self, desc: PawnDesc) -> PawnId {
+        let text_span = self.strings.push(desc.label.text);
+
+        let pawn = Pawn {
+            bounds: desc.bounds,
+            fill: desc.fill,
+            stroke: desc.stroke,
+            label: Label {
+                text_span,
+                size: desc.label.size,
+                color: desc.label.color,
+            },
+        };
+
+        let id = PawnId(self.pawns.len());
+        self.pawns.push(pawn);
+        id
     }
 
     /// Translates the camera by the given delta in world units.
@@ -136,27 +214,19 @@ impl Board {
         self.camera.zoom *= factor;
     }
 
-    /// Draws all pawns on the board.
-    /// Everything is drawn in world space with the camera active.
-    /// Labels use dynamic font sizing for crisp rendering at any zoom level.
-    pub fn draw(&self, pawns: &[Pawn]) {
+    /// Draws all pawns to the internal render target.
+    pub fn draw(&self) {
         mq::set_camera(&self.camera);
+        mq::clear_background(mq::LIGHTGRAY);
 
-        for pawn in pawns {
+        for pawn in &self.pawns {
             pawn.draw_shape();
         }
 
-        for pawn in pawns {
-            pawn.draw_label(&self.camera);
+        for pawn in &self.pawns {
+            pawn.draw_label(&self.camera, Some(&self.font), &self.strings);
         }
 
-        // Reset camera for subsequent drawing (e.g., egui)
         mq::set_default_camera();
-    }
-}
-
-impl Default for Board {
-    fn default() -> Self {
-        Self::new()
     }
 }

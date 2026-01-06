@@ -1,0 +1,34 @@
+/// Handle to a string in a StringPool.
+#[derive(Clone, Copy, Default)]
+pub struct SpanHandle {
+    offset: usize,
+    len: usize,
+}
+
+/// A pool of strings stored contiguously. Supports push and retrieval via TextSpan handles.
+#[derive(Default)]
+pub struct StringPool {
+    buffer: String,
+}
+
+impl StringPool {
+    /// Clears all strings from the pool.
+    pub fn clear(&mut self) {
+        self.buffer.clear();
+    }
+
+    /// Pushes a string into the pool and returns a handle to it.
+    pub fn push(&mut self, s: &str) -> SpanHandle {
+        let span = SpanHandle {
+            offset: self.buffer.len(),
+            len: s.len(),
+        };
+        self.buffer.push_str(s);
+        span
+    }
+
+    /// Retrieves a string by its handle.
+    pub fn get(&self, span: SpanHandle) -> &str {
+        &self.buffer[span.offset..][..span.len]
+    }
+}

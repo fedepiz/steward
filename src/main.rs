@@ -1,6 +1,6 @@
 mod board;
 
-use board::{Label, Pawn, Stroke};
+use board::{LabelDesc, PawnDesc, Stroke};
 use macroquad::prelude as mq;
 
 fn main() {
@@ -57,57 +57,114 @@ fn keyboard_input(board: &mut board::Board) {
     }
 }
 
+#[derive(Default, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+struct MapItemId(pub u16);
+
+#[derive(Default)]
+struct MapItem<'a> {
+    id: MapItemId,
+    name: &'a str,
+    pos: (f32, f32),
+    size: f32,
+}
+
+fn make_map_items() -> [MapItem<'static>; 3] {
+    [
+        MapItem {
+            id: MapItemId(0),
+            name: "Rome",
+            pos: (0., 0.),
+            size: 1.0,
+        },
+        MapItem {
+            id: MapItemId(1),
+            name: "Ascoli",
+            pos: (4., 2.),
+            size: 1.0,
+        },
+        MapItem {
+            id: MapItemId(2),
+            name: "Edinburgh",
+            pos: (-5., -2.),
+            size: 1.0,
+        },
+    ]
+}
+
+type AVec<'a, T> = bumpalo::collections::Vec<'a, T>;
+
+fn make_pawns<'a, 'b>(
+    arena: &'a bumpalo::Bump,
+    items: &[MapItem<'b>],
+    selected: Option<MapItemId>,
+) -> AVec<'a, PawnDesc<'b>> {
+    // Test pawn descriptors demonstrating different rendering features
+    let size = 40.;
+    let text_size = 26;
+
+    let mut vec = bumpalo::vec![in arena];
+    vec.extend(items.iter().map(|item| {
+        let is_selected = Some(item.id) == selected;
+
+        PawnDesc {
+            bounds: mq::Rect::new(
+                (item.pos.0 - item.size / 2.) * size,
+                (item.pos.1 - item.size / 2.) * size,
+                item.size * size,
+                item.size * size,
+            ),
+            fill: mq::RED,
+            stroke: Stroke {
+                color: if is_selected { mq::YELLOW } else { mq::BLACK },
+                thickness: 4.,
+            },
+            label: LabelDesc {
+                text: item.name,
+                size: text_size,
+                color: if is_selected { mq::YELLOW } else { mq::WHITE },
+            },
+        }
+    }));
+    vec
+}
+
 async fn amain() {
     // Configure egui scaling for high DPI
     egui_macroquad::cfg(|ctx| {
         ctx.set_pixels_per_point(1.6);
     });
 
-    let mut board = board::Board::new();
+    let mut selected_item = None;
 
-    // Test pawns demonstrating different rendering features
-    let pawns = vec![
-        // Red pawn: fill + stroke + label
-        Pawn {
-            bounds: mq::Rect::new(-50.0, -50.0, 100.0, 100.0),
-            fill: mq::RED,
-            stroke: Stroke {
-                color: mq::BLACK,
-                thickness: 3.0,
-            },
-            label: Label {
-                text: "Red Pawn".to_string(),
-                size: 20.0,
-                color: mq::WHITE,
-            },
-        },
-        // Blue pawn: fill + label (no stroke)
-        Pawn {
-            bounds: mq::Rect::new(100.0, -30.0, 80.0, 80.0),
-            fill: mq::BLUE,
-            label: Label {
-                text: "Blue".to_string(),
-                ..Default::default()
-            },
-            ..Default::default()
-        },
-        // Green pawn: stroke only (no fill, no label)
-        Pawn {
-            bounds: mq::Rect::new(-150.0, 50.0, 60.0, 60.0),
-            fill: mq::Color::new(0.0, 0.0, 0.0, 0.0),
-            stroke: Stroke {
-                color: mq::GREEN,
-                thickness: 2.0,
-            },
-            ..Default::default()
-        },
-    ];
+    let mut board = {
+        let font =
+            mq::load_ttf_font_from_bytes(include_bytes!("../assets/fonts/board.ttf")).unwrap();
+        board::Board::new(mq::screen_width() as u32, mq::screen_height() as u32, font)
+    };
+
+    let mut arena = bumpalo::Bump::new();
 
     // Main game loop
     loop {
+        arena.reset();
+
         // Exit on Escape
         if mq::is_key_pressed(mq::KeyCode::Escape) {
             break;
+        }
+
+        let map_items = make_map_items();
+
+        // Reset board for new frame and add pawns
+        board.reset();
+        for desc in make_pawns(&arena, &map_items, selected_item) {
+            board.add_pawn(desc);
+        }
+
+        let hovered_pawn = board.pick_pawn(mq::mouse_position().into());
+
+        if mq::is_mouse_button_pressed(mq::MouseButton::Left) {
+            selected_item = hovered_pawn.map(|id| map_items[id.0].id);
         }
 
         keyboard_input(&mut board);
@@ -119,9 +176,22 @@ async fn amain() {
             });
         });
 
-        // Render frame
-        mq::clear_background(mq::LIGHTGRAY);
-        board.draw(&pawns);
+        // Render board to its texture
+        board.draw();
+
+        // Draw board texture to screen
+        mq::clear_background(mq::BLACK);
+        mq::draw_texture_ex(
+            &board.texture(),
+            0.0,
+            0.0,
+            mq::WHITE,
+            mq::DrawTextureParams {
+                dest_size: Some(mq::vec2(mq::screen_width(), mq::screen_height())),
+                flip_y: true,
+                ..Default::default()
+            },
+        );
         egui_macroquad::draw();
 
         mq::next_frame().await;
