@@ -1,0 +1,19 @@
+[package]
+name = "steward"
+version = "0.1.0"
+edition = "2024"
+
+[workspace.dependencies]
+bumpalo = { version = "3", features = ["collections"] }
+macroquad = "0.4.4"
+egui-macroquad = "0.17"
+egui = "0.31"
+slotmap = "1"
+
+[dependencies]
+bumpalo = { workspace = true }
+macroquad = { workspace = true }
+egui-macroquad = { workspace = true }
+egui = { workspace = true }
+slotmap = { workspace = true }
+
