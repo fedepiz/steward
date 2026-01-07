@@ -1,5 +1,5 @@
 use macroquad::prelude as mq;
-use util::{SpanHandle, StringPool};
+use util::string_pool::{SpanHandle, StringPool};
 
 /// Stroke style for pawn outlines.
 /// Set thickness to 0 to disable stroke.

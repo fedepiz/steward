@@ -12,6 +12,7 @@ macroquad = "0.4.4"
 egui-macroquad = "0.17"
 egui = "0.31"
 slotmap = "1"
+string-interner = "0.19"
 util = { path = "crates/util" }
 
 [dependencies]
@@ -20,5 +21,6 @@ macroquad = { workspace = true }
 egui-macroquad = { workspace = true }
 egui = { workspace = true }
 slotmap = { workspace = true }
+string-interner = { workspace = true }
 util = { workspace = true }
 

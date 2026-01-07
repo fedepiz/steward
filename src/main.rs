@@ -1,4 +1,5 @@
 mod board;
+mod objects;
 
 use board::{LabelDesc, PawnDesc, Stroke};
 use macroquad::prelude as mq;
