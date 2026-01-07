@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2024"
 
 [workspace]
-members = ["crates/util"]
+members = ["crates/simulation","crates/util"]
 
 [workspace.dependencies]
 bumpalo = { version = "3", features = ["collections"] }
@@ -13,6 +13,7 @@ egui-macroquad = "0.17"
 egui = "0.31"
 slotmap = "1"
 string-interner = "0.19"
+simulation = { path = "crates/simulation" }
 util = { path = "crates/util" }
 
 [dependencies]
@@ -21,6 +22,6 @@ macroquad = { workspace = true }
 egui-macroquad = { workspace = true }
 egui = { workspace = true }
 slotmap = { workspace = true }
-string-interner = { workspace = true }
+simulation = { workspace = true }
 util = { workspace = true }
 

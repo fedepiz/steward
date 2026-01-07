@@ -1,8 +1,8 @@
 mod board;
-mod objects;
 
 use board::{LabelDesc, PawnDesc, Stroke};
 use macroquad::prelude as mq;
+use simulation::SimulationActor;
 
 fn main() {
     let conf = mq::Conf {
@@ -99,7 +99,6 @@ fn make_pawns<'a, 'b>(
     items: &[MapItem<'b>],
     selected: Option<MapItemId>,
 ) -> AVec<'a, PawnDesc<'b>> {
-    // Test pawn descriptors demonstrating different rendering features
     let size = 40.;
     let text_size = 26;
 
@@ -145,13 +144,23 @@ async fn amain() {
 
     let mut arena = bumpalo::Bump::new();
 
+    let mut sim_actor = SimulationActor::start();
+    let mut is_paused = false;
+
     // Main game loop
     loop {
         arena.reset();
 
+        let mut request = simulation::Request::default();
+        request.advance_time = !is_paused;
+        let response = sim_actor.tick(request);
+
         // Exit on Escape
         if mq::is_key_pressed(mq::KeyCode::Escape) {
             break;
+        }
+        if mq::is_key_pressed(mq::KeyCode::Space) {
+            is_paused = !is_paused;
         }
 
         let map_items = make_map_items();
@@ -173,7 +182,11 @@ async fn amain() {
         // Draw egui overlay
         egui_macroquad::ui(|ctx| {
             egui::Window::new("Hello").show(ctx, |ui| {
+                let objects = &response.objects;
                 ui.label("Hello, World!");
+                if let Some(root) = response.root_object {
+                    ui.label(format!("Tick num: {}", objects.str(root, "tick_num")));
+                }
             });
         });
 

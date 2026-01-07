@@ -28,7 +28,7 @@ impl Objects {
         self.list_items.clear();
     }
 
-    fn find_property_of_object(&self, id: ObjectId, key: &str) -> Option<Property> {
+    fn get_property(&self, id: ObjectId, key: &str) -> Option<Property> {
         // Find span in property array(s)
         let property_span = self
             .instances
@@ -48,31 +48,30 @@ impl Objects {
     }
 
     pub fn try_str<'a>(&'a self, id: ObjectId, key: &str) -> Option<&'a str> {
-        self.find_property_of_object(id, key)
-            .and_then(|prop| match prop {
-                Property::String(span) => Some(self.text.get(span)),
-                _ => None,
-            })
+        self.get_property(id, key).and_then(|prop| match prop {
+            Property::String(span) => Some(self.text.get(span)),
+            _ => None,
+        })
     }
 
+    const UNDEFINED: &'static str = "UNDEFINED";
+
     pub fn str<'a>(&'a self, id: ObjectId, key: &str) -> &'a str {
-        self.try_str(id, key).unwrap_or("UNDEFINED")
+        self.try_str(id, key).unwrap_or(Self::UNDEFINED)
     }
 
     pub fn try_child<'a>(&'a self, id: ObjectId, key: &str) -> Option<ObjectId> {
-        self.find_property_of_object(id, key)
-            .and_then(|prop| match prop {
-                Property::Object(id) => Some(id),
-                _ => None,
-            })
+        self.get_property(id, key).and_then(|prop| match prop {
+            Property::Object(id) => Some(id),
+            _ => None,
+        })
     }
 
     pub fn try_list<'a>(&'a self, id: ObjectId, key: &str) -> Option<&'a [ObjectId]> {
-        self.find_property_of_object(id, key)
-            .and_then(|prop| match prop {
-                Property::List(span) => Some(span.view(&self.list_items)),
-                _ => None,
-            })
+        self.get_property(id, key).and_then(|prop| match prop {
+            Property::List(span) => Some(span.view(&self.list_items)),
+            _ => None,
+        })
     }
 
     pub fn list<'a>(&'a self, id: ObjectId, key: &str) -> &'a [ObjectId] {
@@ -98,9 +97,18 @@ enum Property {
 #[derive(Default)]
 pub struct ObjectsBuilder {
     data: Objects,
+    /// A stack of object ids, mirroring the order of spawn calls.
+    /// active_stack.last() is the currently-constructed object
     active_stack: Vec<ObjectId>,
-    active_list_items: Vec<ObjectId>,
-    active_list_starts: Vec<usize>,
+    /// A list of object_id items that are waiting for construction.
+    /// EVery time an object is spawned within a list, its added here.
+    /// When the list closes, the objects are popped of this list and copied
+    /// into the data list.
+    list_items: Vec<ObjectId>,
+    /// The stack of begin-positions for lists. Every time a list() begins, the current position in
+    /// list_items is pushed in. When the list is closed, we pop off the index from here, and take all
+    /// items until the end as the items belonging to the newly created list.
+    list_stack: Vec<usize>,
 }
 
 impl ObjectsBuilder {
@@ -120,8 +128,8 @@ impl ObjectsBuilder {
         self.data.instances[object_id.0].properties = Span::between(props_base, props_end);
 
         // If there is an open list, add yourself to it.
-        if !self.active_list_starts.is_empty() {
-            self.active_list_items.push(object_id);
+        if !self.list_stack.is_empty() {
+            self.list_items.push(object_id);
         }
 
         object_id
@@ -148,11 +156,11 @@ impl ObjectsBuilder {
     }
 
     pub fn list(&mut self, key: &'static str, build: impl FnOnce(&mut ObjectsBuilder) -> ()) {
-        self.active_list_starts.push(self.active_list_items.len());
+        self.list_stack.push(self.list_items.len());
         build(self);
         let span = {
-            let start = self.active_list_starts.pop().unwrap();
-            let drain = self.active_list_items.drain(start..);
+            let start = self.list_stack.pop().unwrap();
+            let drain = self.list_items.drain(start..);
             Span::of_extension(&mut self.data.list_items, drain)
         };
         self.set_property(key, Property::List(span));
@@ -180,7 +188,7 @@ mod tests {
         assert_eq!(objects.str(id, "level"), "35");
 
         // Test undefined
-        assert_eq!(objects.str(id, "mana"), "UNDEFINED");
+        assert_eq!(objects.str(id, "mana"), Objects::UNDEFINED);
         assert!(objects.try_str(id, "mana").is_none());
     }
 
@@ -274,7 +282,7 @@ mod tests {
         let id = builder.spawn(|_| {}); // Do nothing
         let objects = builder.build();
 
-        assert_eq!(objects.str(id, "anything"), "UNDEFINED");
+        assert_eq!(objects.str(id, "anything"), Objects::UNDEFINED);
         assert!(objects.list(id, "anything").is_empty());
     }
 
