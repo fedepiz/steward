@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use string_interner::{DefaultStringInterner, DefaultSymbol};
 use util::{
     span::Span,
@@ -16,6 +18,8 @@ pub struct Objects {
     prop_values: Vec<Property>,
     // Contiguous list of list items
     list_items: Vec<ObjectId>,
+    // String keyed lookup of object id
+    tags: HashMap<Symbol, ObjectId>,
 }
 
 impl Objects {
@@ -26,6 +30,12 @@ impl Objects {
         self.prop_keys.clear();
         self.prop_values.clear();
         self.list_items.clear();
+        self.tags.clear();
+    }
+
+    pub fn lookup_by_tag(&self, key: &str) -> Option<ObjectId> {
+        let symbol = self.interner.get(key)?;
+        self.tags.get(&symbol).copied()
     }
 
     fn get_property(&self, id: ObjectId, key: &str) -> Option<Property> {
@@ -133,6 +143,17 @@ impl ObjectsBuilder {
         }
 
         object_id
+    }
+
+    pub fn tag(&mut self, tag: &'static str) {
+        let id = match self.active_stack.last().copied() {
+            Some(id) => id,
+            None => {
+                return;
+            }
+        };
+        let symbol = self.data.interner.get_or_intern(tag);
+        self.data.tags.insert(symbol, id);
     }
 
     fn set_property(&mut self, key: &'static str, value: Property) {

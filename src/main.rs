@@ -2,7 +2,7 @@ mod board;
 
 use board::{LabelDesc, PawnDesc, Stroke};
 use macroquad::prelude as mq;
-use simulation::SimulationActor;
+use simulation::{MapItemId, SimulationActor};
 
 fn main() {
     let conf = mq::Conf {
@@ -58,48 +58,14 @@ fn keyboard_input(board: &mut board::Board) {
     }
 }
 
-#[derive(Default, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-struct MapItemId(pub u16);
-
-#[derive(Default)]
-struct MapItem<'a> {
-    id: MapItemId,
-    name: &'a str,
-    pos: (f32, f32),
-    size: f32,
-}
-
-fn make_map_items() -> [MapItem<'static>; 3] {
-    [
-        MapItem {
-            id: MapItemId(0),
-            name: "Rome",
-            pos: (0., 0.),
-            size: 1.0,
-        },
-        MapItem {
-            id: MapItemId(1),
-            name: "Ascoli",
-            pos: (4., 2.),
-            size: 1.0,
-        },
-        MapItem {
-            id: MapItemId(2),
-            name: "Edinburgh",
-            pos: (-5., -2.),
-            size: 1.0,
-        },
-    ]
-}
-
 type AVec<'a, T> = bumpalo::collections::Vec<'a, T>;
 
 fn make_pawns<'a, 'b>(
     arena: &'a bumpalo::Bump,
-    items: &[MapItem<'b>],
+    items: &'b simulation::MapItems,
     selected: Option<MapItemId>,
 ) -> AVec<'a, PawnDesc<'b>> {
-    let size = 40.;
+    let size = 20.;
     let text_size = 26;
 
     let mut vec = bumpalo::vec![in arena];
@@ -108,10 +74,10 @@ fn make_pawns<'a, 'b>(
 
         PawnDesc {
             bounds: mq::Rect::new(
-                (item.pos.0 - item.size / 2.) * size,
-                (item.pos.1 - item.size / 2.) * size,
-                item.size * size,
-                item.size * size,
+                item.x * size,
+                item.y * size,
+                item.width * size,
+                item.height * size,
             ),
             fill: mq::RED,
             stroke: Stroke {
@@ -147,13 +113,27 @@ async fn amain() {
     let mut sim_actor = SimulationActor::start();
     let mut is_paused = false;
 
+    sim_actor.tick(simulation::Request {
+        init: true,
+        ..Default::default()
+    });
+
     // Main game loop
     loop {
         arena.reset();
 
         let mut request = simulation::Request::default();
         request.advance_time = !is_paused;
+
+        if mq::is_key_pressed(mq::KeyCode::R) {
+            request = simulation::Request {
+                init: true,
+                ..Default::default()
+            };
+        }
+
         let response = sim_actor.tick(request);
+        let map_items = &response.map_items;
 
         // Exit on Escape
         if mq::is_key_pressed(mq::KeyCode::Escape) {
@@ -163,18 +143,16 @@ async fn amain() {
             is_paused = !is_paused;
         }
 
-        let map_items = make_map_items();
-
         // Reset board for new frame and add pawns
         board.reset();
-        for desc in make_pawns(&arena, &map_items, selected_item) {
+        for desc in make_pawns(&arena, map_items, selected_item) {
             board.add_pawn(desc);
         }
 
         let hovered_pawn = board.pick_pawn(mq::mouse_position().into());
 
         if mq::is_mouse_button_pressed(mq::MouseButton::Left) {
-            selected_item = hovered_pawn.map(|id| map_items[id.0].id);
+            selected_item = hovered_pawn.map(|id| map_items.get_by_index(id.0).id);
         }
 
         keyboard_input(&mut board);
@@ -184,8 +162,9 @@ async fn amain() {
             egui::Window::new("Hello").show(ctx, |ui| {
                 let objects = &response.objects;
                 ui.label("Hello, World!");
-                if let Some(root) = response.root_object {
-                    ui.label(format!("Tick num: {}", objects.str(root, "tick_num")));
+
+                if let Some(root) = objects.lookup_by_tag("root") {
+                    ui.label(objects.str(root, "tick_num"));
                 }
             });
         });
