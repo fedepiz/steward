@@ -4,6 +4,7 @@ use util::string_pool::{SpanHandle, StringPool};
 use crate::{
     entities::{Body, Entities},
     geom::V2,
+    movement::MovementSystem,
     objects::{Objects, ObjectsBuilder},
 };
 
@@ -11,17 +12,40 @@ use crate::{
 pub(crate) struct Simulation {
     pub turn_num: usize,
     pub entities: Entities,
+    pub movement: MovementSystem,
 }
 
 impl Simulation {
     pub(crate) fn tick(&mut self, request: Request) -> Response {
         if request.init {
             *self = Self::default();
-            init(self);
+            crate::init::init(self);
         }
 
-        if request.advance_time {
+        let advance_time = request.advance_time;
+
+        if advance_time {
             self.turn_num = self.turn_num.wrapping_add(1);
+        }
+
+        {
+            let mut want_new_path = vec![];
+            if self.turn_num == 1 {
+                want_new_path.extend(
+                    self.entities
+                        .iter()
+                        .map(|entity| (entity.id, V2::splat(0.))),
+                );
+            }
+
+            let input = crate::movement::Input {
+                advance_time,
+                want_new_path,
+            };
+            let output = self.movement.tick(input);
+            for (id, new_pos) in output.update_positions {
+                self.entities[id].body.pos = new_pos;
+            }
         }
 
         let mut response = Response::default();
@@ -35,21 +59,6 @@ impl Simulation {
 pub struct Request {
     pub init: bool,
     pub advance_time: bool,
-}
-
-fn init(sim: &mut Simulation) {
-    {
-        let person = sim.entities.add_type();
-        person.tag = "person";
-        person.name = "Person";
-        person.size = V2::splat(1.0);
-    }
-
-    for pos in [V2::splat(0.), V2::new(-5., -6.)] {
-        let type_id = sim.entities.find_type_by_tag("person").unwrap();
-        let entity = sim.entities.spawn_with_type(type_id);
-        entity.body.pos = pos;
-    }
 }
 
 fn extract(sim: &Simulation, _: &Request, response: &mut Response) {
@@ -132,5 +141,3 @@ pub struct MapItem<'a> {
     pub width: f32,
     pub height: f32,
 }
-
-mod csr_map {}
