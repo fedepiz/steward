@@ -107,6 +107,8 @@ async fn amain() {
             mq::load_ttf_font_from_bytes(include_bytes!("../assets/fonts/board.ttf")).unwrap();
         board::Board::new(mq::screen_width() as u32, mq::screen_height() as u32, font)
     };
+    let billboard_font =
+        mq::load_ttf_font_from_bytes(include_bytes!("../assets/fonts/board.ttf")).unwrap();
 
     let mut arena = bumpalo::Bump::new();
 
@@ -126,7 +128,7 @@ async fn amain() {
             reload = false;
         }
 
-        request.advance_time = !is_paused && !reload;
+        request.advance_time = !is_paused && !reload && !sim_actor.has_critical_error();
 
         if let Some(id) = selected_item {
             request.view_map_item("selected_item", id)
@@ -211,6 +213,38 @@ async fn amain() {
         );
         egui_macroquad::draw();
 
+        let (billboard_text, billboard_color) = if sim_actor.has_critical_error() {
+            ("Critical Error", mq::RED)
+        } else if is_paused {
+            ("Paused", mq::WHITE)
+        } else {
+            ("", mq::WHITE)
+        };
+
+        if !billboard_text.is_empty() {
+            draw_billboard_text(billboard_text, billboard_color, &billboard_font);
+        }
+
         mq::next_frame().await;
     }
+}
+
+fn draw_billboard_text(text: &str, color: mq::Color, font: &mq::Font) {
+    let font_size = 100.0;
+    let text_dims = mq::measure_text(text, Some(font), font_size as u16, 1.0);
+
+    let x = mq::screen_width() / 2.0 - text_dims.width / 2.0;
+    let y = mq::screen_height() * 0.33 - text_dims.height / 2.0 + text_dims.offset_y;
+
+    mq::draw_text_ex(
+        text,
+        x,
+        y,
+        mq::TextParams {
+            font: Some(font),
+            font_size: font_size as u16,
+            color,
+            ..Default::default()
+        },
+    );
 }

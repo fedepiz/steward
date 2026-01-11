@@ -10,6 +10,7 @@ pub struct SimulationActor {
     stale_ticks: usize,
     // "Cached" response
     response: Response,
+    has_crashed: bool,
 }
 
 impl SimulationActor {
@@ -45,13 +46,20 @@ impl SimulationActor {
             receiver: response_rx,
             stale_ticks: 0,
             response: Response::default(),
+            has_crashed: false,
         }
+    }
+
+    pub fn has_critical_error(&self) -> bool {
+        self.has_crashed
     }
 
     pub fn tick(&mut self, request: Request) -> &Response {
         // IF we don't have stale ticks, send over the request
         if self.stale_ticks == 0 {
-            self.sender.send(request).unwrap();
+            if self.sender.send(request).is_err() {
+                self.has_crashed = true;
+            }
         }
         let response = self.receiver.try_recv().ok();
         match response {
