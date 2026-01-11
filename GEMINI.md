@@ -34,3 +34,40 @@ To build and run the project, use the following standard Cargo commands:
 *   **Linting**: Use `cargo clippy` to check for common mistakes and code style issues.
 *   **Dependencies**: Dependencies are managed in the `Cargo.toml` file. Use `cargo update` to update dependencies.
 *   **Workspace**: The project is organized as a Cargo workspace. The main application is in the root `src` directory, and the `simulation` and `util` crates are located in the `crates` directory.
+
+## Coding Style & Philosophy
+
+*   **ZII (Zero is Initialization) Style:** Avoid using `Option<T>` or `Result<T>` for the main data flow of an API. A function like `tick()` should always return a concrete `Response` value, even if it's a default or "empty" one. Error states should be tracked separately within the struct and exposed via a different method (e.g., `has_critical_error()`).
+
+*   **Performance-Conscious Design:** Be mindful of performance, especially regarding memory. Prefer patterns that avoid many small, frequent allocations, such as using a `StringPool` for view-model data.
+
+*   **Prefer PODs when possible:** PODs are structs that could be Copy, ie, they store no allocating structures and own no memory. PODs are easy to manipulate and operate with. If possible, prefer ZII PODs.
+    If the POD logically would contain some kind of complex structure (ie, Strings, Vec<..>, etc), it's ok to lift those out into a separate container which manages the PODs, and replace the values with handles.
+
+*   **Flat Control Flow:** When performing an action based on conditions, separate the logic from the action. Use `if/else` expressions to determine *what* to do, then have a single, non-nested call that performs the action.
+
+    *   **Prefer this style:**
+        ```rust
+        let (text, color) = if sim.has_crashed() {
+            ("Error", RED)
+        } else if is_paused {
+            ("Paused", WHITE)
+        } else {
+            ("", WHITE)
+        };
+
+        if !text.is_empty() {
+            draw_billboard(text, color);
+        }
+        ```
+
+    *   **Avoid this style:**
+        ```rust
+        if sim.has_crashed() {
+            draw_billboard("Error", RED);
+        } else if is_paused {
+            draw_billboard("Paused", WHITE);
+        }
+        ```
+
+*   **Surgical Changes:** When implementing a feature or fix, only change the code that is directly necessary. Avoid refactoring or moving unrelated code. Changes should be focused and minimal.
