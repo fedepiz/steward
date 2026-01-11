@@ -1,6 +1,6 @@
 use slotmap::{SlotMap, new_key_type};
 
-use crate::geom::V2;
+use crate::{geom::V2, names::Name};
 
 new_key_type! { pub(crate) struct EntityId; }
 new_key_type! { pub(crate) struct EntityTypeId; }
@@ -48,8 +48,8 @@ impl Entities {
         data
     }
 
-    pub(crate) fn find_type_by_tag(&self, tag: &str) -> Option<EntityTypeId> {
-        self.types.values().find(|typ| typ.tag == tag).map(|x| x.id)
+    pub(crate) fn find_type_by_tag(&self, tag: &str) -> Option<EntityType> {
+        self.types.values().find(|typ| typ.tag == tag).copied()
     }
 
     pub(crate) fn get_type(&self, id: EntityTypeId) -> EntityType {
@@ -93,13 +93,14 @@ impl std::ops::IndexMut<EntityTypeId> for Entities {
 pub(crate) struct EntityType {
     pub id: EntityTypeId,
     pub tag: &'static str,
-    pub name: &'static str,
+    pub name: Name,
     pub size: V2,
 }
 
 #[derive(Default, Clone, Copy)]
 pub(crate) struct Entity {
     pub id: EntityId,
+    pub name: Name,
     pub type_id: EntityTypeId,
     pub body: Body,
 }

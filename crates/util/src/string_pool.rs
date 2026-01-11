@@ -18,8 +18,13 @@ impl StringPool {
         self.buffer.clear();
     }
 
+    /// Pushes a displayable value into the pool and returns a handle to it.
+    pub fn push(&mut self, s: impl std::fmt::Display) -> SpanHandle {
+        self.push_fmt(format_args!("{}", s))
+    }
+
     /// Pushes a string into the pool and returns a handle to it.
-    pub fn push(&mut self, s: &str) -> SpanHandle {
+    pub fn push_str(&mut self, s: &str) -> SpanHandle {
         let span = SpanHandle {
             offset: self.buffer.len(),
             len: s.len(),

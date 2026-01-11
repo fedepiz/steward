@@ -1,22 +1,25 @@
-use slotmap::Key;
+use bumpalo::Bump;
+use slotmap::{Key, KeyData};
 use util::string_pool::{SpanHandle, StringPool};
 
 use crate::{
-    entities::{Body, Entities},
+    entities::{Body, Entities, EntityId},
     geom::V2,
-    movement::MovementSystem,
+    movement,
+    names::{Name, Names},
     objects::{Objects, ObjectsBuilder},
 };
 
 #[derive(Default)]
 pub(crate) struct Simulation {
     pub turn_num: usize,
+    pub names: Names,
     pub entities: Entities,
-    pub movement: MovementSystem,
+    movement_cache: movement::MovementCache,
 }
 
 impl Simulation {
-    pub(crate) fn tick(&mut self, request: Request) -> Response {
+    pub(crate) fn tick(&mut self, request: Request, arena: &Bump) -> Response {
         if request.init {
             *self = Self::default();
             crate::init::init(self);
@@ -26,30 +29,31 @@ impl Simulation {
 
         if advance_time {
             self.turn_num = self.turn_num.wrapping_add(1);
-        }
 
-        {
-            let mut want_new_path = vec![];
-            if self.turn_num == 1 {
-                want_new_path.extend(
-                    self.entities
-                        .iter()
-                        .map(|entity| (entity.id, V2::splat(0.))),
-                );
-            }
-
-            let input = crate::movement::Input {
-                advance_time,
-                want_new_path,
+            let elements = {
+                let it = self.entities.iter().map(|entity| movement::Element {
+                    id: entity.id,
+                    speed: 1.,
+                    pos: entity.body.pos,
+                    destination: V2::splat(0.),
+                });
+                arena.alloc_slice_fill_iter(it)
             };
-            let output = self.movement.tick(input);
-            for (id, new_pos) in output.update_positions {
-                self.entities[id].body.pos = new_pos;
+
+            let map_def = movement::MapInfo {
+                width: 1000,
+                height: 1000,
+            };
+
+            let result = movement::tick_movement(&mut self.movement_cache, &elements, &map_def);
+
+            for (id, pos) in result.positions {
+                self.entities[id].body.pos = pos;
             }
         }
 
         let mut response = Response::default();
-        extract(self, &request, &mut response);
+        view(self, &request, &mut response);
 
         response
     }
@@ -59,9 +63,33 @@ impl Simulation {
 pub struct Request {
     pub init: bool,
     pub advance_time: bool,
+    strings: StringPool,
+    view_entities: Vec<ViewEntity>,
 }
 
-fn extract(sim: &Simulation, _: &Request, response: &mut Response) {
+impl Request {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn view_map_item(&mut self, key: &str, id: MapItemId) {
+        let entity = EntityId::from(KeyData::from_ffi(id.0));
+        self.view_entity(key, entity);
+    }
+
+    fn view_entity(&mut self, key: &str, entity: EntityId) {
+        let key = self.strings.push_str(key);
+        self.view_entities.push(ViewEntity { tag: key, entity });
+    }
+}
+
+#[derive(Clone, Copy)]
+struct ViewEntity {
+    tag: SpanHandle,
+    entity: EntityId,
+}
+
+fn view(sim: &Simulation, req: &Request, response: &mut Response) {
     let mut ctx = ObjectsBuilder::default();
     // Create a default zero object, so that ObjectId::default() is valid but unused
     ctx.spawn(|_| {});
@@ -70,6 +98,17 @@ fn extract(sim: &Simulation, _: &Request, response: &mut Response) {
         ctx.tag("root");
         ctx.fmt("tick_num", format_args!("Turn number: {}", sim.turn_num));
     });
+
+    // Create requested objects
+    for view_entity in &req.view_entities {
+        let entity = &sim.entities[view_entity.entity];
+        ctx.spawn(|ctx| {
+            let tag = req.strings.get(view_entity.tag);
+            ctx.tag(tag);
+            ctx.display("name", sim.names.resolve(entity.name));
+        });
+    }
+
     response.objects = ctx.build();
 
     let map_items = &mut response.map_items;
@@ -79,7 +118,7 @@ fn extract(sim: &Simulation, _: &Request, response: &mut Response) {
 
         map_items.entries.push(MapItemData {
             id: entity.id.data().as_ffi(),
-            name: SpanHandle::default(),
+            name: Default::default(),
             image: typ.tag,
             body: entity.body,
         });

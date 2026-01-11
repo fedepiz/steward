@@ -3,6 +3,7 @@ mod entities;
 mod geom;
 mod init;
 mod movement;
+mod names;
 pub mod objects;
 mod simulation;
 

@@ -3,141 +3,123 @@ use util::bucket_sort::BucketSort;
 
 use crate::{entities::EntityId, geom::V2};
 
-#[derive(Default)]
-pub(crate) struct MovementSystem {
-    entities: SecondaryMap<EntityId, MovementData>,
-    spatial_map: Option<SpatialMap>,
-    map_width: usize,
-    map_height: usize,
+pub(crate) struct MapInfo {
+    pub width: usize,
+    pub height: usize,
 }
 
-#[derive(Default)]
-pub(crate) struct Input {
-    pub advance_time: bool,
-    pub want_new_path: Vec<(EntityId, V2)>,
+#[derive(Clone, Copy)]
+pub(crate) struct Element {
+    pub id: EntityId,
+    pub speed: f32,
+    pub pos: V2,
+    pub destination: V2,
 }
 
-#[derive(Default)]
 pub(crate) struct Output {
-    pub update_positions: Vec<(EntityId, V2)>,
-}
-
-impl MovementSystem {
-    pub fn new(map_width: usize, map_height: usize) -> Self {
-        Self {
-            map_width,
-            map_height,
-            ..Default::default()
-        }
-    }
-
-    const SPEED_MULT: f32 = 0.025;
-    const BUCKET_SIZE: usize = 32;
-
-    pub fn tick(&mut self, input: Input) -> Output {
-        let mut out = Output::default();
-        if input.advance_time {
-            // Calculate paths for all those that want a new one.
-            for (id, destination) in input.want_new_path {
-                let data = &mut self.entities[id];
-                data.path = calculate_new_path(data.pos, destination);
-                data.next_step = data.path.last().copied().unwrap_or(data.pos);
-            }
-
-            // Calculate new positins for each entity
-            let next_pos: Vec<_> = self
-                .entities
-                .iter_mut()
-                .map(|(id, data)| {
-                    let next_pos = calculate_next_position(data, Self::SPEED_MULT);
-                    if data.next_step == next_pos {
-                        // Advance path
-                        data.path.pop();
-                        data.next_step = data.path.last().copied().unwrap_or(data.pos);
-                    }
-                    (id, next_pos)
-                })
-                .collect();
-
-            // Recalculate the spatial map
-            self.spatial_map = Some(SpatialMap::new(
-                &next_pos,
-                self.map_width,
-                self.map_height,
-                Self::BUCKET_SIZE,
-            ));
-
-            // Return only what positions change for the external world to update
-            out.update_positions = self
-                .entities
-                .iter_mut()
-                .zip(next_pos)
-                .filter(|((_, data), new_pos)| data.pos != new_pos.1)
-                .map(|((_, data), (id, new_pos))| {
-                    data.pos = new_pos;
-                    (id, new_pos)
-                })
-                .collect();
-        }
-        out
-    }
-
-    pub fn insert(&mut self, entities: &[(EntityId, V2, f32)]) {
-        for &(id, pos, speed) in entities {
-            self.entities.insert(id, MovementData::new(pos, speed));
-        }
-    }
-
-    pub fn remove(&mut self, entities: &[EntityId]) {
-        for &id in entities {
-            self.entities.remove(id);
-        }
-    }
-}
-
-fn calculate_next_position(data: &MovementData, speed_mult: f32) -> V2 {
-    if data.pos == data.next_step {
-        return data.pos;
-    }
-    let speed = data.speed * speed_mult;
-    let dv = data.next_step - data.pos;
-    let length = dv.magnitude();
-    let change = if length <= speed {
-        dv
-    } else {
-        dv.normalize() * speed
-    };
-    data.pos + change
-}
-
-fn calculate_new_path(source: V2, dest: V2) -> Vec<V2> {
-    // TODO: Actual pathfinding, once we have a terrain grid
-    vec![dest]
+    pub positions: Vec<(EntityId, V2)>,
+    pub spatial_map: SpatialMap,
 }
 
 #[derive(Default)]
-struct MovementData {
-    /// Current position
-    pos: V2,
+pub(crate) struct MovementCache {
+    paths: SecondaryMap<EntityId, MovementPath>,
+}
+
+#[derive(Default)]
+struct MovementPath {
+    // Target of this path
+    destination: V2,
     /// Position the entity is moving towards.
-    /// When path.len() == 0, this should be identical to pos,
+    /// When steps_reverse.len() == 0, this should be identical to pos,
     /// else, it should be identical to path.last().
     /// (Ie, it's a trick to avoid a cache miss to find the next destination)
     next_step: V2,
-    /// The entity movement speed
-    speed: f32,
-    /// All the following steps.
-    path: Vec<V2>,
+    /// All the following steps, stored in reverse order, popped off for efficient removal
+    steps_reversed: Vec<V2>,
 }
 
-impl MovementData {
-    fn new(pos: V2, speed: f32) -> Self {
-        Self {
-            pos,
-            next_step: pos,
-            speed,
-            ..Default::default()
-        }
+pub(crate) fn tick_movement(
+    cache: &mut MovementCache,
+    elements: &[Element],
+    map: &MapInfo,
+) -> Output {
+    const SPEED_MULT: f32 = 0.025;
+    const BUCKET_SIZE: usize = 32;
+
+    let mut next_positions = Vec::with_capacity(elements.len());
+
+    for &element in elements {
+        // Derive the next step
+        let next_step = {
+            // Temporary on-stack location for a fresh path
+            let mut new_path = None;
+
+            // Get the path to the destination. Uses a cache path if valid, else pathfinds.
+            let path = cache
+                .paths
+                .get_mut(element.id)
+                .filter(|path| path.destination == element.destination)
+                .unwrap_or_else(|| {
+                    new_path = Some(calculate_new_path(element.pos, element.destination));
+                    new_path.as_mut().unwrap()
+                });
+
+            // Advance path (the path is not over and the next step is the current position)
+            while element.pos == path.next_step && path.next_step != path.destination {
+                path.steps_reversed.pop();
+                path.next_step = path
+                    .steps_reversed
+                    .last()
+                    .copied()
+                    .unwrap_or(path.destination);
+            }
+
+            let next_step = path.next_step;
+            // If we calculated a new path, cache it
+            if let Some(new_path) = new_path {
+                cache.paths.insert(element.id, new_path);
+            }
+
+            next_step
+        };
+
+        // Calculate next position
+        let next_pos = {
+            let speed = element.speed * SPEED_MULT;
+            interpolate_position(element.pos, next_step, speed)
+        };
+
+        next_positions.push((element.id, next_pos));
+    }
+
+    let spatial_map = SpatialMap::new(&next_positions, map.width, map.height, BUCKET_SIZE);
+
+    Output {
+        positions: next_positions,
+        spatial_map,
+    }
+}
+
+fn interpolate_position(pos: V2, dest: V2, speed: f32) -> V2 {
+    if pos == dest || speed == 0.0 {
+        return pos;
+    }
+
+    // Calculate distance
+    let distance = V2::distance(pos, dest);
+    // Let normalize speed by distance and clamp between 0 and 1)
+    let speed_t = (speed / distance).clamp(0., 1.);
+    // New position is interpolation
+    V2::lerp(pos, dest, speed_t)
+}
+
+fn calculate_new_path(source: V2, destination: V2) -> MovementPath {
+    // TODO: Actual pathfinding, once we have a terrain grid
+    MovementPath {
+        destination,
+        next_step: destination,
+        steps_reversed: vec![destination],
     }
 }
 
@@ -152,21 +134,16 @@ pub(crate) struct SpatialMap {
 }
 
 impl SpatialMap {
-    fn new(entities: &[(EntityId, V2)], width: usize, height: usize, bucket_size: usize) -> Self {
-        debug_assert!(
-            width % bucket_size == 0,
-            "width must be divisible by bucket_size"
-        );
-        debug_assert!(
-            height % bucket_size == 0,
-            "height must be divisible by bucket_size"
-        );
+    fn calculate_bucket_counts(width: usize, height: usize, bucket_size: usize) -> (usize, usize) {
+        let num_buckets_x = width / bucket_size + (width % bucket_size).min(1);
+        let num_buckets_y = height / bucket_size + (height % bucket_size).min(1);
+        (num_buckets_x, num_buckets_y)
+    }
 
-        let num_buckets_x = width / bucket_size;
-        let num_buckets = {
-            let num_buckets_y = height / bucket_size;
-            num_buckets_x * num_buckets_y
-        };
+    fn new(entities: &[(EntityId, V2)], width: usize, height: usize, bucket_size: usize) -> Self {
+        let (num_buckets_x, num_buckets_y) =
+            Self::calculate_bucket_counts(width, height, bucket_size);
+        let num_buckets = { num_buckets_x * num_buckets_y };
 
         let bucketed_entities = entities
             .iter()
@@ -197,8 +174,8 @@ impl SpatialMap {
         let center_bucket_x = (pos.x as usize / self.bucket_size) as isize;
         let center_bucket_y = (pos.y as usize / self.bucket_size) as isize;
 
-        let num_buckets_x = self.width / self.bucket_size;
-        let num_buckets_y = self.height / self.bucket_size;
+        let (num_buckets_x, num_buckets_y) =
+            Self::calculate_bucket_counts(self.width, self.height, self.bucket_size);
 
         let min_bx = (center_bucket_x - bucket_range).max(0);
         let max_bx = (center_bucket_x + bucket_range).min(num_buckets_x as isize - 1);

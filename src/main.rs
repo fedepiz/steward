@@ -113,35 +113,55 @@ async fn amain() {
     let mut sim_actor = SimulationActor::start();
     let mut is_paused = false;
 
-    sim_actor.tick(simulation::Request {
-        init: true,
-        ..Default::default()
-    });
+    let mut reload = true;
 
     // Main game loop
     loop {
         arena.reset();
 
-        let mut request = simulation::Request::default();
-        request.advance_time = !is_paused;
+        let mut request = simulation::Request::new();
 
-        if mq::is_key_pressed(mq::KeyCode::R) {
-            request = simulation::Request {
-                init: true,
-                ..Default::default()
-            };
+        if reload {
+            request.init = true;
+            reload = false;
+        }
+
+        request.advance_time = !is_paused && !reload;
+
+        if let Some(id) = selected_item {
+            request.view_map_item("selected_item", id)
         }
 
         let response = sim_actor.tick(request);
+
         let map_items = &response.map_items;
 
-        // Exit on Escape
-        if mq::is_key_pressed(mq::KeyCode::Escape) {
-            break;
-        }
-        if mq::is_key_pressed(mq::KeyCode::Space) {
-            is_paused = !is_paused;
-        }
+        // Draw egui overlay
+        let mut ui_wants_pointer = false;
+        let mut ui_wants_keyboard = false;
+        egui_macroquad::ui(|ctx| {
+            let objs = &response.objects;
+            egui::TopBottomPanel::top("top_panel").show(ctx, |ui| {
+                ui.horizontal_centered(|ui| {
+                    if let Some(root) = objs.lookup_by_tag("root") {
+                        ui.label(objs.str(root, "tick_num"));
+                    }
+                });
+            });
+            if let Some(root) = response.objects.lookup_by_tag("selected_item") {
+                egui::Window::new("Selected Item").show(ctx, |ui| {
+                    egui::Grid::new("overview-grid")
+                        .striped(true)
+                        .show(ui, |ui| {
+                            ui.label("Name");
+                            ui.label(objs.str(root, "name"));
+                        })
+                });
+            }
+
+            ui_wants_pointer = ctx.wants_pointer_input();
+            ui_wants_keyboard = ctx.wants_keyboard_input();
+        });
 
         // Reset board for new frame and add pawns
         board.reset();
@@ -149,25 +169,29 @@ async fn amain() {
             board.add_pawn(desc);
         }
 
-        let hovered_pawn = board.pick_pawn(mq::mouse_position().into());
-
-        if mq::is_mouse_button_pressed(mq::MouseButton::Left) {
-            selected_item = hovered_pawn.map(|id| map_items.get_by_index(id.0).id);
+        if !ui_wants_pointer {
+            let hovered_pawn = board.pick_pawn(mq::mouse_position().into());
+            if mq::is_mouse_button_pressed(mq::MouseButton::Left) {
+                selected_item = hovered_pawn.map(|id| map_items.get_by_index(id.0).id);
+            }
         }
 
-        keyboard_input(&mut board);
+        if !ui_wants_keyboard {
+            keyboard_input(&mut board);
 
-        // Draw egui overlay
-        egui_macroquad::ui(|ctx| {
-            egui::Window::new("Hello").show(ctx, |ui| {
-                let objects = &response.objects;
-                ui.label("Hello, World!");
+            // Exit on Escape
+            if mq::is_key_pressed(mq::KeyCode::Escape) {
+                break;
+            }
 
-                if let Some(root) = objects.lookup_by_tag("root") {
-                    ui.label(objects.str(root, "tick_num"));
-                }
-            });
-        });
+            if mq::is_key_pressed(mq::KeyCode::Space) {
+                is_paused = !is_paused;
+            }
+
+            if mq::is_key_pressed(mq::KeyCode::R) {
+                reload = true;
+            }
+        }
 
         // Render board to its texture
         board.draw();

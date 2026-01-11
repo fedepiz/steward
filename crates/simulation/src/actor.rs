@@ -1,3 +1,5 @@
+use bumpalo::Bump;
+
 use crate::simulation::*;
 
 pub struct SimulationActor {
@@ -18,7 +20,10 @@ impl SimulationActor {
         std::thread::spawn(move || {
             // Simulation-side loop
             let mut sim = Simulation::default();
+            let mut arena = Bump::new();
             loop {
+                arena.reset();
+
                 let req = match request_rx.recv() {
                     Ok(x) => x,
                     Err(_) => {
@@ -26,7 +31,7 @@ impl SimulationActor {
                     }
                 };
 
-                let response = sim.tick(req);
+                let response = sim.tick(req, &arena);
                 let result = response_tx.send(response);
                 if result.is_err() {
                     // Main loop terminated, exit

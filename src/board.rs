@@ -185,7 +185,7 @@ impl Board {
 
     /// Adds a pawn to the board and returns its ID.
     pub fn add_pawn(&mut self, desc: PawnDesc) -> PawnId {
-        let text_span = self.strings.push(desc.label.text);
+        let text_span = self.strings.push_str(desc.label.text);
 
         let pawn = Pawn {
             bounds: desc.bounds,

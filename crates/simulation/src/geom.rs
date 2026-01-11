@@ -24,6 +24,23 @@ impl V2 {
     pub(crate) fn magnitude(self) -> f32 {
         (self.x.powi(2) + self.y.powi(2)).sqrt()
     }
+
+    pub fn distance(p1: V2, p2: V2) -> f32 {
+        Self::distance_squared(p1, p2).sqrt()
+    }
+
+    pub fn distance_squared(p1: V2, p2: V2) -> f32 {
+        (p1.x - p2.x).powi(2) + (p1.y - p2.y).powi(2)
+    }
+
+    pub fn lerp(p1: V2, p2: V2, t: f32) -> V2 {
+        let t = t.clamp(0., 1.);
+        V2::new(lerp(p1.x, p2.x, t), lerp(p1.y, p2.y, t))
+    }
+}
+
+fn lerp(a: f32, b: f32, t: f32) -> f32 {
+    a + (b - a) * t
 }
 
 impl std::ops::Add<V2> for V2 {

@@ -145,7 +145,7 @@ impl ObjectsBuilder {
         object_id
     }
 
-    pub fn tag(&mut self, tag: &'static str) {
+    pub fn tag(&mut self, tag: &str) {
         let id = match self.active_stack.last().copied() {
             Some(id) => id,
             None => {
@@ -163,13 +163,17 @@ impl ObjectsBuilder {
     }
 
     pub fn str(&mut self, key: &'static str, value: impl AsRef<str>) {
-        let text_span = self.data.text.push(value.as_ref());
+        let text_span = self.data.text.push_str(value.as_ref());
         self.set_property(key, Property::String(text_span));
     }
 
     pub fn fmt(&mut self, key: &'static str, args: std::fmt::Arguments) {
         let text_span = self.data.text.push_fmt(args);
         self.set_property(key, Property::String(text_span));
+    }
+
+    pub fn display(&mut self, key: &'static str, value: impl std::fmt::Display) {
+        self.fmt(key, format_args!("{}", value));
     }
 
     pub fn child(&mut self, key: &'static str, id: ObjectId) {
