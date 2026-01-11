@@ -20,23 +20,13 @@ impl Entities {
     }
 
     pub(crate) fn spawn_with_type(&mut self, type_id: EntityTypeId) -> &mut Entity {
-        let id = self.entities.insert(Entity::default());
-        self.set_type(id, type_id);
-        let data = &mut self.entities[id];
-        data.id = id;
-        data
+        let typ = self.types.get(type_id).copied().unwrap();
+        let entity = self.spawn();
+        Self::set_type(entity, &typ);
+        entity
     }
 
-    pub(crate) fn set_type(&mut self, id: EntityId, type_id: EntityTypeId) {
-        let typ = self.get_type(type_id);
-
-        let entity = match self.entities.get_mut(id) {
-            Some(data) => data,
-            None => {
-                return;
-            }
-        };
-
+    fn set_type(entity: &mut Entity, typ: &EntityType) {
         entity.type_id = typ.id;
         entity.body.size = typ.size;
     }
