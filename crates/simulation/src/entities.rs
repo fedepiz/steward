@@ -49,6 +49,10 @@ impl Entities {
     pub(crate) fn iter(&self) -> slotmap::basic::Values<'_, EntityId, Entity> {
         self.entities.values()
     }
+
+    pub(crate) fn iter_mut(&mut self) -> slotmap::basic::ValuesMut<'_, EntityId, Entity> {
+        self.entities.values_mut()
+    }
 }
 
 impl std::ops::Index<EntityId> for Entities {
@@ -93,6 +97,7 @@ pub(crate) struct Entity {
     pub name: Name,
     pub type_id: EntityTypeId,
     pub body: Body,
+    pub destination: V2,
 }
 
 #[derive(Clone, Copy, Default)]

@@ -32,12 +32,16 @@ impl Simulation {
         if advance_time {
             self.turn_num = self.turn_num.wrapping_add(1);
 
+            for entity in self.entities.iter_mut() {
+                entity.destination = V2::new(500., 500.);
+            }
+
             let elements = {
                 let it = self.entities.iter().map(|entity| movement::Element {
                     id: entity.id,
                     speed: 1.,
                     pos: entity.body.pos,
-                    destination: V2::new(500., 500.),
+                    destination: entity.destination,
                 });
                 arena.alloc_slice_fill_iter(it)
             };
@@ -170,8 +174,8 @@ impl MapItems {
             id: MapItemId(data.id),
             name: self.names.get(data.name),
             image: data.image,
-            x: data.body.pos.x - data.body.size.x / 2.,
-            y: data.body.pos.y - data.body.size.y / 2.,
+            x: data.body.pos.x,
+            y: data.body.pos.y,
             width: data.body.size.x,
             height: data.body.size.y,
         }

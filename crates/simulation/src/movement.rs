@@ -29,7 +29,7 @@ pub(crate) trait MovementGraph {
 
 #[derive(Default)]
 struct MovementPath {
-    // Target of this path
+    /// Destination of this path
     destination: V2,
     /// Position the entity is moving towards.
     /// When steps_reverse.len() == 0, this should be identical to pos,
@@ -120,8 +120,14 @@ fn interpolate_position(pos: V2, dest: V2, speed: f32) -> V2 {
     V2::lerp(pos, dest, speed_t)
 }
 
+fn simplify_path<G: MovementGraph>(path: &[V2], graph: &G) -> Vec<V2> {
+    // TODO: implement string pulling
+    path.to_vec()
+}
+
 fn calculate_new_path<G: MovementGraph>(source: V2, destination: V2, graph: &G) -> MovementPath {
     if source == destination {
+        // TODO: Actual pathfinding, once we have a terrain grid
         return MovementPath {
             destination,
             next_step: destination,
@@ -164,16 +170,20 @@ fn calculate_new_path<G: MovementGraph>(source: V2, destination: V2, graph: &G) 
     };
 
     let path: Vec<_> = result
-        .map(|(x, _)| x)
+        .as_ref()
+        .map(|(x, _)| x.as_slice())
         .unwrap_or_default()
         .into_iter()
+        .map(|&(x, y)| V2::new(x as f32, y as f32))
+        .chain(std::iter::once(destination))
         .rev()
-        .map(|(x, y)| V2::new(x as f32, y as f32))
         .collect();
 
+    let next_step = path.last().copied().unwrap_or(source);
+
     MovementPath {
-        destination: destination,
-        next_step: path.last().copied().unwrap_or(source),
+        destination,
+        next_step,
         steps_reversed: path,
     }
 }
@@ -183,7 +193,6 @@ fn distance_to_cost(x: f32) -> i64 {
 }
 
 fn speed_to_cost(speed: f32) -> f32 {
-    // Represent impassable terrain with a large cost
     if speed == 0.0 { 100000. } else { 1. / speed }
 }
 

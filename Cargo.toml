@@ -20,6 +20,7 @@ egui = "0.31"
 num_enum = "*"
 strum = { version = "*", features = ["derive"] }
 pathfinding = "*"
+rand = { version = "0.8", features = ["small_rng"] }
 slotmap = "1"
 string-interner = "0.19"
 simulation = { path = "crates/simulation" }

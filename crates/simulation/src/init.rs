@@ -17,5 +17,6 @@ pub(crate) fn init(sim: &mut Simulation, req: InitRequest) {
         let entity = sim.entities.spawn_with_type(typ.id);
         entity.name = typ.name;
         entity.body.pos = pos;
+        entity.destination = entity.body.pos;
     }
 }
