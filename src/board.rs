@@ -1,4 +1,5 @@
-use macroquad::prelude as mq;
+use macroquad::{camera, prelude as mq};
+use simulation::MapTerrain;
 use util::string_pool::{SpanHandle, StringPool};
 
 /// Stroke style for pawn outlines.
@@ -129,14 +130,17 @@ impl Pawn {
 /// Renders to an internal texture rather than directly to screen.
 pub struct Board {
     camera: mq::Camera2D,
+    terrain_texture: mq::RenderTarget,
+    terrain_hash: u64,
     render_target: mq::RenderTarget,
     pawns: Vec<Pawn>,
     strings: StringPool,
     font: mq::Font,
+    tile_size: f32,
 }
 
 impl Board {
-    pub fn new(width: u32, height: u32, font: mq::Font) -> Self {
+    pub fn new(tile_size: f32, width: u32, height: u32, font: mq::Font) -> Self {
         let render_target = mq::render_target(width, height);
         render_target.texture.set_filter(mq::FilterMode::Linear);
 
@@ -152,10 +156,13 @@ impl Board {
                 render_target: Some(render_target.clone()),
                 ..Default::default()
             },
+            terrain_texture: mq::render_target(0, 0),
+            terrain_hash: 0,
             render_target,
             pawns: Vec::new(),
             strings: StringPool::default(),
             font,
+            tile_size,
         }
     }
 
@@ -187,8 +194,15 @@ impl Board {
     pub fn add_pawn(&mut self, desc: PawnDesc) -> PawnId {
         let text_span = self.strings.push_str(desc.label.text);
 
+        let bounds = mq::Rect::new(
+            desc.bounds.x * self.tile_size,
+            desc.bounds.y * self.tile_size,
+            desc.bounds.w * self.tile_size,
+            desc.bounds.h * self.tile_size,
+        );
+
         let pawn = Pawn {
-            bounds: desc.bounds,
+            bounds,
             fill: desc.fill,
             stroke: desc.stroke,
             label: Label {
@@ -205,7 +219,8 @@ impl Board {
 
     /// Translates the camera by the given delta in world units.
     pub fn move_camera(&mut self, delta: mq::Vec2) {
-        self.camera.target += delta;
+        let zoom_rate = 2. / (self.camera.zoom.x * mq::screen_width());
+        self.camera.target += delta * zoom_rate;
     }
 
     /// Scales the camera zoom by the given factor.
@@ -214,10 +229,59 @@ impl Board {
         self.camera.zoom *= factor;
     }
 
+    fn prepare_terrain_texture(&mut self, terrain: &MapTerrain) {
+        if self.terrain_hash == terrain.hash {
+            return;
+        }
+
+        let (w, h) = terrain.size;
+        self.terrain_texture = mq::render_target(w as u32, h as u32);
+        self.terrain_texture
+            .texture
+            .set_filter(mq::FilterMode::Nearest);
+
+        self.terrain_hash = terrain.hash;
+
+        let mut camera = mq::Camera2D::from_display_rect(mq::Rect::new(0., 0., w as f32, h as f32));
+        camera.render_target = Some(self.terrain_texture.clone());
+        mq::push_camera_state();
+        mq::set_camera(&camera);
+        mq::clear_background(mq::SKYBLUE);
+
+        for (idx, &(r, g, b)) in terrain.tiles.iter().enumerate() {
+            let x = (idx % w) as f32;
+            let y = (idx / w) as f32;
+            let color = mq::Color::from_rgba(r, g, b, 255);
+            mq::draw_rectangle(x, y, 1., 1., color);
+        }
+
+        mq::pop_camera_state();
+    }
+
     /// Draws all pawns to the internal render target.
-    pub fn draw(&self) {
+    pub fn draw(&mut self, terrain: &MapTerrain) {
+        self.camera.render_target = Some(self.render_target.clone());
         mq::set_camera(&self.camera);
         mq::clear_background(mq::LIGHTGRAY);
+
+        {
+            self.prepare_terrain_texture(terrain);
+            let tex = &self.terrain_texture.texture;
+            mq::draw_texture_ex(
+                tex,
+                0.,
+                0.,
+                mq::WHITE,
+                mq::DrawTextureParams {
+                    dest_size: Some(tex.size() * self.tile_size),
+                    source: None,
+                    rotation: 0.,
+                    flip_x: false,
+                    flip_y: true,
+                    pivot: None,
+                },
+            );
+        }
 
         for pawn in &self.pawns {
             pawn.draw_shape();

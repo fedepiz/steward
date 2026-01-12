@@ -6,8 +6,9 @@ use crate::{
     entities::{Body, Entities, EntityId},
     geom::V2,
     movement,
-    names::{Name, Names},
+    names::Names,
     objects::{Objects, ObjectsBuilder},
+    terrain_map::TerrainMap,
 };
 
 #[derive(Default)]
@@ -15,14 +16,15 @@ pub(crate) struct Simulation {
     pub turn_num: usize,
     pub names: Names,
     pub entities: Entities,
+    pub terrain_map: TerrainMap,
     movement_cache: movement::MovementCache,
 }
 
 impl Simulation {
-    pub(crate) fn tick(&mut self, request: Request, arena: &Bump) -> Response {
-        if request.init {
+    pub(crate) fn tick(&mut self, mut request: Request, arena: &Bump) -> Response {
+        if let Some(req) = request.init.take() {
             *self = Self::default();
-            crate::init::init(self);
+            crate::init::init(self, req);
         }
 
         let advance_time = request.advance_time;
@@ -61,10 +63,17 @@ impl Simulation {
 
 #[derive(Default)]
 pub struct Request {
-    pub init: bool,
+    pub init: Option<InitRequest>,
     pub advance_time: bool,
     strings: StringPool,
     view_entities: Vec<ViewEntity>,
+}
+
+#[derive(Default)]
+pub struct InitRequest {
+    pub map_width: usize,
+    pub map_height: usize,
+    pub elevations: Vec<u8>,
 }
 
 impl Request {
@@ -123,12 +132,21 @@ fn view(sim: &Simulation, req: &Request, response: &mut Response) {
             body: entity.body,
         });
     }
+
+    response.map_terrain.hash = sim.terrain_map.hash();
+    response.map_terrain.size = sim.terrain_map.size();
+    response.map_terrain.tiles = sim
+        .terrain_map
+        .iter_terrains()
+        .map(|typ| typ.color)
+        .collect();
 }
 
 #[derive(Default)]
 pub struct Response {
     pub objects: Objects,
     pub map_items: MapItems,
+    pub map_terrain: MapTerrain,
 }
 
 #[derive(Default)]
@@ -179,4 +197,11 @@ pub struct MapItem<'a> {
     pub y: f32,
     pub width: f32,
     pub height: f32,
+}
+
+#[derive(Default)]
+pub struct MapTerrain {
+    pub hash: u64,
+    pub size: (usize, usize),
+    pub tiles: Vec<(u8, u8, u8)>,
 }

@@ -65,7 +65,6 @@ fn make_pawns<'a, 'b>(
     items: &'b simulation::MapItems,
     selected: Option<MapItemId>,
 ) -> AVec<'a, PawnDesc<'b>> {
-    let size = 20.;
     let text_size = 26;
 
     let mut vec = bumpalo::vec![in arena];
@@ -73,12 +72,7 @@ fn make_pawns<'a, 'b>(
         let is_selected = Some(item.id) == selected;
 
         PawnDesc {
-            bounds: mq::Rect::new(
-                item.x * size,
-                item.y * size,
-                item.width * size,
-                item.height * size,
-            ),
+            bounds: mq::Rect::new(item.x, item.y, item.width, item.height),
             fill: mq::RED,
             stroke: Stroke {
                 color: if is_selected { mq::YELLOW } else { mq::BLACK },
@@ -105,7 +99,12 @@ async fn amain() {
     let mut board = {
         let font =
             mq::load_ttf_font_from_bytes(include_bytes!("../assets/fonts/board.ttf")).unwrap();
-        board::Board::new(mq::screen_width() as u32, mq::screen_height() as u32, font)
+        board::Board::new(
+            10.,
+            mq::screen_width() as u32,
+            mq::screen_height() as u32,
+            font,
+        )
     };
     let billboard_font =
         mq::load_ttf_font_from_bytes(include_bytes!("../assets/fonts/board.ttf")).unwrap();
@@ -124,7 +123,16 @@ async fn amain() {
         let mut request = simulation::Request::new();
 
         if reload {
-            request.init = true;
+            let map_image = mq::load_image("assets/britain.png").await.unwrap();
+            request.init = Some(simulation::InitRequest {
+                map_width: map_image.width(),
+                map_height: map_image.height(),
+                elevations: map_image
+                    .bytes
+                    .chunks(4)
+                    .map(|x| ((x[0] as f32 / 255.) * 100.) as u8)
+                    .collect(),
+            });
             reload = false;
         }
 
@@ -167,6 +175,7 @@ async fn amain() {
 
         // Reset board for new frame and add pawns
         board.reset();
+
         for desc in make_pawns(&arena, map_items, selected_item) {
             board.add_pawn(desc);
         }
@@ -196,7 +205,7 @@ async fn amain() {
         }
 
         // Render board to its texture
-        board.draw();
+        board.draw(&response.map_terrain);
 
         // Draw board texture to screen
         mq::clear_background(mq::BLACK);

@@ -6,6 +6,7 @@ mod movement;
 mod names;
 pub mod objects;
 mod simulation;
+mod terrain_map;
 
 pub use actor::SimulationActor;
 pub use simulation::*;

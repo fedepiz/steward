@@ -1,13 +1,15 @@
-use crate::geom::*;
 use crate::names::Name;
 use crate::simulation::*;
+use crate::{geom::*, terrain_map};
 
-pub(crate) fn init(sim: &mut Simulation) {
+pub(crate) fn init(sim: &mut Simulation, req: InitRequest) {
+    sim.terrain_map = terrain_map::init(&req.elevations, req.map_width, req.map_height);
+
     {
         let person = sim.entities.add_type();
         person.tag = "person";
         person.name = Name::simple(sim.names.define("Person"));
-        person.size = V2::splat(1.0);
+        person.size = V2::splat(2.0);
     }
 
     for pos in [V2::splat(0.), V2::new(-5., -6.)] {
