@@ -37,17 +37,13 @@ impl Simulation {
                     id: entity.id,
                     speed: 1.,
                     pos: entity.body.pos,
-                    destination: V2::splat(0.),
+                    destination: V2::new(500., 500.),
                 });
                 arena.alloc_slice_fill_iter(it)
             };
 
-            let map_def = movement::MapInfo {
-                width: 1000,
-                height: 1000,
-            };
-
-            let result = movement::tick_movement(&mut self.movement_cache, &elements, &map_def);
+            let result =
+                movement::tick_movement(&mut self.movement_cache, &elements, &self.terrain_map);
 
             for (id, pos) in result.positions {
                 self.entities[id].body.pos = pos;
@@ -58,6 +54,19 @@ impl Simulation {
         view(self, &request, &mut response);
 
         response
+    }
+}
+
+impl movement::MovementGraph for TerrainMap {
+    fn size(&self) -> (usize, usize) {
+        self.size()
+    }
+
+    fn get_speed_at(&self, x: i64, y: i64) -> f32 {
+        let x = x.max(0) as usize;
+        let y = y.max(0) as usize;
+        let terrain = self.terrain_at(x, y);
+        terrain.movement_speed_multiplier
     }
 }
 

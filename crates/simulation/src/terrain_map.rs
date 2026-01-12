@@ -19,7 +19,10 @@ impl TerrainMap {
 
     pub fn terrain_at(&self, x: usize, y: usize) -> &TerrainType {
         let idx = self.width * y + x;
-        self.terrain_types.get(idx).unwrap_or(&Self::EMPTY_TERRAIN)
+        self.cells
+            .get(idx)
+            .and_then(|cell| self.terrain_types.get(cell.type_idx))
+            .unwrap_or(&Self::EMPTY_TERRAIN)
     }
 
     pub fn size(&self) -> (usize, usize) {
@@ -99,13 +102,13 @@ fn init_types() -> Vec<TerrainType> {
         },
         TerrainType {
             name: "Forest",
-            movement_speed_multiplier: 0.85,
+            movement_speed_multiplier: 0.5,
             color: (0, 125, 0),
             elevation_range: (15, 30),
         },
         TerrainType {
             name: "Hills",
-            movement_speed_multiplier: 0.85,
+            movement_speed_multiplier: 0.5,
             color: (125, 50, 50),
             elevation_range: (30, 50),
         },

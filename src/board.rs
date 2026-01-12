@@ -1,4 +1,4 @@
-use macroquad::{camera, prelude as mq};
+use macroquad::prelude as mq;
 use simulation::MapTerrain;
 use util::string_pool::{SpanHandle, StringPool};
 
@@ -217,6 +217,11 @@ impl Board {
         id
     }
 
+    /// Move camera to precise location
+    pub fn move_camera_to(&mut self, world_coords: mq::Vec2) {
+        self.camera.target = world_coords * self.tile_size;
+    }
+
     /// Translates the camera by the given delta in world units.
     pub fn move_camera(&mut self, delta: mq::Vec2) {
         let zoom_rate = 2. / (self.camera.zoom.x * mq::screen_width());
@@ -267,20 +272,22 @@ impl Board {
         {
             self.prepare_terrain_texture(terrain);
             let tex = &self.terrain_texture.texture;
-            mq::draw_texture_ex(
-                tex,
-                0.,
-                0.,
-                mq::WHITE,
-                mq::DrawTextureParams {
-                    dest_size: Some(tex.size() * self.tile_size),
-                    source: None,
-                    rotation: 0.,
-                    flip_x: false,
-                    flip_y: true,
-                    pivot: None,
-                },
-            );
+            if tex.size() != mq::Vec2::ZERO {
+                mq::draw_texture_ex(
+                    tex,
+                    0.,
+                    0.,
+                    mq::WHITE,
+                    mq::DrawTextureParams {
+                        dest_size: Some(tex.size() * self.tile_size),
+                        source: None,
+                        rotation: 0.,
+                        flip_x: false,
+                        flip_y: true,
+                        pivot: None,
+                    },
+                );
+            }
         }
 
         for pawn in &self.pawns {

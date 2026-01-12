@@ -3,11 +3,6 @@ use util::bucket_sort::BucketSort;
 
 use crate::{entities::EntityId, geom::V2};
 
-pub(crate) struct MapInfo {
-    pub width: usize,
-    pub height: usize,
-}
-
 #[derive(Clone, Copy)]
 pub(crate) struct Element {
     pub id: EntityId,
@@ -26,6 +21,12 @@ pub(crate) struct MovementCache {
     paths: SecondaryMap<EntityId, MovementPath>,
 }
 
+pub(crate) trait MovementGraph {
+    fn size(&self) -> (usize, usize);
+
+    fn get_speed_at(&self, x: i64, y: i64) -> f32;
+}
+
 #[derive(Default)]
 struct MovementPath {
     // Target of this path
@@ -39,12 +40,12 @@ struct MovementPath {
     steps_reversed: Vec<V2>,
 }
 
-pub(crate) fn tick_movement(
+pub(crate) fn tick_movement<G: MovementGraph>(
     cache: &mut MovementCache,
     elements: &[Element],
-    map: &MapInfo,
+    graph: &G,
 ) -> Output {
-    const SPEED_MULT: f32 = 0.025;
+    const SPEED_MULT: f32 = 0.03;
     const BUCKET_SIZE: usize = 32;
 
     let mut next_positions = Vec::with_capacity(elements.len());
@@ -61,7 +62,7 @@ pub(crate) fn tick_movement(
                 .get_mut(element.id)
                 .filter(|path| path.destination == element.destination)
                 .unwrap_or_else(|| {
-                    new_path = Some(calculate_new_path(element.pos, element.destination));
+                    new_path = Some(calculate_new_path(element.pos, element.destination, graph));
                     new_path.as_mut().unwrap()
                 });
 
@@ -86,14 +87,19 @@ pub(crate) fn tick_movement(
 
         // Calculate next position
         let next_pos = {
-            let speed = element.speed * SPEED_MULT;
+            let current_tile = pos_to_tile(element.pos);
+            let terrain_mult = graph.get_speed_at(current_tile.0, current_tile.1);
+            let speed = element.speed * terrain_mult * SPEED_MULT;
             interpolate_position(element.pos, next_step, speed)
         };
 
         next_positions.push((element.id, next_pos));
     }
 
-    let spatial_map = SpatialMap::new(&next_positions, map.width, map.height, BUCKET_SIZE);
+    let spatial_map = {
+        let (w, h) = graph.size();
+        SpatialMap::new(&next_positions, w, h, BUCKET_SIZE)
+    };
 
     Output {
         positions: next_positions,
@@ -114,13 +120,79 @@ fn interpolate_position(pos: V2, dest: V2, speed: f32) -> V2 {
     V2::lerp(pos, dest, speed_t)
 }
 
-fn calculate_new_path(source: V2, destination: V2) -> MovementPath {
-    // TODO: Actual pathfinding, once we have a terrain grid
-    MovementPath {
-        destination,
-        next_step: destination,
-        steps_reversed: vec![destination],
+fn calculate_new_path<G: MovementGraph>(source: V2, destination: V2, graph: &G) -> MovementPath {
+    if source == destination {
+        return MovementPath {
+            destination,
+            next_step: destination,
+            steps_reversed: vec![destination],
+        };
     }
+
+    let result = {
+        let (width, height) = graph.size();
+        let source = pos_to_tile(source);
+        let destination = pos_to_tile(destination);
+        pathfinding::directed::astar::astar(
+            &source,
+            |&current| {
+                let (x, y) = current;
+                let min_x = (x - 1).max(0);
+                let max_x = (x + 2).min(width as i64);
+
+                let min_y = (y - 1).max(0);
+                let max_y = (y + 2).min(height as i64);
+
+                (min_y..max_y)
+                    .flat_map(move |j| (min_x..max_x).map(move |i| (i, j)))
+                    .filter(move |&neighbour| {
+                        let speed = graph.get_speed_at(neighbour.0, neighbour.1);
+                        current != neighbour && speed > 0.
+                    })
+                    .map(move |neighbor| {
+                        let cost_current = speed_to_cost(graph.get_speed_at(current.0, current.1));
+                        let cost_neighbour =
+                            speed_to_cost(graph.get_speed_at(neighbor.0, neighbor.1));
+                        let unit_cost_scale = (cost_current + cost_neighbour) / 2.;
+                        let c = distance_to_cost(distance(current, neighbor) * unit_cost_scale);
+                        (neighbor, c)
+                    })
+            },
+            |&node| distance_to_cost(distance(node, destination)),
+            |&node| node == destination,
+        )
+    };
+
+    let path: Vec<_> = result
+        .map(|(x, _)| x)
+        .unwrap_or_default()
+        .into_iter()
+        .rev()
+        .map(|(x, y)| V2::new(x as f32, y as f32))
+        .collect();
+
+    MovementPath {
+        destination: destination,
+        next_step: path.last().copied().unwrap_or(source),
+        steps_reversed: path,
+    }
+}
+
+fn distance_to_cost(x: f32) -> i64 {
+    (x * 100.) as i64
+}
+
+fn speed_to_cost(speed: f32) -> f32 {
+    // Represent impassable terrain with a large cost
+    if speed == 0.0 { 100000. } else { 1. / speed }
+}
+
+fn distance((ax, ay): (i64, i64), (bx, by): (i64, i64)) -> f32 {
+    (((ax - bx).pow(2) + (ay - by).pow(2)) as f32).sqrt()
+}
+
+fn pos_to_tile(pos: V2) -> (i64, i64) {
+    (pos.x.round() as i64, pos.y.round() as i64)
 }
 
 pub(crate) struct SpatialMap {

@@ -88,6 +88,8 @@ fn make_pawns<'a, 'b>(
     vec
 }
 
+const TILE_SIZE: f32 = 20.;
+
 async fn amain() {
     // Configure egui scaling for high DPI
     egui_macroquad::cfg(|ctx| {
@@ -100,12 +102,13 @@ async fn amain() {
         let font =
             mq::load_ttf_font_from_bytes(include_bytes!("../assets/fonts/board.ttf")).unwrap();
         board::Board::new(
-            10.,
+            TILE_SIZE,
             mq::screen_width() as u32,
             mq::screen_height() as u32,
             font,
         )
     };
+    board.move_camera_to(mq::vec2(580., 512.));
     let billboard_font =
         mq::load_ttf_font_from_bytes(include_bytes!("../assets/fonts/board.ttf")).unwrap();
 
