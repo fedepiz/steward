@@ -17,6 +17,7 @@ bumpalo = { version = "3", features = ["collections"] }
 macroquad = "0.4.4"
 egui-macroquad = "0.17"
 egui = "0.31"
+fast-voxel-traversal = "*"
 num_enum = "*"
 strum = { version = "*", features = ["derive"] }
 pathfinding = "*"

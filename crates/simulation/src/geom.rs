@@ -37,6 +37,14 @@ impl V2 {
         let t = t.clamp(0., 1.);
         V2::new(lerp(p1.x, p2.x, t), lerp(p1.y, p2.y, t))
     }
+
+    pub fn round(self) -> V2 {
+        V2::new(self.x.round(), self.y.round())
+    }
+
+    pub fn as_pair(self) -> (f32, f32) {
+        (self.x, self.y)
+    }
 }
 
 fn lerp(a: f32, b: f32, t: f32) -> f32 {

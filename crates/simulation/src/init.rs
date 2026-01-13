@@ -12,7 +12,11 @@ pub(crate) fn init(sim: &mut Simulation, req: InitRequest) {
         person.size = V2::splat(1.0);
     }
 
-    for pos in [V2::new(610., 520.), V2::new(600., 520.)] {
+    for pos in [
+        V2::new(610., 520.),
+        V2::new(600., 520.),
+        V2::new(600., 500.),
+    ] {
         let typ = sim.entities.find_type_by_tag("person").unwrap();
         let entity = sim.entities.spawn_with_type(typ.id);
         entity.name = typ.name;

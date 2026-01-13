@@ -1,7 +1,8 @@
-use slotmap::SecondaryMap;
-use util::bucket_sort::BucketSort;
-
 use crate::{entities::EntityId, geom::V2};
+use fast_voxel_traversal::raycast_2d as fvt;
+use slotmap::SecondaryMap;
+
+use util::bucket_sort::BucketSort;
 
 #[derive(Clone, Copy)]
 pub(crate) struct Element {
@@ -88,7 +89,12 @@ pub(crate) fn tick_movement<G: MovementGraph>(
         // Calculate next position
         let next_pos = {
             let current_tile = pos_to_tile(element.pos);
-            let terrain_mult = graph.get_speed_at(current_tile.0, current_tile.1);
+            // Define a minimum speed, to make sure nothing gets stuck even in the 'unlikely event' entities try to
+            // traverse untraversable spaces.
+            const MINIMUM_SPEED: f32 = 0.1;
+            let terrain_mult = graph
+                .get_speed_at(current_tile.0, current_tile.1)
+                .max(MINIMUM_SPEED);
             let speed = element.speed * terrain_mult * SPEED_MULT;
             interpolate_position(element.pos, next_step, speed)
         };
@@ -120,9 +126,76 @@ fn interpolate_position(pos: V2, dest: V2, speed: f32) -> V2 {
     V2::lerp(pos, dest, speed_t)
 }
 
-fn simplify_path<G: MovementGraph>(path: &[V2], graph: &G) -> Vec<V2> {
-    // TODO: implement string pulling
-    path.to_vec()
+fn simplify_path<G: MovementGraph>(path: &mut Vec<V2>, graph: &G) {
+    // Simplifies the path. The algorithm works entirely in-place. Removing nodes is done via
+    // a final deduplication step
+    if path.len() < 2 {}
+
+    let mut start = 0;
+    while start < path.len() {
+        let end = find_simplifiable_series(&path, start, graph);
+        for i in start + 1..end {
+            path[i] = path[start];
+        }
+        if start == end {
+            start = start + 1;
+        } else {
+            start = end;
+        }
+    }
+
+    path.dedup();
+}
+
+fn find_simplifiable_series<G: MovementGraph>(nodes: &[V2], start: usize, graph: &G) -> usize {
+    let mut end = start;
+    let start_p = nodes[start];
+    while end + 1 < nodes.len() {
+        end += 1;
+        let end_p = nodes[end];
+        if !can_simplify_pair(start_p, end_p, graph) {
+            break;
+        }
+    }
+    end
+}
+
+fn can_simplify_pair<G: MovementGraph>(p1: V2, p2: V2, graph: &G) -> bool {
+    let (w, h) = graph.size();
+    let volume = fvt::BoundingVolume2 {
+        size: (w as i32, h as i32),
+    };
+    // let half_unit = V2::splat(0.5);
+    // From center-based positions to corner-based positions
+    // let p1 = p1;
+    // let p2 = p2;
+    let ray = fvt::Ray2 {
+        origin: p1.as_pair(),
+        direction: (p2 - p1).normalize().as_pair(),
+        length: V2::distance(p2, p1),
+    };
+
+    let base_speed = {
+        let (x, y) = pos_to_tile(p1);
+        graph.get_speed_at(x, y)
+    };
+
+    let hits = fvt::VoxelRay2Iterator::new(volume, ray);
+    hits.into_iter().all(|hit| {
+        let (x, y) = hit.voxel;
+        // Look around at a neighbour of size 1...
+        let min_x = (x - 1).max(0);
+        let max_x = (x + 2).min(w as i32);
+        let min_y = (y - 1).max(0);
+        let max_y = (y + 2).min(h as i32);
+
+        (min_y..max_y)
+            .flat_map(|y| (min_x..max_x).map(move |x| (x, y)))
+            .all(|(x, y)| {
+                let speed = graph.get_speed_at(x as i64, y as i64);
+                speed >= base_speed
+            })
+    })
 }
 
 fn calculate_new_path<G: MovementGraph>(source: V2, destination: V2, graph: &G) -> MovementPath {
@@ -169,16 +242,30 @@ fn calculate_new_path<G: MovementGraph>(source: V2, destination: V2, graph: &G) 
         )
     };
 
-    let path: Vec<_> = result
+    let mut path: Vec<_> = result
         .as_ref()
         .map(|(x, _)| x.as_slice())
         .unwrap_or_default()
         .into_iter()
+        // First step is just the source tile, so we don't need it
+        .skip(1)
         .map(|&(x, y)| V2::new(x as f32, y as f32))
         .chain(std::iter::once(destination))
-        .rev()
         .collect();
 
+    // IF the destination and the last point are co-tiled, collapse them.
+    if path.len() >= 2 {
+        let idx = path.len() - 2;
+        let next_to_last = path[idx];
+        if next_to_last.round() == destination.round() {
+            path[idx] = destination;
+            path.pop();
+        }
+    }
+
+    simplify_path(&mut path, graph);
+
+    path.reverse();
     let next_step = path.last().copied().unwrap_or(source);
 
     MovementPath {

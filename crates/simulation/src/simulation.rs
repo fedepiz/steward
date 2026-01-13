@@ -35,6 +35,10 @@ impl Simulation {
             for entity in self.entities.iter_mut() {
                 entity.destination = V2::new(500., 500.);
             }
+            if let Some(third_entity) = self.entities.iter().nth(2).map(|entity| entity.id) {
+                let target = self.entities.iter().next().map(|x| x.body.pos).unwrap();
+                self.entities[third_entity].destination = target;
+            }
 
             let elements = {
                 let it = self.entities.iter().map(|entity| movement::Element {
