@@ -37,13 +37,29 @@ fn tick(sim: &mut Simulation, mut request: Request) -> Response {
     if advance_time {
         sim.turn_num = sim.turn_num.wrapping_add(1);
 
-        for entity in sim.entities.iter_mut() {
-            entity.destination = V2::new(500., 500.);
-        }
+        let move_to_command = {
+            let mut move_to = None;
 
-        if let Some(third_entity) = sim.entities.iter().nth(2).map(|entity| entity.id) {
-            let target = sim.entities.iter().next().map(|x| x.body.pos).unwrap();
-            sim.entities[third_entity].destination = target;
+            // From move pos
+            if let Some((x, y)) = request.move_to_pos {
+                move_to = Some(V2::new(x, y));
+            }
+
+            // From move to target
+            if let Some(item_id) = request.move_to_item {
+                let id = EntityId::from(KeyData::from_ffi(item_id.0));
+                let entity = &sim.entities[id];
+                move_to = Some(entity.body.pos);
+            }
+            move_to
+        };
+
+        for entity in sim.entities.iter_mut() {
+            entity.destination = if entity.is_player {
+                move_to_command.unwrap_or(entity.destination)
+            } else {
+                V2::new(500., 500.)
+            }
         }
 
         let mut movement_elements = Vec::with_capacity(sim.entities.len());
@@ -99,6 +115,8 @@ impl movement::MovementGraph for TerrainMap {
 pub struct Request {
     pub init: Option<InitRequest>,
     pub advance_time: bool,
+    pub move_to_pos: Option<(f32, f32)>,
+    pub move_to_item: Option<MapItemId>,
     strings: StringPool,
     view_entities: Vec<ViewEntity>,
 }

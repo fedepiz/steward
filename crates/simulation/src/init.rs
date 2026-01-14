@@ -13,6 +13,7 @@ pub(crate) fn init(sim: &mut Simulation, req: InitRequest) {
     }
 
     for pos in [
+        V2::new(580., 520.),
         V2::new(610., 520.),
         V2::new(600., 520.),
         V2::new(600., 500.),
@@ -22,5 +23,9 @@ pub(crate) fn init(sim: &mut Simulation, req: InitRequest) {
         entity.name = typ.name;
         entity.body.pos = pos;
         entity.destination = entity.body.pos;
+    }
+
+    if let Some(entity) = sim.entities.iter_mut().next() {
+        entity.is_player = true
     }
 }

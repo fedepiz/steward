@@ -102,6 +102,7 @@ pub(crate) struct Entity {
     pub type_id: EntityTypeId,
     pub body: Body,
     pub destination: V2,
+    pub is_player: bool,
 }
 
 #[derive(Clone, Copy, Default)]

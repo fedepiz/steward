@@ -184,6 +184,10 @@ impl Board {
         None
     }
 
+    pub fn coords_of(&self, screen_pos: mq::Vec2) -> mq::Vec2 {
+        self.camera.screen_to_world(screen_pos) / self.tile_size
+    }
+
     /// Clears all pawns and text for a new frame.
     pub fn reset(&mut self) {
         self.pawns.clear();

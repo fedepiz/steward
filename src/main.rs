@@ -90,6 +90,18 @@ fn make_pawns<'a, 'b>(
 
 const TILE_SIZE: f32 = 20.;
 
+#[derive(Default)]
+struct Actions {
+    move_to_pos: Option<mq::Vec2>,
+    move_to_item: Option<MapItemId>,
+}
+
+impl Actions {
+    fn apply(self, request: &mut simulation::Request) {
+        request.move_to_pos = self.move_to_pos.map(|pos| (pos.x, pos.y));
+        request.move_to_item = self.move_to_item;
+    }
+}
 async fn amain() {
     // Configure egui scaling for high DPI
     egui_macroquad::cfg(|ctx| {
@@ -118,12 +130,14 @@ async fn amain() {
     let mut is_paused = false;
 
     let mut reload = true;
+    let mut actions = Actions::default();
 
     // Main game loop
     loop {
         arena.reset();
 
         let mut request = simulation::Request::new();
+        std::mem::take(&mut actions).apply(&mut request);
 
         if reload {
             let map_image = mq::load_image("assets/britain.png").await.unwrap();
@@ -184,9 +198,20 @@ async fn amain() {
         }
 
         if !ui_wants_pointer {
-            let hovered_pawn = board.pick_pawn(mq::mouse_position().into());
+            let mouse_pos = mq::mouse_position().into();
+            let hovered_pawn = board.pick_pawn(mouse_pos);
+            let hoevered_item = hovered_pawn.map(|id| map_items.get_by_index(id.0).id);
+
             if mq::is_mouse_button_pressed(mq::MouseButton::Left) {
-                selected_item = hovered_pawn.map(|id| map_items.get_by_index(id.0).id);
+                selected_item = hoevered_item;
+            }
+
+            let world_pos = board.coords_of(mouse_pos);
+            if mq::is_mouse_button_pressed(mq::MouseButton::Right) {
+                match hovered_pawn {
+                    Some(pawn) => actions.move_to_item = hoevered_item,
+                    None => actions.move_to_pos = Some(world_pos),
+                }
             }
         }
 
