@@ -21,48 +21,65 @@ pub(crate) struct Simulation {
 }
 
 impl Simulation {
-    pub(crate) fn tick(&mut self, mut request: Request, arena: &Bump) -> Response {
-        if let Some(req) = request.init.take() {
-            *self = Self::default();
-            crate::init::init(self, req);
-        }
-
-        let advance_time = request.advance_time;
-
-        if advance_time {
-            self.turn_num = self.turn_num.wrapping_add(1);
-
-            for entity in self.entities.iter_mut() {
-                entity.destination = V2::new(500., 500.);
-            }
-            if let Some(third_entity) = self.entities.iter().nth(2).map(|entity| entity.id) {
-                let target = self.entities.iter().next().map(|x| x.body.pos).unwrap();
-                self.entities[third_entity].destination = target;
-            }
-
-            let elements = {
-                let it = self.entities.iter().map(|entity| movement::Element {
-                    id: entity.id,
-                    speed: 1.,
-                    pos: entity.body.pos,
-                    destination: entity.destination,
-                });
-                arena.alloc_slice_fill_iter(it)
-            };
-
-            let result =
-                movement::tick_movement(&mut self.movement_cache, &elements, &self.terrain_map);
-
-            for (id, pos) in result.positions {
-                self.entities[id].body.pos = pos;
-            }
-        }
-
-        let mut response = Response::default();
-        view(self, &request, &mut response);
-
-        response
+    pub(crate) fn tick(&mut self, request: Request, _: &Bump) -> Response {
+        tick(self, request)
     }
+}
+
+fn tick(sim: &mut Simulation, mut request: Request) -> Response {
+    if let Some(req) = request.init.take() {
+        *sim = Simulation::default();
+        crate::init::init(sim, req);
+    }
+
+    let advance_time = request.advance_time;
+
+    if advance_time {
+        sim.turn_num = sim.turn_num.wrapping_add(1);
+
+        for entity in sim.entities.iter_mut() {
+            entity.destination = V2::new(500., 500.);
+        }
+
+        if let Some(third_entity) = sim.entities.iter().nth(2).map(|entity| entity.id) {
+            let target = sim.entities.iter().next().map(|x| x.body.pos).unwrap();
+            sim.entities[third_entity].destination = target;
+        }
+
+        let mut movement_elements = Vec::with_capacity(sim.entities.len());
+
+        // Extract data from entities in linear pass
+        for entity in sim.entities.iter() {
+            movement_elements.push(movement::Element {
+                id: entity.id,
+                speed: 1.,
+                pos: entity.body.pos,
+                destination: entity.destination,
+            });
+        }
+
+        // Apply movement results back to entities
+        let movement_result = movement::tick_movement(
+            &mut sim.movement_cache,
+            &movement_elements,
+            &sim.terrain_map,
+        );
+
+        // Iterate writeback
+        for ((id, pos), entity) in movement_result
+            .positions
+            .into_iter()
+            .zip(sim.entities.iter_mut())
+        {
+            assert!(id == entity.id);
+            entity.body.pos = pos;
+        }
+    }
+
+    let mut response = Response::default();
+    view(sim, &request, &mut response);
+
+    response
 }
 
 impl movement::MovementGraph for TerrainMap {

@@ -49,45 +49,45 @@ pub(crate) fn tick_movement<G: MovementGraph>(
     const SPEED_MULT: f32 = 0.03;
     const BUCKET_SIZE: usize = 32;
 
-    let mut next_positions = Vec::with_capacity(elements.len());
+    let next_positions: Vec<_> = elements
+        .iter()
+        .map(|element| {
+            // Derive the next step
+            let next_step = {
+                // Temporary on-stack location for a fresh path
+                let mut new_path = None;
 
-    for &element in elements {
-        // Derive the next step
-        let next_step = {
-            // Temporary on-stack location for a fresh path
-            let mut new_path = None;
+                // Get the path to the destination. Uses a cache path if valid, else pathfinds.
+                let path = cache
+                    .paths
+                    .get_mut(element.id)
+                    .filter(|path| path.destination == element.destination)
+                    .unwrap_or_else(|| {
+                        new_path =
+                            Some(calculate_new_path(element.pos, element.destination, graph));
+                        new_path.as_mut().unwrap()
+                    });
 
-            // Get the path to the destination. Uses a cache path if valid, else pathfinds.
-            let path = cache
-                .paths
-                .get_mut(element.id)
-                .filter(|path| path.destination == element.destination)
-                .unwrap_or_else(|| {
-                    new_path = Some(calculate_new_path(element.pos, element.destination, graph));
-                    new_path.as_mut().unwrap()
-                });
+                // Advance path (the path is not over and the next step is the current position)
+                while element.pos == path.next_step && path.next_step != path.destination {
+                    path.steps_reversed.pop();
+                    path.next_step = path
+                        .steps_reversed
+                        .last()
+                        .copied()
+                        .unwrap_or(path.destination);
+                }
 
-            // Advance path (the path is not over and the next step is the current position)
-            while element.pos == path.next_step && path.next_step != path.destination {
-                path.steps_reversed.pop();
-                path.next_step = path
-                    .steps_reversed
-                    .last()
-                    .copied()
-                    .unwrap_or(path.destination);
-            }
+                let next_step = path.next_step;
+                // If we calculated a new path, cache it
+                if let Some(new_path) = new_path {
+                    cache.paths.insert(element.id, new_path);
+                }
 
-            let next_step = path.next_step;
-            // If we calculated a new path, cache it
-            if let Some(new_path) = new_path {
-                cache.paths.insert(element.id, new_path);
-            }
+                next_step
+            };
 
-            next_step
-        };
-
-        // Calculate next position
-        let next_pos = {
+            // Calculate next position
             let current_tile = pos_to_tile(element.pos);
             // Define a minimum speed, to make sure nothing gets stuck even in the 'unlikely event' entities try to
             // traverse untraversable spaces.
@@ -96,16 +96,17 @@ pub(crate) fn tick_movement<G: MovementGraph>(
                 .get_speed_at(current_tile.0, current_tile.1)
                 .max(MINIMUM_SPEED);
             let speed = element.speed * terrain_mult * SPEED_MULT;
-            interpolate_position(element.pos, next_step, speed)
-        };
-
-        next_positions.push((element.id, next_pos));
-    }
+            let next_pos = interpolate_position(element.pos, next_step, speed);
+            (element.id, next_pos)
+        })
+        .collect();
 
     let spatial_map = {
         let (w, h) = graph.size();
         SpatialMap::new(&next_positions, w, h, BUCKET_SIZE)
     };
+
+    assert!(elements.len() == next_positions.len());
 
     Output {
         positions: next_positions,

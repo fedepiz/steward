@@ -53,6 +53,10 @@ impl Entities {
     pub(crate) fn iter_mut(&mut self) -> slotmap::basic::ValuesMut<'_, EntityId, Entity> {
         self.entities.values_mut()
     }
+
+    pub(crate) fn len(&self) -> usize {
+        self.entities.len()
+    }
 }
 
 impl std::ops::Index<EntityId> for Entities {
