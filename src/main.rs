@@ -3,8 +3,15 @@ mod board;
 use board::{LabelDesc, PawnDesc, Stroke};
 use macroquad::prelude as mq;
 use simulation::{MapItemId, SimulationActor};
+use tracing_subscriber::layer::SubscriberExt;
 
 fn main() {
+    // 1. Setup the subscriber with the Tracy layer
+    tracing::subscriber::set_global_default(
+        tracing_subscriber::registry().with(tracing_tracy::TracyLayer::default()),
+    )
+    .expect("setup tracy layer");
+
     let conf = mq::Conf {
         window_title: "Steward".to_string(),
         window_width: 1600,
@@ -134,6 +141,8 @@ async fn amain() {
 
     // Main game loop
     loop {
+        let tracing_span = tracing::info_span!("Main Loop").entered();
+
         arena.reset();
 
         let mut request = simulation::Request::new();
@@ -150,6 +159,7 @@ async fn amain() {
                     .map(|x| ((x[0] as f32 / 255.) * 100.) as u8)
                     .collect(),
             });
+            request.extract_terrain = true;
             reload = false;
         }
 
@@ -236,7 +246,7 @@ async fn amain() {
         }
 
         // Render board to its texture
-        board.draw(&response.map_terrain);
+        board.draw(response.map_terrain.as_ref());
 
         // Draw board texture to screen
         mq::clear_background(mq::BLACK);
@@ -265,6 +275,7 @@ async fn amain() {
             draw_billboard_text(billboard_text, billboard_color, &billboard_font);
         }
 
+        std::mem::drop(tracing_span);
         mq::next_frame().await;
     }
 }

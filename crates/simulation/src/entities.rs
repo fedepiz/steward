@@ -1,4 +1,7 @@
-use slotmap::{SlotMap, new_key_type};
+use std::rc::Rc;
+
+use slotmap::{SecondaryMap, SlotMap, new_key_type};
+use util::span::Span;
 
 use crate::{geom::V2, names::Name};
 
@@ -9,12 +12,67 @@ new_key_type! { pub(crate) struct EntityTypeId; }
 pub(crate) struct Entities {
     types: SlotMap<EntityTypeId, EntityType>,
     entities: SlotMap<EntityId, Entity>,
+    /// Retains a 'synched' copy of all the ids, in order, in the structure, behind a reference counted pointer.
+    /// Used to iterate whithout needing mutable access to the underlying structure (as a Rc clone is cheap).
+    /// Spawning a new entity while holding a clone of EntityIds is illegal: it will result in a panic
+    /// (though mabye the panci can be avoided if we are ok with a copy-on-write)
+    iterable_ids: EntityIds,
+    pub(crate) detections: Detections,
+}
+
+#[derive(Default, Clone)]
+pub(crate) struct EntityIds(Rc<SecondaryMap<EntityId, ()>>);
+
+impl EntityIds {
+    #[must_use]
+    fn insert(&mut self, id: EntityId) -> Option<()> {
+        Rc::get_mut(&mut self.0)?.insert(id, ());
+        Some(())
+    }
+
+    pub(crate) fn iter(&self) -> impl Iterator<Item = EntityId> + use<'_> {
+        self.0.keys()
+    }
+}
+
+#[derive(Default)]
+pub(crate) struct Detections {
+    data: Vec<Detection>,
+    spans: SecondaryMap<EntityId, Span>,
+}
+
+impl Detections {
+    pub(crate) fn clear(&mut self) {
+        self.data.clear();
+        self.spans.clear();
+    }
+
+    pub(crate) fn set(&mut self, id: EntityId, detections: &[Detection]) {
+        let detections = detections.iter().copied();
+        let span = Span::of_extension(&mut self.data, detections);
+        self.spans.insert(id, span);
+    }
+
+    pub(crate) fn get(&self, id: EntityId) -> &[Detection] {
+        self.spans
+            .get(id)
+            .map(|span| span.view(&self.data))
+            .unwrap_or_default()
+    }
+}
+
+#[derive(Clone, Copy)]
+pub(crate) struct Detection {
+    pub target: EntityId,
+    pub distance: f32,
+    pub collides: bool,
 }
 
 impl Entities {
     pub(crate) fn spawn(&mut self) -> &mut Entity {
         let id = self.entities.insert(Entity::default());
         let data = &mut self.entities[id];
+        self.iterable_ids.insert(id).unwrap();
         data.id = id;
         data
     }
@@ -24,6 +82,10 @@ impl Entities {
         let entity = self.spawn();
         Self::set_type(entity, &typ);
         entity
+    }
+
+    pub(crate) fn acquire_ids(&self) -> EntityIds {
+        self.iterable_ids.clone()
     }
 
     fn set_type(entity: &mut Entity, typ: &EntityType) {

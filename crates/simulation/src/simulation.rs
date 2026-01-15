@@ -1,18 +1,13 @@
 use bumpalo::Bump;
 use slotmap::{Key, KeyData};
-use util::{
-    new_segment_id,
-    segments::Segments,
-    string_pool::{SpanHandle, StringPool},
-};
+use util::string_pool::{SpanHandle, StringPool};
 
 use crate::{
-    entities::{Body, Entities, EntityId, MovementTarget},
+    entities::{Body, Detection, Detections, Entities, EntityId, MovementTarget},
     geom::V2,
     movement::{self, SpatialMap},
     names::Names,
     objects::{Objects, ObjectsBuilder},
-    performance_counters::*,
     terrain_map::TerrainMap,
 };
 
@@ -27,6 +22,7 @@ pub(crate) struct Simulation {
 
 impl Simulation {
     pub(crate) fn tick(&mut self, request: Request, _: &Bump) -> Response {
+        let _span = tracing::info_span!("Tick").entered();
         tick(self, request)
     }
 }
@@ -36,8 +32,6 @@ fn tick(sim: &mut Simulation, mut request: Request) -> Response {
         *sim = Simulation::default();
         crate::init::init(sim, req);
     }
-
-    let mut perf_counts = PerformanceCounts::default();
 
     let advance_time = request.advance_time;
 
@@ -93,15 +87,13 @@ fn tick(sim: &mut Simulation, mut request: Request) -> Response {
             &sim.terrain_map,
         );
 
-        // Collision & detection check
-        let spatial_map = &movement_result.spatial_map;
-        perf_counts.add_time(PerfTime::BuildSpatialMap, movement_result.spatial_map_time);
-
-        let collisions = collisions(&sim.entities, spatial_map);
-        perf_counts.add_count(
-            PerfCounter::DistanceCalcsInCollisionCheck,
-            collisions.distance_count,
-        );
+        // Detection check
+        {
+            let spatial_map = &movement_result.spatial_map;
+            let mut detections = std::mem::take(&mut sim.entities.detections);
+            self::detections(&mut detections, &sim.entities, spatial_map);
+            sim.entities.detections = detections;
+        }
 
         // Iterate writeback
         {
@@ -117,10 +109,6 @@ fn tick(sim: &mut Simulation, mut request: Request) -> Response {
 
     let mut response = Response::default();
     view(sim, &request, &mut response);
-
-    if sim.turn_num % 50 == 0 {
-        perf_counts.print(sim.turn_num);
-    }
 
     response
 }
@@ -145,6 +133,7 @@ pub struct Request {
     pub move_to_pos: Option<(f32, f32)>,
     pub move_to_item: Option<MapItemId>,
     pub higlighted_item: Option<MapItemId>,
+    pub extract_terrain: bool,
     strings: StringPool,
     view_entities: Vec<ViewEntity>,
 }
@@ -172,20 +161,8 @@ impl Request {
     }
 }
 
-new_segment_id! { pub(crate) struct CollisionId; }
-
-#[derive(Default)]
-struct Collisions {
-    distance_count: usize,
-    map: CollisionMap,
-    by_entity: Vec<(EntityId, CollisionId)>,
-}
-
-type CollisionMap = Segments<CollisionId, EntityId>;
-
-fn collisions(entities: &Entities, spatial_map: &SpatialMap) -> Collisions {
-    let mut out = Collisions::default();
-    out.by_entity.reserve_exact(entities.len());
+fn detections(detections: &mut Detections, entities: &Entities, spatial_map: &SpatialMap) {
+    detections.clear();
 
     let mut scratch = Vec::with_capacity(100);
     for entity in entities.iter() {
@@ -198,20 +175,20 @@ fn collisions(entities: &Entities, spatial_map: &SpatialMap) -> Collisions {
             }
             let target = &entities[target];
             let distance = V2::distance(entity.body.pos, target.body.pos);
-            out.distance_count += 1;
             let range = (entity.body.size + target.body.size) / 2.;
 
             // Non-colliding
-            if distance > range {
-                continue;
-            }
+            let collides = distance <= range;
 
-            scratch.push(target.id);
+            scratch.push(Detection {
+                target: target.id,
+                distance,
+                collides,
+            });
         }
-        let collision_id = out.map.push(scratch.drain(..));
-        out.by_entity.push((entity.id, collision_id));
+        detections.set(entity.id, &scratch);
+        scratch.clear();
     }
-    out
 }
 
 #[derive(Clone, Copy)]
@@ -221,28 +198,34 @@ struct ViewEntity {
 }
 
 fn view(sim: &Simulation, req: &Request, response: &mut Response) {
-    let mut ctx = ObjectsBuilder::default();
-    // Create a default zero object, so that ObjectId::default() is valid but unused
-    ctx.spawn(|_| {});
-    // Create the 'global' object
-    ctx.spawn(|ctx| {
-        ctx.tag("root");
-        ctx.fmt("tick_num", format_args!("Turn number: {}", sim.turn_num));
-    });
-
-    // Create requested objects
-    for view_entity in &req.view_entities {
-        let entity = &sim.entities[view_entity.entity];
-        ctx.spawn(|ctx| {
-            let tag = req.strings.get(view_entity.tag);
-            ctx.tag(tag);
-            ctx.display("name", sim.names.resolve(entity.name));
-        });
-    }
-
-    response.objects = ctx.build();
+    let _span = tracing::info_span!("View").entered();
 
     {
+        let _span = tracing::info_span!("Objects").entered();
+        let mut ctx = ObjectsBuilder::default();
+        // Create a default zero object, so that ObjectId::default() is valid but unused
+        ctx.spawn(|_| {});
+        // Create the 'global' object
+        ctx.spawn(|ctx| {
+            ctx.tag("root");
+            ctx.fmt("tick_num", format_args!("Turn number: {}", sim.turn_num));
+        });
+
+        // Create requested objects
+        for view_entity in &req.view_entities {
+            let entity = &sim.entities[view_entity.entity];
+            ctx.spawn(|ctx| {
+                let tag = req.strings.get(view_entity.tag);
+                ctx.tag(tag);
+                ctx.display("name", sim.names.resolve(entity.name));
+            });
+        }
+
+        response.objects = ctx.build();
+    }
+
+    {
+        let _span = tracing::info_span!("Map Items").entered();
         let ctx = &mut response.map_items;
         let highlighted_entity = req
             .higlighted_item
@@ -271,20 +254,25 @@ fn view(sim: &Simulation, req: &Request, response: &mut Response) {
         }
     }
 
-    response.map_terrain.hash = sim.terrain_map.hash();
-    response.map_terrain.size = sim.terrain_map.size();
-    response.map_terrain.tiles = sim
-        .terrain_map
-        .iter_terrains()
-        .map(|typ| typ.color)
-        .collect();
+    if req.extract_terrain {
+        let _span = tracing::info_span!("Map Terrain").entered();
+        let mut map_terrain = MapTerrain::default();
+        map_terrain.hash = sim.terrain_map.hash();
+        map_terrain.size = sim.terrain_map.size();
+        map_terrain.tiles = sim
+            .terrain_map
+            .iter_terrains()
+            .map(|typ| typ.color)
+            .collect();
+        response.map_terrain = Some(map_terrain);
+    }
 }
 
 #[derive(Default)]
 pub struct Response {
     pub objects: Objects,
     pub map_items: MapItems,
-    pub map_terrain: MapTerrain,
+    pub map_terrain: Option<MapTerrain>,
 }
 
 #[derive(Default)]

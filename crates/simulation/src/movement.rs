@@ -17,7 +17,6 @@ pub(crate) struct Element {
 pub(crate) struct Output {
     pub positions: Vec<(EntityId, V2)>,
     pub spatial_map: SpatialMap,
-    pub spatial_map_time: Duration,
 }
 
 #[derive(Default)]
@@ -52,6 +51,7 @@ pub(crate) fn tick_movement<G: MovementGraph>(
     const SPEED_MULT: f32 = 0.03;
     const BUCKET_SIZE: usize = 8;
 
+    let _span = tracing::info_span!("Movement").entered();
     let next_positions: Vec<_> = elements
         .iter()
         .map(|element| {
@@ -104,12 +104,11 @@ pub(crate) fn tick_movement<G: MovementGraph>(
         })
         .collect();
 
-    let (spatial_map, spatial_map_time) = {
+    let spatial_map = {
+        let _span = tracing::info_span!("Spatial Map").entered();
         let (w, h) = graph.size();
-        let start = Instant::now();
         let map = SpatialMap::new(&next_positions, w, h, BUCKET_SIZE);
-        let time = Instant::now() - start;
-        (map, time)
+        map
     };
 
     assert!(elements.len() == next_positions.len());
@@ -117,7 +116,6 @@ pub(crate) fn tick_movement<G: MovementGraph>(
     Output {
         positions: next_positions,
         spatial_map,
-        spatial_map_time,
     }
 }
 

@@ -19,10 +19,12 @@ impl SimulationActor {
         let (response_tx, response_rx) = std::sync::mpsc::channel();
 
         std::thread::spawn(move || {
+            tracing_tracy::client::set_thread_name!("Simulation Thread");
             // Simulation-side loop
             let mut sim = Simulation::default();
             let mut arena = Bump::new();
             loop {
+                let _span = tracing::info_span!("Main Actor").entered();
                 arena.reset();
 
                 let req = match request_rx.recv() {

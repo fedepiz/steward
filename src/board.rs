@@ -268,13 +268,15 @@ impl Board {
     }
 
     /// Draws all pawns to the internal render target.
-    pub fn draw(&mut self, terrain: &MapTerrain) {
+    pub fn draw(&mut self, terrain: Option<&MapTerrain>) {
         self.camera.render_target = Some(self.render_target.clone());
         mq::set_camera(&self.camera);
         mq::clear_background(mq::LIGHTGRAY);
 
         {
-            self.prepare_terrain_texture(terrain);
+            if let Some(terrain) = terrain {
+                self.prepare_terrain_texture(terrain);
+            }
             let tex = &self.terrain_texture.texture;
             if tex.size() != mq::Vec2::ZERO {
                 mq::draw_texture_ex(

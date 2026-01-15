@@ -5,7 +5,6 @@ mod init;
 mod movement;
 mod names;
 pub mod objects;
-mod performance_counters;
 mod simulation;
 mod terrain_map;
 

@@ -24,8 +24,14 @@ pathfinding = "*"
 rand = { version = "0.8", features = ["small_rng"] }
 slotmap = "1"
 string-interner = "0.19"
+
+tracing = "*"
+tracing-subscriber = "*"
+tracing-tracy = "*"
+
 simulation = { path = "crates/simulation" }
 util = { path = "crates/util" }
+
 
 
 [dependencies]
@@ -34,6 +40,11 @@ macroquad = { workspace = true }
 egui-macroquad = { workspace = true }
 egui = { workspace = true }
 slotmap = { workspace = true }
+
+tracing = {workspace = true}
+tracing-subscriber = { workspace = true }
+tracing-tracy = { workspace = true }
+
 simulation = { workspace = true }
 util = { workspace = true }
 
