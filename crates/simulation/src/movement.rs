@@ -1,3 +1,5 @@
+use std::time::{Duration, Instant};
+
 use crate::{entities::EntityId, geom::V2};
 use fast_voxel_traversal::raycast_2d as fvt;
 use slotmap::SecondaryMap;
@@ -15,6 +17,7 @@ pub(crate) struct Element {
 pub(crate) struct Output {
     pub positions: Vec<(EntityId, V2)>,
     pub spatial_map: SpatialMap,
+    pub spatial_map_time: Duration,
 }
 
 #[derive(Default)]
@@ -47,7 +50,7 @@ pub(crate) fn tick_movement<G: MovementGraph>(
     graph: &G,
 ) -> Output {
     const SPEED_MULT: f32 = 0.03;
-    const BUCKET_SIZE: usize = 32;
+    const BUCKET_SIZE: usize = 8;
 
     let next_positions: Vec<_> = elements
         .iter()
@@ -101,9 +104,12 @@ pub(crate) fn tick_movement<G: MovementGraph>(
         })
         .collect();
 
-    let spatial_map = {
+    let (spatial_map, spatial_map_time) = {
         let (w, h) = graph.size();
-        SpatialMap::new(&next_positions, w, h, BUCKET_SIZE)
+        let start = Instant::now();
+        let map = SpatialMap::new(&next_positions, w, h, BUCKET_SIZE);
+        let time = Instant::now() - start;
+        (map, time)
     };
 
     assert!(elements.len() == next_positions.len());
@@ -111,6 +117,7 @@ pub(crate) fn tick_movement<G: MovementGraph>(
     Output {
         positions: next_positions,
         spatial_map,
+        spatial_map_time,
     }
 }
 
@@ -336,7 +343,7 @@ impl SpatialMap {
         }
     }
 
-    pub fn search(&self, pos: V2, range: f32) -> impl Iterator<Item = SpatialMapEntry> {
+    pub fn search(&self, pos: V2, range: f32) -> impl Iterator<Item = EntityId> {
         // Determine the range of buckets to check
         let bucket_range = (range / self.bucket_size as f32).ceil() as isize;
 
@@ -358,7 +365,7 @@ impl SpatialMap {
                 let bucket_idx = (bx + by * num_buckets_x as isize) as usize;
 
                 // For each bucket, iterate over the (entity ID, pos) tuples and map them to SpatialItems
-                self.sort.get(bucket_idx).iter().copied()
+                self.sort.get(bucket_idx).iter().map(|entry| entry.id)
             })
         })
     }
@@ -423,7 +430,7 @@ mod spatial_map_tests {
 
         let expected_ids = [entities[0].0, entities[1].0];
         for item in &results {
-            assert!(expected_ids.contains(&item.id));
+            assert!(expected_ids.contains(&item));
         }
     }
 
@@ -441,7 +448,7 @@ mod spatial_map_tests {
 
         let expected_ids = [entities[0].0, entities[1].0, entities[2].0];
         for item in &results {
-            assert!(expected_ids.contains(&item.id));
+            assert!(expected_ids.contains(&item));
         }
     }
 
@@ -458,7 +465,7 @@ mod spatial_map_tests {
         assert_eq!(results.len(), 2);
         let expected_ids = [entities[0].0, entities[1].0];
         for item in &results {
-            assert!(expected_ids.contains(&item.id));
+            assert!(expected_ids.contains(&item));
         }
     }
 

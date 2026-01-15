@@ -9,7 +9,7 @@ pub(crate) fn init(sim: &mut Simulation, req: InitRequest) {
         let person = sim.entities.add_type();
         person.tag = "person";
         person.name = Name::simple(sim.names.define("Person"));
-        person.size = V2::splat(1.0);
+        person.size = 1.0;
     }
 
     let descs = [
@@ -28,6 +28,7 @@ pub(crate) fn init(sim: &mut Simulation, req: InitRequest) {
         entity.is_player = is_player;
 
         entity.name = if is_player { player_name } else { typ.name };
+        entity.speed = if is_player { 10. } else { 1. };
         entity.body.pos = pos;
     }
 }

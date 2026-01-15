@@ -92,7 +92,7 @@ pub(crate) struct EntityType {
     pub id: EntityTypeId,
     pub tag: &'static str,
     pub name: Name,
-    pub size: V2,
+    pub size: f32,
 }
 
 #[derive(Default, Clone, Copy)]
@@ -101,6 +101,7 @@ pub(crate) struct Entity {
     pub name: Name,
     pub type_id: EntityTypeId,
     pub body: Body,
+    pub speed: f32,
     pub movement_target: MovementTarget,
     pub is_player: bool,
 }
@@ -121,5 +122,5 @@ impl Default for MovementTarget {
 #[derive(Clone, Copy, Default)]
 pub(crate) struct Body {
     pub pos: V2,
-    pub size: V2,
+    pub size: f32,
 }

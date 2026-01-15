@@ -1,13 +1,18 @@
 use bumpalo::Bump;
 use slotmap::{Key, KeyData};
-use util::string_pool::{SpanHandle, StringPool};
+use util::{
+    new_segment_id,
+    segments::Segments,
+    string_pool::{SpanHandle, StringPool},
+};
 
 use crate::{
     entities::{Body, Entities, EntityId, MovementTarget},
     geom::V2,
-    movement,
+    movement::{self, SpatialMap},
     names::Names,
     objects::{Objects, ObjectsBuilder},
+    performance_counters::*,
     terrain_map::TerrainMap,
 };
 
@@ -31,6 +36,8 @@ fn tick(sim: &mut Simulation, mut request: Request) -> Response {
         *sim = Simulation::default();
         crate::init::init(sim, req);
     }
+
+    let mut perf_counts = PerformanceCounts::default();
 
     let advance_time = request.advance_time;
 
@@ -73,7 +80,7 @@ fn tick(sim: &mut Simulation, mut request: Request) -> Response {
 
             movement_elements.push(movement::Element {
                 id: entity.id,
-                speed: 1.,
+                speed: entity.speed,
                 pos: entity.body.pos,
                 destination,
             });
@@ -86,19 +93,34 @@ fn tick(sim: &mut Simulation, mut request: Request) -> Response {
             &sim.terrain_map,
         );
 
+        // Collision & detection check
+        let spatial_map = &movement_result.spatial_map;
+        perf_counts.add_time(PerfTime::BuildSpatialMap, movement_result.spatial_map_time);
+
+        let collisions = collisions(&sim.entities, spatial_map);
+        perf_counts.add_count(
+            PerfCounter::DistanceCalcsInCollisionCheck,
+            collisions.distance_count,
+        );
+
         // Iterate writeback
-        for ((id, pos), entity) in movement_result
-            .positions
-            .into_iter()
-            .zip(sim.entities.iter_mut())
         {
-            assert!(id == entity.id);
-            entity.body.pos = pos;
+            let mut positions = movement_result.positions.into_iter();
+
+            for entity in sim.entities.iter_mut() {
+                let (id, pos) = positions.next().unwrap();
+                assert!(id == entity.id);
+                entity.body.pos = pos;
+            }
         }
     }
 
     let mut response = Response::default();
     view(sim, &request, &mut response);
+
+    if sim.turn_num % 50 == 0 {
+        perf_counts.print(sim.turn_num);
+    }
 
     response
 }
@@ -148,6 +170,48 @@ impl Request {
         let key = self.strings.push_str(key);
         self.view_entities.push(ViewEntity { tag: key, entity });
     }
+}
+
+new_segment_id! { pub(crate) struct CollisionId; }
+
+#[derive(Default)]
+struct Collisions {
+    distance_count: usize,
+    map: CollisionMap,
+    by_entity: Vec<(EntityId, CollisionId)>,
+}
+
+type CollisionMap = Segments<CollisionId, EntityId>;
+
+fn collisions(entities: &Entities, spatial_map: &SpatialMap) -> Collisions {
+    let mut out = Collisions::default();
+    out.by_entity.reserve_exact(entities.len());
+
+    let mut scratch = Vec::with_capacity(100);
+    for entity in entities.iter() {
+        let detection_range = 1.;
+        let neighbours = spatial_map.search(entity.body.pos, detection_range);
+        for target in neighbours {
+            // Do not look at yourself, skip "disembodied" entities
+            if target == entity.id {
+                continue;
+            }
+            let target = &entities[target];
+            let distance = V2::distance(entity.body.pos, target.body.pos);
+            out.distance_count += 1;
+            let range = (entity.body.size + target.body.size) / 2.;
+
+            // Non-colliding
+            if distance > range {
+                continue;
+            }
+
+            scratch.push(target.id);
+        }
+        let collision_id = out.map.push(scratch.drain(..));
+        out.by_entity.push((entity.id, collision_id));
+    }
+    out
 }
 
 #[derive(Clone, Copy)]
@@ -237,8 +301,8 @@ impl MapItems {
             image: data.image,
             x: data.body.pos.x,
             y: data.body.pos.y,
-            width: data.body.size.x,
-            height: data.body.size.y,
+            width: data.body.size,
+            height: data.body.size,
         }
     }
 

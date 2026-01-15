@@ -1,5 +1,6 @@
 use crate::span::Span;
 
+#[derive(Default)]
 pub struct BucketSort<T> {
     entries: Vec<T>,
     offsets: Vec<usize>,
