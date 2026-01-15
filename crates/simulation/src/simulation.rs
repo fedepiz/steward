@@ -3,7 +3,7 @@ use slotmap::{Key, KeyData};
 use util::string_pool::{SpanHandle, StringPool};
 
 use crate::{
-    entities::{Body, Entities, EntityId},
+    entities::{Body, Entities, EntityId, MovementTarget},
     geom::V2,
     movement,
     names::Names,
@@ -42,23 +42,22 @@ fn tick(sim: &mut Simulation, mut request: Request) -> Response {
 
             // From move pos
             if let Some((x, y)) = request.move_to_pos {
-                move_to = Some(V2::new(x, y));
+                move_to = Some(MovementTarget::FixedPos(V2::new(x, y)));
             }
 
             // From move to target
             if let Some(item_id) = request.move_to_item {
                 let id = EntityId::from(KeyData::from_ffi(item_id.0));
-                let entity = &sim.entities[id];
-                move_to = Some(entity.body.pos);
+                move_to = Some(MovementTarget::Follow(id));
             }
             move_to
         };
 
         for entity in sim.entities.iter_mut() {
-            entity.destination = if entity.is_player {
-                move_to_command.unwrap_or(entity.destination)
+            entity.movement_target = if entity.is_player {
+                move_to_command.unwrap_or(entity.movement_target)
             } else {
-                V2::new(500., 500.)
+                MovementTarget::FixedPos(V2::new(500., 500.))
             }
         }
 
@@ -66,11 +65,17 @@ fn tick(sim: &mut Simulation, mut request: Request) -> Response {
 
         // Extract data from entities in linear pass
         for entity in sim.entities.iter() {
+            let destination = match entity.movement_target {
+                MovementTarget::Immobile => entity.body.pos,
+                MovementTarget::FixedPos(pos) => pos,
+                MovementTarget::Follow(id) => sim.entities[id].body.pos,
+            };
+
             movement_elements.push(movement::Element {
                 id: entity.id,
                 speed: 1.,
                 pos: entity.body.pos,
-                destination: entity.destination,
+                destination,
             });
         }
 
@@ -117,6 +122,7 @@ pub struct Request {
     pub advance_time: bool,
     pub move_to_pos: Option<(f32, f32)>,
     pub move_to_item: Option<MapItemId>,
+    pub higlighted_item: Option<MapItemId>,
     strings: StringPool,
     view_entities: Vec<ViewEntity>,
 }
@@ -172,17 +178,33 @@ fn view(sim: &Simulation, req: &Request, response: &mut Response) {
 
     response.objects = ctx.build();
 
-    let map_items = &mut response.map_items;
-    for entity in sim.entities.iter() {
-        // TODO: Filter here for being in view
-        let typ = sim.entities.get_type(entity.type_id);
+    {
+        let ctx = &mut response.map_items;
+        let highlighted_entity = req
+            .higlighted_item
+            .map(|id| id.as_entity())
+            .unwrap_or_default();
 
-        map_items.entries.push(MapItemData {
-            id: entity.id.data().as_ffi(),
-            name: Default::default(),
-            image: typ.tag,
-            body: entity.body,
-        });
+        for entity in sim.entities.iter() {
+            // TODO: Filter here for being in view
+            let typ = sim.entities.get_type(entity.type_id);
+
+            let is_highlighted = highlighted_entity == entity.id;
+
+            let name = if is_highlighted {
+                let name = sim.names.resolve(entity.name);
+                ctx.names.push(name)
+            } else {
+                Default::default()
+            };
+
+            ctx.entries.push(MapItemData {
+                id: entity.id.data().as_ffi(),
+                name,
+                image: typ.tag,
+                body: entity.body,
+            });
+        }
     }
 
     response.map_terrain.hash = sim.terrain_map.hash();
@@ -232,6 +254,12 @@ impl MapItems {
 
 #[derive(Default, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub struct MapItemId(pub u64);
+
+impl MapItemId {
+    pub(crate) fn as_entity(self) -> EntityId {
+        EntityId::from(KeyData::from_ffi(self.0))
+    }
+}
 
 #[derive(Default, Clone, Copy)]
 struct MapItemData {

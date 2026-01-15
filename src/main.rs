@@ -155,6 +155,8 @@ async fn amain() {
 
         request.advance_time = !is_paused && !reload && !sim_actor.has_critical_error();
 
+        request.higlighted_item = selected_item;
+
         if let Some(id) = selected_item {
             request.view_map_item("selected_item", id)
         }
@@ -208,9 +210,10 @@ async fn amain() {
 
             let world_pos = board.coords_of(mouse_pos);
             if mq::is_mouse_button_pressed(mq::MouseButton::Right) {
-                match hovered_pawn {
-                    Some(pawn) => actions.move_to_item = hoevered_item,
-                    None => actions.move_to_pos = Some(world_pos),
+                if hovered_pawn.is_some() {
+                    actions.move_to_item = hoevered_item;
+                } else {
+                    actions.move_to_pos = Some(world_pos);
                 }
             }
         }

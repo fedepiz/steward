@@ -101,8 +101,21 @@ pub(crate) struct Entity {
     pub name: Name,
     pub type_id: EntityTypeId,
     pub body: Body,
-    pub destination: V2,
+    pub movement_target: MovementTarget,
     pub is_player: bool,
+}
+
+#[derive(Clone, Copy, PartialEq, PartialOrd)]
+pub(crate) enum MovementTarget {
+    Immobile,
+    FixedPos(V2),
+    Follow(EntityId),
+}
+
+impl Default for MovementTarget {
+    fn default() -> Self {
+        Self::Immobile
+    }
 }
 
 #[derive(Clone, Copy, Default)]
