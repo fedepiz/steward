@@ -6,7 +6,7 @@ pub(crate) fn init(sim: &mut Simulation, req: InitRequest) {
     sim.terrain_map = terrain_map::init(&req.elevations, req.map_width, req.map_height);
 
     {
-        let person = sim.entities.add_type();
+        let person = sim.parties.add_type();
         person.tag = "person";
         person.name = Name::simple(sim.names.define("Person"));
         person.size = 1.0;
@@ -22,8 +22,8 @@ pub(crate) fn init(sim: &mut Simulation, req: InitRequest) {
     let player_name = Name::simple(sim.names.define("Player"));
 
     for (idx, pos) in descs.into_iter().enumerate() {
-        let typ = sim.entities.find_type_by_tag("person").unwrap();
-        let entity = sim.entities.spawn_with_type(typ.id);
+        let typ = sim.parties.find_type_by_tag("person").unwrap();
+        let entity = sim.parties.spawn_with_type(typ.id);
         let is_player = idx == 0;
         entity.is_player = is_player;
 

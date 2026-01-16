@@ -1,6 +1,4 @@
-use std::time::{Duration, Instant};
-
-use crate::{entities::EntityId, geom::V2};
+use crate::{geom::V2, parties::PartyId};
 use fast_voxel_traversal::raycast_2d as fvt;
 use slotmap::SecondaryMap;
 
@@ -8,20 +6,20 @@ use util::bucket_sort::BucketSort;
 
 #[derive(Clone, Copy)]
 pub(crate) struct Element {
-    pub id: EntityId,
+    pub id: PartyId,
     pub speed: f32,
     pub pos: V2,
     pub destination: V2,
 }
 
 pub(crate) struct Output {
-    pub positions: Vec<(EntityId, V2)>,
+    pub positions: Vec<(PartyId, V2)>,
     pub spatial_map: SpatialMap,
 }
 
 #[derive(Default)]
 pub(crate) struct MovementCache {
-    paths: SecondaryMap<EntityId, MovementPath>,
+    paths: SecondaryMap<PartyId, MovementPath>,
 }
 
 pub(crate) trait MovementGraph {
@@ -314,7 +312,7 @@ impl SpatialMap {
         (num_buckets_x, num_buckets_y)
     }
 
-    fn new(entities: &[(EntityId, V2)], width: usize, height: usize, bucket_size: usize) -> Self {
+    fn new(entities: &[(PartyId, V2)], width: usize, height: usize, bucket_size: usize) -> Self {
         let (num_buckets_x, num_buckets_y) =
             Self::calculate_bucket_counts(width, height, bucket_size);
         let num_buckets = { num_buckets_x * num_buckets_y };
@@ -341,7 +339,7 @@ impl SpatialMap {
         }
     }
 
-    pub fn search(&self, pos: V2, range: f32) -> impl Iterator<Item = EntityId> {
+    pub fn search(&self, pos: V2, range: f32) -> impl Iterator<Item = PartyId> {
         // Determine the range of buckets to check
         let bucket_range = (range / self.bucket_size as f32).ceil() as isize;
 
@@ -371,7 +369,7 @@ impl SpatialMap {
 
 #[derive(Default, PartialEq, Debug, Clone, Copy)]
 pub(crate) struct SpatialMapEntry {
-    pub id: EntityId,
+    pub id: PartyId,
     pub pos: V2,
 }
 
@@ -380,7 +378,7 @@ mod spatial_map_tests {
     use super::*;
     use slotmap::SlotMap;
 
-    fn setup_entities() -> Vec<(EntityId, V2)> {
+    fn setup_entities() -> Vec<(PartyId, V2)> {
         let mut sm = SlotMap::with_key();
         vec![
             (sm.insert(()), V2::new(10.0, 10.0)), // bucket (1,1)

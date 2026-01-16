@@ -1,13 +1,14 @@
 use bumpalo::Bump;
 use slotmap::{Key, KeyData};
-use util::string_pool::{SpanHandle, StringPool};
+use util::string_pool::*;
 
 use crate::{
-    entities::{Body, Detection, Detections, Entities, EntityId, MovementTarget},
+    agents::Agents,
     geom::V2,
     movement::{self, SpatialMap},
     names::Names,
     objects::{Objects, ObjectsBuilder},
+    parties::*,
     terrain_map::TerrainMap,
 };
 
@@ -16,8 +17,9 @@ pub(crate) struct Simulation {
     pub turn_num: usize,
     pub terrain_map: TerrainMap,
     pub names: Names,
-    pub entities: Entities,
+    pub parties: Parties,
     movement_cache: movement::MovementCache,
+    pub agents: Agents,
 }
 
 impl Simulation {
@@ -44,12 +46,12 @@ fn tick(sim: &mut Simulation, mut request: Request) -> Response {
 
         // From move to target
         if let Some(item_id) = request.move_to_item.take() {
-            let id = EntityId::from(KeyData::from_ffi(item_id.0));
+            let id = PartyId::from(KeyData::from_ffi(item_id.0));
             command = Some(MovementTarget::Follow(id));
         }
 
         // Update entity positions
-        for entity in sim.entities.iter_mut() {
+        for entity in sim.parties.iter_mut() {
             entity.movement_target = if entity.is_player {
                 command.unwrap_or(entity.movement_target)
             } else {
@@ -61,14 +63,14 @@ fn tick(sim: &mut Simulation, mut request: Request) -> Response {
     if request.advance_time {
         sim.turn_num = sim.turn_num.wrapping_add(1);
 
-        let mut movement_elements = Vec::with_capacity(sim.entities.len());
+        let mut movement_elements = Vec::with_capacity(sim.parties.len());
 
         // Extract data from entities in linear pass
-        for entity in sim.entities.iter() {
+        for entity in sim.parties.iter() {
             let destination = match entity.movement_target {
                 MovementTarget::Immobile => entity.body.pos,
                 MovementTarget::FixedPos(pos) => pos,
-                MovementTarget::Follow(id) => sim.entities[id].body.pos,
+                MovementTarget::Follow(id) => sim.parties[id].body.pos,
             };
 
             movement_elements.push(movement::Element {
@@ -89,16 +91,16 @@ fn tick(sim: &mut Simulation, mut request: Request) -> Response {
         // Detection check
         {
             let spatial_map = &movement_result.spatial_map;
-            let mut detections = std::mem::take(&mut sim.entities.detections);
-            self::detections(&mut detections, &sim.entities, spatial_map);
-            sim.entities.detections = detections;
+            let mut detections = std::mem::take(&mut sim.parties.detections);
+            self::detections(&mut detections, &sim.parties, spatial_map);
+            sim.parties.detections = detections;
         }
 
         // Iterate writeback
         {
             let mut positions = movement_result.positions.into_iter();
 
-            for entity in sim.entities.iter_mut() {
+            for entity in sim.parties.iter_mut() {
                 let (id, pos) = positions.next().unwrap();
                 assert!(id == entity.id);
                 entity.body.pos = pos;
@@ -149,17 +151,17 @@ impl Request {
     }
 
     pub fn view_map_item(&mut self, key: &str, id: MapItemId) {
-        let entity = EntityId::from(KeyData::from_ffi(id.0));
+        let entity = PartyId::from(KeyData::from_ffi(id.0));
         self.view_entity(key, entity);
     }
 
-    fn view_entity(&mut self, key: &str, entity: EntityId) {
+    fn view_entity(&mut self, key: &str, entity: PartyId) {
         let key = self.strings.push_str(key);
         self.view_entities.push(ViewEntity { tag: key, entity });
     }
 }
 
-fn detections(detections: &mut Detections, entities: &Entities, spatial_map: &SpatialMap) {
+fn detections(detections: &mut Detections, entities: &Parties, spatial_map: &SpatialMap) {
     detections.clear();
 
     let mut scratch = Vec::with_capacity(100);
@@ -192,7 +194,7 @@ fn detections(detections: &mut Detections, entities: &Entities, spatial_map: &Sp
 #[derive(Clone, Copy)]
 struct ViewEntity {
     tag: SpanHandle,
-    entity: EntityId,
+    entity: PartyId,
 }
 
 fn view(sim: &Simulation, req: &Request, response: &mut Response) {
@@ -211,7 +213,7 @@ fn view(sim: &Simulation, req: &Request, response: &mut Response) {
 
         // Create requested objects
         for view_entity in &req.view_entities {
-            let entity = &sim.entities[view_entity.entity];
+            let entity = &sim.parties[view_entity.entity];
             ctx.spawn(|ctx| {
                 let tag = req.strings.get(view_entity.tag);
                 ctx.tag(tag);
@@ -230,9 +232,9 @@ fn view(sim: &Simulation, req: &Request, response: &mut Response) {
             .map(|id| id.as_entity())
             .unwrap_or_default();
 
-        for entity in sim.entities.iter() {
+        for entity in sim.parties.iter() {
             // TODO: Filter here for being in view
-            let typ = sim.entities.get_type(entity.type_id);
+            let typ = sim.parties.get_type(entity.type_id);
 
             let is_highlighted = highlighted_entity == entity.id;
 
@@ -306,8 +308,8 @@ impl MapItems {
 pub struct MapItemId(pub u64);
 
 impl MapItemId {
-    pub(crate) fn as_entity(self) -> EntityId {
-        EntityId::from(KeyData::from_ffi(self.0))
+    pub(crate) fn as_entity(self) -> PartyId {
+        PartyId::from(KeyData::from_ffi(self.0))
     }
 }
 
