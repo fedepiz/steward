@@ -179,25 +179,7 @@ async fn amain() {
         let mut ui_wants_pointer = false;
         let mut ui_wants_keyboard = false;
         egui_macroquad::ui(|ctx| {
-            let objs = &response.objects;
-            egui::TopBottomPanel::top("top_panel").show(ctx, |ui| {
-                ui.horizontal_centered(|ui| {
-                    if let Some(root) = objs.lookup_by_tag("root") {
-                        ui.label(objs.str(root, "tick_num"));
-                    }
-                });
-            });
-            if let Some(root) = response.objects.lookup_by_tag("selected_item") {
-                egui::Window::new("Selected Item").show(ctx, |ui| {
-                    egui::Grid::new("overview-grid")
-                        .striped(true)
-                        .show(ui, |ui| {
-                            ui.label("Name");
-                            ui.label(objs.str(root, "name"));
-                        })
-                });
-            }
-
+            gui(ctx, response);
             ui_wants_pointer = ctx.wants_pointer_input();
             ui_wants_keyboard = ctx.wants_keyboard_input();
         });
@@ -298,4 +280,25 @@ fn draw_billboard_text(text: &str, color: mq::Color, font: &mq::Font) {
             ..Default::default()
         },
     );
+}
+
+fn gui(ctx: &egui::Context, response: &simulation::Response) {
+    let objs = &response.objects;
+    egui::TopBottomPanel::top("top_panel").show(ctx, |ui| {
+        ui.horizontal_centered(|ui| {
+            if let Some(root) = objs.lookup_by_tag("root") {
+                ui.label(objs.str(root, "tick_num"));
+            }
+        });
+    });
+    if let Some(root) = response.objects.lookup_by_tag("selected_item") {
+        egui::Window::new("Selected Item").show(ctx, |ui| {
+            egui::Grid::new("overview-grid")
+                .striped(true)
+                .show(ui, |ui| {
+                    ui.label("Name");
+                    ui.label(objs.str(root, "name"));
+                })
+        });
+    }
 }

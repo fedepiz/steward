@@ -14,9 +14,9 @@ use crate::{
 #[derive(Default)]
 pub(crate) struct Simulation {
     pub turn_num: usize,
+    pub terrain_map: TerrainMap,
     pub names: Names,
     pub entities: Entities,
-    pub terrain_map: TerrainMap,
     movement_cache: movement::MovementCache,
 }
 
@@ -33,34 +33,33 @@ fn tick(sim: &mut Simulation, mut request: Request) -> Response {
         crate::init::init(sim, req);
     }
 
-    let advance_time = request.advance_time;
+    // Input handling
+    {
+        let mut command = None;
 
-    if advance_time {
-        sim.turn_num = sim.turn_num.wrapping_add(1);
+        // From move pos
+        if let Some((x, y)) = request.move_to_pos.take() {
+            command = Some(MovementTarget::FixedPos(V2::new(x, y)));
+        }
 
-        let move_to_command = {
-            let mut move_to = None;
+        // From move to target
+        if let Some(item_id) = request.move_to_item.take() {
+            let id = EntityId::from(KeyData::from_ffi(item_id.0));
+            command = Some(MovementTarget::Follow(id));
+        }
 
-            // From move pos
-            if let Some((x, y)) = request.move_to_pos {
-                move_to = Some(MovementTarget::FixedPos(V2::new(x, y)));
-            }
-
-            // From move to target
-            if let Some(item_id) = request.move_to_item {
-                let id = EntityId::from(KeyData::from_ffi(item_id.0));
-                move_to = Some(MovementTarget::Follow(id));
-            }
-            move_to
-        };
-
+        // Update entity positions
         for entity in sim.entities.iter_mut() {
             entity.movement_target = if entity.is_player {
-                move_to_command.unwrap_or(entity.movement_target)
+                command.unwrap_or(entity.movement_target)
             } else {
                 MovementTarget::FixedPos(V2::new(500., 500.))
             }
         }
+    }
+
+    if request.advance_time {
+        sim.turn_num = sim.turn_num.wrapping_add(1);
 
         let mut movement_elements = Vec::with_capacity(sim.entities.len());
 
@@ -109,7 +108,6 @@ fn tick(sim: &mut Simulation, mut request: Request) -> Response {
 
     let mut response = Response::default();
     view(sim, &request, &mut response);
-
     response
 }
 
