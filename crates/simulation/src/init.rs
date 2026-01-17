@@ -1,3 +1,6 @@
+use strum::IntoEnumIterator;
+
+use crate::agents::{AgentType, PersonVar};
 use crate::names::Name;
 use crate::simulation::*;
 use crate::{geom::*, terrain_map};

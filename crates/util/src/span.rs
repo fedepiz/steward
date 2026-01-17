@@ -11,7 +11,20 @@ impl Span {
         &x[base..][..length]
     }
 
-    pub fn between(start: usize, end: usize) -> Span {
+    pub fn view_mut<T>(self, x: &mut [T]) -> &mut [T] {
+        let base = self.base.min(x.len());
+        let length = self.length.min(x.len() - base);
+        &mut x[base..][..length]
+    }
+
+    pub fn fill_with_copy<T: Copy>(self, x: &mut [T], value: T) {
+        let x = self.view_mut(x);
+        for item in x {
+            *item = value;
+        }
+    }
+
+    pub const fn between(start: usize, end: usize) -> Span {
         Span {
             base: start,
             length: end.saturating_sub(start),
@@ -36,5 +49,9 @@ impl Span {
             .find(|(_, val)| f(val))
             .map(|(id, _)| id)?;
         Some(self.base + idx)
+    }
+
+    pub const fn is_empty(&self) -> bool {
+        self.base == 0 && self.length == 0
     }
 }
