@@ -1,3 +1,4 @@
+pub mod bitset;
 pub mod bucket_sort;
 pub mod segments;
 pub mod span;

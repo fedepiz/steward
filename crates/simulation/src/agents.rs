@@ -3,7 +3,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use crate::{names::Name, parties::PartyId};
 use slotmap::*;
 use strum::*;
-use util::span::Span;
+use util::{bitset::BitSet, span::Span};
 
 new_key_type! { pub struct AgentId; }
 
@@ -14,6 +14,12 @@ pub(crate) enum Var {
     /// Settlement
     Population,
     Prosperity,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, EnumCount, EnumIter)]
+pub(crate) enum Set {
+    IsPerson,
+    IsSettlement,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, EnumCount, EnumIter)]
@@ -33,6 +39,7 @@ pub(crate) struct Agents {
     var_storage: VarStorage,
     hierarchies: [HierarchyData; Hierarchy::COUNT],
     relationships: [RelationshipData; Relationship::COUNT],
+    sets: [BTreeSet<AgentId>; Set::COUNT],
 }
 
 impl Agents {
@@ -59,6 +66,10 @@ impl Agents {
 
         // Add var packs to free lists
         self.var_storage.free(entity.vars);
+
+        for set_idx in entity.sets.iter() {
+            self.sets[set_idx].remove(&entity.id);
+        }
 
         for hierarchy in &mut self.hierarchies {
             hierarchy.remove_agent(id);
@@ -97,6 +108,22 @@ impl Agents {
             .map(|agent| agent.vars.view_mut(self.var_storage.inner_mut()))
             .unwrap_or_default();
         VarsMut(slice)
+    }
+
+    pub fn add_to_set(&mut self, set: Set, agent: AgentId) -> bool {
+        let idx = set as usize;
+        self.entries[agent].sets.set(idx, true);
+        self.sets[idx].insert(agent)
+    }
+
+    pub fn remove_from_set(&mut self, set: Set, agent: AgentId) -> bool {
+        let idx = set as usize;
+        self.entries[agent].sets.set(idx, false);
+        self.sets[idx].remove(&agent)
+    }
+
+    pub fn iter_set(&self, set: Set) -> impl Iterator<Item = AgentId> + use<'_> {
+        self.sets[set as usize].iter().copied()
     }
 
     pub fn set_parent(&mut self, hierarchy: Hierarchy, parent: AgentId, child: AgentId) {
@@ -182,12 +209,21 @@ impl std::ops::IndexMut<AgentId> for Agents {
     }
 }
 
+const SET_BITSET_SIZE: usize = (Set::COUNT + 63) / 64;
+
 #[derive(Default, Clone, Copy)]
 pub(crate) struct Agent {
     pub id: AgentId,
     pub name: Name,
     pub party: PartyId,
     vars: Span,
+    sets: BitSet<SET_BITSET_SIZE>,
+}
+
+impl Agent {
+    pub(crate) fn in_set(&self, flag: Set) -> bool {
+        self.sets.get(flag as usize)
+    }
 }
 
 #[derive(Clone, Copy, Default)]
@@ -694,6 +730,40 @@ mod tests {
             .relationships_from(Relationship::Placeholder1, from)
             .collect();
         assert_eq!(edges, vec![(b, 1.0), (c, 2.0)]);
+    }
+
+    #[test]
+    fn sets_add_remove_and_iterate() {
+        let mut agents = Agents::default();
+        let a = insert_agent(&mut agents);
+        let b = insert_agent(&mut agents);
+
+        assert!(agents.add_to_set(Set::IsPerson, a));
+        assert!(agents.add_to_set(Set::IsPerson, b));
+        assert!(!agents.add_to_set(Set::IsPerson, a));
+
+        let mut members: Vec<_> = agents.iter_set(Set::IsPerson).collect();
+        members.sort();
+        assert_eq!(members, vec![a, b]);
+
+        assert!(agents.remove_from_set(Set::IsPerson, a));
+        assert!(!agents.remove_from_set(Set::IsPerson, a));
+        let members: Vec<_> = agents.iter_set(Set::IsPerson).collect();
+        assert_eq!(members, vec![b]);
+    }
+
+    #[test]
+    fn sets_despawn_removes_membership() {
+        let mut agents = Agents::default();
+        let a = insert_agent(&mut agents);
+        let b = insert_agent(&mut agents);
+
+        agents.add_to_set(Set::IsSettlement, a);
+        agents.add_to_set(Set::IsSettlement, b);
+
+        agents.despawn(a);
+        let members: Vec<_> = agents.iter_set(Set::IsSettlement).collect();
+        assert_eq!(members, vec![b]);
     }
 
     #[test]
