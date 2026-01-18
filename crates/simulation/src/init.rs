@@ -11,7 +11,7 @@ pub(crate) fn init(sim: &mut Simulation, req: InitRequest) {
         typ.tag = "person";
         typ.image = "pawns/person";
         typ.name = Name::simple(sim.names.define("Person"));
-        typ.size = 1.0;
+        typ.size = 2.0;
         typ.layer = 1;
     }
 
@@ -20,7 +20,16 @@ pub(crate) fn init(sim: &mut Simulation, req: InitRequest) {
         typ.tag = "village";
         typ.image = "pawns/village";
         typ.name = Name::simple(sim.names.define("Village"));
-        typ.size = 2.0;
+        typ.size = 3.0;
+        typ.always_show_name = true;
+    }
+
+    {
+        let typ = sim.parties.add_type();
+        typ.tag = "hillfort";
+        typ.image = "pawns/hillfort";
+        typ.name = Name::simple(sim.names.define("Hillfort"));
+        typ.size = 3.;
         typ.always_show_name = true;
     }
 
@@ -29,7 +38,7 @@ pub(crate) fn init(sim: &mut Simulation, req: InitRequest) {
         typ.tag = "town";
         typ.image = "pawns/town";
         typ.name = Name::simple(sim.names.define("Town"));
-        typ.size = 2.5;
+        typ.size = 4.;
         typ.always_show_name = true;
     }
 
@@ -46,7 +55,7 @@ pub(crate) fn init(sim: &mut Simulation, req: InitRequest) {
 
     let descs = [
         Desc {
-            pos: (580., 520.),
+            pos: (590., 520.),
             party_typ: "person",
             speed: 5.,
             vars: &[(Var::Renown, 10.)],
@@ -84,9 +93,63 @@ pub(crate) fn init(sim: &mut Simulation, req: InitRequest) {
             ..Default::default()
         },
         Desc {
+            name: "Llan Heledd",
+            pos: (580., 520.),
+            party_typ: "village",
+            speed: 0.,
+            vars: &[(Var::Prosperity, 0.5)],
+            sets: &[Set::Settlements],
+            ..Default::default()
+        },
+        Desc {
+            name: "Din Drust",
+            pos: (570., 490.),
+            party_typ: "hillfort",
+            speed: 0.,
+            vars: &[(Var::Prosperity, 0.5)],
+            sets: &[Set::Settlements],
+            ..Default::default()
+        },
+        Desc {
+            name: "Din Reghed",
+            pos: (530., 500.),
+            party_typ: "hillfort",
+            speed: 0.,
+            vars: &[(Var::Prosperity, 0.5)],
+            sets: &[Set::Settlements],
+            ..Default::default()
+        },
+        Desc {
+            name: "Ad Candidam Casam",
+            pos: (530., 520.),
+            party_typ: "village",
+            speed: 0.,
+            vars: &[(Var::Prosperity, 0.5)],
+            sets: &[Set::Settlements],
+            ..Default::default()
+        },
+        Desc {
+            name: "Isura",
+            pos: (560., 500.),
+            party_typ: "village",
+            speed: 0.,
+            vars: &[(Var::Prosperity, 0.5)],
+            sets: &[Set::Settlements],
+            ..Default::default()
+        },
+        Desc {
             name: "Anava",
             pos: (603., 500.),
             party_typ: "village",
+            speed: 0.,
+            vars: &[(Var::Prosperity, 0.5)],
+            sets: &[Set::Settlements],
+            ..Default::default()
+        },
+        Desc {
+            name: "Caer Wenddoleu",
+            pos: (625., 505.),
+            party_typ: "hillfort",
             speed: 0.,
             vars: &[(Var::Prosperity, 0.5)],
             sets: &[Set::Settlements],
