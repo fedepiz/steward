@@ -29,7 +29,7 @@ pub(crate) fn init(sim: &mut Simulation, req: InitRequest) {
         party.is_player = is_player;
 
         party.name = if is_player { player_name } else { typ.name };
-        party.speed = if is_player { 10. } else { 1. };
+        party.speed = if is_player { 5. } else { 1. };
         party.body.pos = pos;
 
         let agent = sim.agents.spawn();

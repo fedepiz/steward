@@ -170,14 +170,14 @@ async fn amain() {
 
     let mut fps_counter = FpsCounter::default();
 
-    const MIN_FRAME_TIME: f32 = 1. / 60.;
+    const MIN_FRAME_TIME_MS: f32 = 1. / 60.;
     // Main game loop
     loop {
         let tracing_span = tracing::info_span!("Main Loop").entered();
 
         // Try to enforce 60fps
         let frame_time = mq::get_frame_time();
-        let time_to_sleep = (((MIN_FRAME_TIME - frame_time) * 1000.).floor().max(0.)) as u64;
+        let time_to_sleep = ((MIN_FRAME_TIME_MS - frame_time * 1000.).floor().max(0.)) as u64;
         if time_to_sleep > 0 {
             let _span = tracing::info_span!("VSYNC WAIT");
             let duration = std::time::Duration::from_millis(time_to_sleep);
