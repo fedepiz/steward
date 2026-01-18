@@ -131,19 +131,13 @@ async fn amain() {
     let mut selected_item = None;
     let mut assets = assets::Assets::start_loading("assets");
 
-    let mut board = {
-        let font =
-            mq::load_ttf_font_from_bytes(include_bytes!("../assets/fonts/board.ttf")).unwrap();
-        board::Board::new(
-            TILE_SIZE,
-            mq::screen_width() as u32,
-            mq::screen_height() as u32,
-            font,
-        )
-    };
+    let mut board = board::Board::new(
+        TILE_SIZE,
+        mq::screen_width() as u32,
+        mq::screen_height() as u32,
+    );
+
     board.move_camera_to(mq::vec2(580., 512.));
-    let billboard_font =
-        mq::load_ttf_font_from_bytes(include_bytes!("../assets/fonts/board.ttf")).unwrap();
 
     let mut arena = bumpalo::Bump::new();
 
@@ -276,29 +270,26 @@ async fn amain() {
         );
         egui_macroquad::draw();
 
-        let (billboard_text, billboard_color) = if sim_actor.has_critical_error() {
-            ("Critical Error", mq::RED)
-        } else if is_paused {
-            ("Paused", mq::WHITE)
-        } else {
-            ("", mq::WHITE)
-        };
+        {
+            let (text, color) = if sim_actor.has_critical_error() {
+                ("Critical Error", mq::RED)
+            } else if is_paused {
+                ("Paused", mq::WHITE)
+            } else {
+                ("", mq::WHITE)
+            };
 
-        if !billboard_text.is_empty() {
-            draw_overlay_text(
-                billboard_text,
-                billboard_color,
-                &billboard_font,
-                100.0,
-                mq::vec2(0.5, 0.25),
-            );
+            let font = assets.get_font("board");
+
+            if !text.is_empty() {
+                draw_overlay_text(text, color, font, 100.0, mq::vec2(0.5, 0.25));
+            }
+
+            if show_fps {
+                let text = format!("{} fps", mq::get_fps());
+                draw_overlay_text(&text, mq::WHITE, font, 24.0, mq::vec2(1.0, 1.0));
+            }
         }
-
-        if show_fps {
-            let text = format!("{} fps", mq::get_fps());
-            draw_overlay_text(&text, mq::WHITE, &billboard_font, 24.0, mq::vec2(1.0, 1.0));
-        }
-
         std::mem::drop(tracing_span);
         mq::next_frame().await;
     }
@@ -307,11 +298,11 @@ async fn amain() {
 fn draw_overlay_text(
     text: &str,
     color: mq::Color,
-    font: &mq::Font,
+    font: Option<&mq::Font>,
     font_size: f32,
     anchor: mq::Vec2,
 ) {
-    let text_dims = mq::measure_text(text, Some(font), font_size as u16, 1.0);
+    let text_dims = mq::measure_text(text, font, font_size as u16, 1.0);
     let max_x = (mq::screen_width() - text_dims.width).max(0.0);
     let max_y = (mq::screen_height() - text_dims.height).max(0.0);
 
@@ -323,7 +314,7 @@ fn draw_overlay_text(
         x,
         y,
         mq::TextParams {
-            font: Some(font),
+            font,
             font_size: font_size as u16,
             color,
             ..Default::default()

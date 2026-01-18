@@ -152,12 +152,11 @@ pub struct Board {
     render_target: mq::RenderTarget,
     pawns: Vec<Pawn>,
     strings: StringPool,
-    font: mq::Font,
     tile_size: f32,
 }
 
 impl Board {
-    pub fn new(tile_size: f32, width: u32, height: u32, font: mq::Font) -> Self {
+    pub fn new(tile_size: f32, width: u32, height: u32) -> Self {
         let render_target = mq::render_target(width, height);
         render_target.texture.set_filter(mq::FilterMode::Linear);
 
@@ -178,7 +177,6 @@ impl Board {
             render_target,
             pawns: Vec::new(),
             strings: StringPool::default(),
-            font,
             tile_size,
         }
     }
@@ -319,7 +317,7 @@ impl Board {
         }
 
         for pawn in &self.pawns {
-            pawn.draw_label(&self.camera, Some(&self.font), &self.strings);
+            pawn.draw_label(&self.camera, assets.get_font("board"), &self.strings);
         }
 
         mq::set_default_camera();
