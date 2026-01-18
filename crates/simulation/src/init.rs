@@ -9,6 +9,7 @@ pub(crate) fn init(sim: &mut Simulation, req: InitRequest) {
     {
         let person = sim.parties.add_type();
         person.tag = "person";
+        person.image = "pawns/person";
         person.name = Name::simple(sim.names.define("Person"));
         person.size = 1.0;
     }

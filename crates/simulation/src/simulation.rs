@@ -251,7 +251,7 @@ fn view(sim: &Simulation, req: &Request, response: &mut Response) {
             ctx.entries.push(MapItemData {
                 id: entity.id.data().as_ffi(),
                 name,
-                image: typ.tag,
+                image: typ.image,
                 body: entity.body,
             });
         }
@@ -327,7 +327,7 @@ struct MapItemData {
 pub struct MapItem<'a> {
     pub id: MapItemId,
     pub name: &'a str,
-    pub image: &'a str,
+    pub image: &'static str,
     pub x: f32,
     pub y: f32,
     pub width: f32,

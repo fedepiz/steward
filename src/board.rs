@@ -2,6 +2,8 @@ use macroquad::prelude as mq;
 use simulation::MapTerrain;
 use util::string_pool::{SpanHandle, StringPool};
 
+use crate::assets::Assets;
+
 /// Stroke style for pawn outlines.
 /// Set thickness to 0 to disable stroke.
 #[derive(Clone, Copy, Default)]
@@ -25,6 +27,7 @@ pub struct PawnDesc<'a> {
     pub fill: mq::Color,
     pub stroke: Stroke,
     pub label: LabelDesc<'a>,
+    pub image: &'static str,
 }
 
 /// Handle to a pawn in the board. Valid only for the current frame.
@@ -42,6 +45,7 @@ struct Label {
 /// Internal pawn storage. All data is Copy.
 #[derive(Clone, Copy, Default)]
 struct Pawn {
+    image: &'static str,
     bounds: mq::Rect,
     fill: mq::Color,
     stroke: Stroke,
@@ -50,7 +54,7 @@ struct Pawn {
 
 impl Pawn {
     /// Draws the pawn's shape (fill and stroke) in world space.
-    fn draw_shape(&self) {
+    fn draw_shape(&self, assets: &Assets) {
         if self.fill.a > 0.0 {
             mq::draw_rectangle(
                 self.bounds.x,
@@ -58,6 +62,19 @@ impl Pawn {
                 self.bounds.w,
                 self.bounds.h,
                 self.fill,
+            );
+        }
+
+        if let Some(texture) = assets.get_texture(self.image) {
+            mq::draw_texture_ex(
+                texture,
+                self.bounds.x,
+                self.bounds.y,
+                mq::WHITE,
+                mq::DrawTextureParams {
+                    dest_size: Some(self.bounds.size()),
+                    ..Default::default()
+                },
             );
         }
 
@@ -206,6 +223,7 @@ impl Board {
         );
 
         let pawn = Pawn {
+            image: desc.image,
             bounds,
             fill: desc.fill,
             stroke: desc.stroke,
@@ -268,7 +286,7 @@ impl Board {
     }
 
     /// Draws all pawns to the internal render target.
-    pub fn draw(&mut self, terrain: Option<&MapTerrain>) {
+    pub fn draw(&mut self, assets: &Assets, terrain: Option<&MapTerrain>) {
         self.camera.render_target = Some(self.render_target.clone());
         mq::set_camera(&self.camera);
         mq::clear_background(mq::LIGHTGRAY);
@@ -297,7 +315,7 @@ impl Board {
         }
 
         for pawn in &self.pawns {
-            pawn.draw_shape();
+            pawn.draw_shape(assets);
         }
 
         for pawn in &self.pawns {

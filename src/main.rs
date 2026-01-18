@@ -1,3 +1,4 @@
+mod assets;
 mod board;
 
 use board::{LabelDesc, PawnDesc, Stroke};
@@ -89,6 +90,7 @@ fn make_pawns<'a, 'b>(
         let is_selected = Some(item.id) == selected;
 
         PawnDesc {
+            image: item.image,
             bounds: mq::Rect::new(item.x, item.y, item.width, item.height),
             fill: mq::RED,
             stroke: Stroke {
@@ -127,6 +129,7 @@ async fn amain() {
     });
 
     let mut selected_item = None;
+    let mut assets = assets::Assets::start_loading("assets");
 
     let mut board = {
         let font =
@@ -159,6 +162,8 @@ async fn amain() {
         let tracing_span = tracing::info_span!("Main Loop").entered();
 
         arena.reset();
+
+        assets.tick();
 
         let mut request = simulation::Request::new();
         std::mem::take(&mut actions).apply(&mut request);
@@ -254,7 +259,7 @@ async fn amain() {
         }
 
         // Render board to its texture
-        board.draw(response.map_terrain.as_ref());
+        board.draw(&assets, response.map_terrain.as_ref());
 
         // Draw board texture to screen
         mq::clear_background(mq::BLACK);

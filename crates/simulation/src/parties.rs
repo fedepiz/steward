@@ -127,6 +127,7 @@ impl std::ops::IndexMut<PartyTypeId> for Parties {
 pub(crate) struct PartyType {
     pub id: PartyTypeId,
     pub tag: &'static str,
+    pub image: &'static str,
     pub name: Name,
     pub size: f32,
 }
