@@ -6,8 +6,6 @@ pub struct SimulationActor {
     // Communication channels
     sender: std::sync::mpsc::Sender<Request>,
     receiver: std::sync::mpsc::Receiver<Response>,
-    // Is stale? Ie, are we ticking without having sent back a response? For how many ticks?
-    stale_ticks: usize,
     // "Cached" response
     response: Response,
     has_crashed: bool,
@@ -46,7 +44,6 @@ impl SimulationActor {
         SimulationActor {
             sender: request_tx,
             receiver: response_rx,
-            stale_ticks: 0,
             response: Response::default(),
             has_crashed: false,
         }
@@ -57,23 +54,16 @@ impl SimulationActor {
     }
 
     pub fn tick(&mut self, request: Request) -> &Response {
+        self.has_crashed |= self.sender.send(request).is_err();
         // IF we don't have stale ticks, send over the request
-        if self.stale_ticks == 0 {
-            if self.sender.send(request).is_err() {
-                self.has_crashed = true;
-            }
-        }
-        let response = self.receiver.try_recv().ok();
-        match response {
-            Some(response) => {
+        match self.receiver.recv() {
+            Ok(response) => {
                 // We got a response back! Cache it, reset stale tricks, and send over
                 // the request
                 self.response = response;
-                self.stale_ticks = 0;
             }
-            None => {
-                // If we got no response back...we must drop this request, and increase stale count
-                self.stale_ticks += 1;
+            Err(_) => {
+                self.has_crashed = true;
             }
         }
 

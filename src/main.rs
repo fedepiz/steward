@@ -5,6 +5,14 @@ use macroquad::prelude as mq;
 use simulation::{MapItemId, SimulationActor};
 use tracing_subscriber::layer::SubscriberExt;
 
+#[cfg(target_os = "windows")]
+const GLOBAL_SCALING: f32 = 1.;
+
+#[cfg(target_os = "macos")]
+const GLOBAL_SCALING: f32 = 1.;
+
+#[cfg(not(target_os = "windows"))]
+#[cfg(not(target_os = "macos"))]
 const GLOBAL_SCALING: f32 = 1.5;
 
 fn main() {
@@ -112,32 +120,6 @@ impl Actions {
     }
 }
 
-#[derive(Default)]
-struct FpsCounter {
-    fps_display: i32,
-    fps_accum: i32,
-    fps_samples: i32,
-    fps_timer: f32,
-}
-
-impl FpsCounter {
-    fn tick(&mut self, frame_time: f32) {
-        self.fps_accum += mq::get_fps();
-        self.fps_samples += 1;
-        self.fps_timer += frame_time;
-
-        if self.fps_timer >= 0.5 {
-            self.fps_display = ((self.fps_accum as f32 / self.fps_samples as f32).round()) as i32;
-            self.fps_accum = 0;
-            self.fps_samples = 0;
-            self.fps_timer = 0.0;
-        }
-    }
-
-    fn fps(&self) -> i32 {
-        self.fps_display
-    }
-}
 async fn amain() {
     // Configure egui scaling for high DPI
     egui_macroquad::cfg(|ctx| {
@@ -164,27 +146,17 @@ async fn amain() {
 
     let mut sim_actor = SimulationActor::start();
     let mut is_paused = false;
+    let mut show_fps = false;
 
     let mut reload = true;
     let mut actions = Actions::default();
 
-    let mut fps_counter = FpsCounter::default();
-
-    const MIN_FRAME_TIME_MS: f32 = 1. / 60.;
+    const DESIRED_FPS: f32 = 60.;
+    const TICK_RATE_SECS: f32 = 1. / DESIRED_FPS;
+    let mut next_tick_time: f32 = 0.0;
     // Main game loop
     loop {
         let tracing_span = tracing::info_span!("Main Loop").entered();
-
-        // Try to enforce 60fps
-        let frame_time = mq::get_frame_time();
-        let time_to_sleep = ((MIN_FRAME_TIME_MS - frame_time * 1000.).floor().max(0.)) as u64;
-        if time_to_sleep > 0 {
-            let _span = tracing::info_span!("VSYNC WAIT");
-            let duration = std::time::Duration::from_millis(time_to_sleep);
-            std::thread::sleep(duration);
-        }
-
-        fps_counter.tick(frame_time);
 
         arena.reset();
 
@@ -206,7 +178,14 @@ async fn amain() {
             reload = false;
         }
 
-        request.advance_time = !is_paused && !reload && !sim_actor.has_critical_error();
+        let has_tick = {
+            next_tick_time += mq::get_frame_time();
+            let has_tick = next_tick_time >= TICK_RATE_SECS;
+            next_tick_time = next_tick_time % TICK_RATE_SECS;
+            has_tick
+        };
+
+        request.advance_time = has_tick && !is_paused && !reload && !sim_actor.has_critical_error();
 
         request.higlighted_item = selected_item;
 
@@ -268,6 +247,10 @@ async fn amain() {
             if mq::is_key_pressed(mq::KeyCode::R) {
                 reload = true;
             }
+
+            if mq::is_key_pressed(mq::KeyCode::F12) {
+                show_fps = !show_fps;
+            }
         }
 
         // Render board to its texture
@@ -306,14 +289,10 @@ async fn amain() {
             );
         }
 
-        let fps_text = format!("{} fps", fps_counter.fps());
-        draw_overlay_text(
-            &fps_text,
-            mq::WHITE,
-            &billboard_font,
-            24.0,
-            mq::vec2(1.0, 1.0),
-        );
+        if show_fps {
+            let text = format!("{} fps", mq::get_fps());
+            draw_overlay_text(&text, mq::WHITE, &billboard_font, 24.0, mq::vec2(1.0, 1.0));
+        }
 
         std::mem::drop(tracing_span);
         mq::next_frame().await;
