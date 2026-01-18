@@ -3,7 +3,7 @@ use slotmap::{Key, KeyData};
 use util::string_pool::*;
 
 use crate::{
-    agents::Agents,
+    agents::{Agents, Var},
     geom::V2,
     movement::{self, SpatialMap},
     names::Names,
@@ -218,6 +218,9 @@ fn view(sim: &Simulation, req: &Request, response: &mut Response) {
                 let tag = req.strings.get(view_entity.tag);
                 ctx.tag(tag);
                 ctx.display("name", sim.names.resolve(entity.name));
+
+                let vars = sim.agents.vars(entity.agent);
+                ctx.display("renown", vars.get(Var::Renown));
             });
         }
 

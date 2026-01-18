@@ -38,6 +38,11 @@ impl Objects {
         self.tags.get(&symbol).copied()
     }
 
+    pub fn lookup_ref_by_tag<'a>(&'a self, key: &str) -> Option<ObjectRef<'a>> {
+        let id = self.lookup_by_tag(key)?;
+        Some(self.get_ref(id))
+    }
+
     fn get_property(&self, id: ObjectId, key: &str) -> Option<Property> {
         // Find span in property array(s)
         let property_span = self
@@ -87,6 +92,10 @@ impl Objects {
     pub fn list<'a>(&'a self, id: ObjectId, key: &str) -> &'a [ObjectId] {
         self.try_list(id, key).unwrap_or_default()
     }
+
+    pub fn get_ref<'a>(&'a self, id: ObjectId) -> ObjectRef<'a> {
+        ObjectRef { objects: self, id }
+    }
 }
 
 #[derive(Default, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug)]
@@ -95,6 +104,27 @@ pub struct ObjectId(pub usize);
 #[derive(Default, Clone, Copy)]
 struct Object {
     properties: Span,
+}
+
+#[derive(Clone, Copy)]
+pub struct ObjectRef<'a> {
+    objects: &'a Objects,
+    id: ObjectId,
+}
+
+impl<'a> ObjectRef<'a> {
+    #[inline]
+    pub fn str(self, key: &str) -> &'a str {
+        self.objects.str(self.id, key)
+    }
+    #[inline]
+    pub fn try_list(self, key: &str) -> Option<&'a [ObjectId]> {
+        self.objects.try_list(self.id, key)
+    }
+    #[inline]
+    pub fn list(self, key: &str) -> &'a [ObjectId] {
+        self.objects.list(self.id, key)
+    }
 }
 
 #[derive(Clone, Copy)]

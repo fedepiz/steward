@@ -298,6 +298,10 @@ fn gui(ctx: &egui::Context, response: &simulation::Response) {
                 .show(ui, |ui| {
                     ui.label("Name");
                     ui.label(objs.str(root, "name"));
+                    ui.end_row();
+                    ui.label("Renown");
+                    ui.label(objs.str(root, "renown"));
+                    ui.end_row();
                 })
         });
     }

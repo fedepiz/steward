@@ -2,7 +2,7 @@ use slotmap::{SecondaryMap, SlotMap, new_key_type};
 
 use util::span::Span;
 
-use crate::{geom::V2, names::Name};
+use crate::{agents::AgentId, geom::V2, names::Name};
 
 new_key_type! { pub(crate) struct PartyId; }
 new_key_type! { pub(crate) struct PartyTypeId; }
@@ -140,6 +140,7 @@ pub(crate) struct Party {
     pub speed: f32,
     pub movement_target: MovementTarget,
     pub is_player: bool,
+    pub agent: AgentId,
 }
 
 #[derive(Clone, Copy, PartialEq, PartialOrd)]
