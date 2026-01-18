@@ -27,7 +27,8 @@ string-interner = "0.19"
 
 tracing = "*"
 tracing-subscriber = "*"
-tracing-tracy = "*"
+tracing-tracy = { version = "*", default-features = false }
+# tracing-tracy = { version = "*" }
 
 simulation = { path = "crates/simulation" }
 util = { path = "crates/util" }

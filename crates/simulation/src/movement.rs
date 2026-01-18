@@ -46,7 +46,7 @@ pub(crate) fn tick_movement<G: MovementGraph>(
     elements: &[Element],
     graph: &G,
 ) -> Output {
-    const SPEED_MULT: f32 = 0.03;
+    const SPEED_MULT: f32 = 0.06;
     const BUCKET_SIZE: usize = 8;
 
     let _span = tracing::info_span!("Movement").entered();

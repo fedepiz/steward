@@ -1,8 +1,8 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use crate::{names::Name, parties::PartyId};
-use slotmap::{Key, KeyData, SecondaryMap, SlotMap, new_key_type};
-use strum::{EnumCount, EnumIter};
+use slotmap::*;
+use strum::*;
 use util::span::Span;
 
 new_key_type! { pub struct AgentId; }
