@@ -1,6 +1,6 @@
 use crate::vec_map::VecMap;
-use std::ops::{AddAssign, MulAssign, Sub, SubAssign, Neg};
 use std::iter::FromIterator;
+use std::ops::{AddAssign, MulAssign, Neg, Sub, SubAssign};
 
 pub struct Tally<K>(VecMap<K, f32>);
 
@@ -179,7 +179,6 @@ impl<K: Copy + Ord> FromIterator<(K, f32)> for Tally<K> {
         tally
     }
 }
-
 
 #[cfg(test)]
 mod tests {

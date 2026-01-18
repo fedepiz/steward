@@ -132,7 +132,7 @@ pub struct Request {
     pub advance_time: bool,
     pub move_to_pos: Option<(f32, f32)>,
     pub move_to_item: Option<MapItemId>,
-    pub higlighted_item: Option<MapItemId>,
+    pub highlighted_item: Option<MapItemId>,
     pub extract_terrain: bool,
     strings: StringPool,
     view_entities: Vec<ViewEntity>,
@@ -231,7 +231,7 @@ fn view(sim: &Simulation, req: &Request, response: &mut Response) {
         let _span = tracing::info_span!("Map Items").entered();
         let ctx = &mut response.map_items;
         let highlighted_entity = req
-            .higlighted_item
+            .highlighted_item
             .map(|id| id.as_entity())
             .unwrap_or_default();
 
