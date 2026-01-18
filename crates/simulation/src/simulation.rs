@@ -8,7 +8,7 @@ use crate::{
     movement::{self, SpatialMap},
     names::Names,
     objects::{Objects, ObjectsBuilder},
-    parties::*,
+    parties::{self, *},
     terrain_map::TerrainMap,
 };
 
@@ -20,7 +20,7 @@ pub(crate) struct Simulation {
     pub parties: Parties,
     movement_cache: movement::MovementCache,
     pub agents: Agents,
-    player_movement_target: MovementTarget,
+    player_party_goal: parties::Goal,
 }
 
 impl Simulation {
@@ -40,13 +40,16 @@ fn tick(sim: &mut Simulation, mut request: Request) -> Response {
     {
         // From move pos
         if let Some((x, y)) = request.move_to_pos.take() {
-            sim.player_movement_target = MovementTarget::FixedPos(V2::new(x, y));
+            sim.player_party_goal = Goal::MoveTo(V2::new(x, y));
         }
 
         // From move to target
         if let Some(item_id) = request.move_to_item.take() {
-            let id = PartyId::from(KeyData::from_ffi(item_id.0));
-            sim.player_movement_target = MovementTarget::Party(id);
+            let target = PartyId::from(KeyData::from_ffi(item_id.0));
+            sim.player_party_goal = Goal::ToParty {
+                target,
+                distance: 0.,
+            };
         }
     }
 
@@ -56,17 +59,17 @@ fn tick(sim: &mut Simulation, mut request: Request) -> Response {
         let mut movement_elements = Vec::with_capacity(sim.parties.len());
 
         for entity in sim.parties.iter() {
-            let movement_target = if entity.is_player {
-                sim.player_movement_target
+            let goal = if entity.speed == 0.0 {
+                Goal::Idle
+            } else if entity.is_player {
+                sim.player_party_goal
             } else {
-                let goal = if entity.speed == 0.0 {
-                    Goal::Idle
-                } else {
-                    Goal::MoveTo(V2::splat(500.))
-                };
-                let detection = sim.parties.detections.get(entity.id);
-                crate::parties::party_ai(entity, detection, goal).movement_target
+                Goal::MoveTo(V2::splat(500.))
             };
+
+            let detection = sim.parties.detections.get(entity.id);
+
+            let movement_target = crate::parties::party_ai(entity, detection, goal).movement_target;
 
             // Resolve movement target
             let (destination, direct) = match movement_target {
@@ -178,16 +181,15 @@ fn detections(detections: &mut Detections, entities: &Parties, spatial_map: &Spa
                 continue;
             }
             let target = &entities[target];
-            let distance = V2::distance(entity.body.pos, target.body.pos);
-            let range = (entity.body.size + target.body.size) / 2.;
+            let center_to_center_distance = V2::distance(entity.body.pos, target.body.pos);
+            let collision_range = (entity.body.size + target.body.size) / 2.;
 
             // Non-colliding
-            let collides = distance <= range;
+            let distance = center_to_center_distance - collision_range;
 
             scratch.push(Detection {
                 target: target.id,
                 distance,
-                collides,
             });
         }
         detections.set(entity.id, &scratch);
@@ -304,8 +306,8 @@ impl MapItems {
             id: MapItemId(data.id),
             name: self.names.get(data.name),
             image: data.image,
-            x: data.body.pos.x,
-            y: data.body.pos.y,
+            x: data.body.pos.x - data.body.size / 2.,
+            y: data.body.pos.y - data.body.size / 2.,
             width: data.body.size,
             height: data.body.size,
         }

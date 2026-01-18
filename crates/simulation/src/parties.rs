@@ -44,7 +44,6 @@ impl Detections {
 pub(crate) struct Detection {
     pub target: PartyId,
     pub distance: f32,
-    pub collides: bool,
 }
 
 impl Parties {
@@ -127,7 +126,7 @@ impl std::ops::IndexMut<PartyTypeId> for Parties {
 pub(crate) enum Goal {
     Idle,
     MoveTo(V2),
-    Follow(PartyId),
+    ToParty { target: PartyId, distance: f32 },
 }
 
 impl Default for Goal {
@@ -181,11 +180,23 @@ pub(crate) struct PartyAction {
     pub movement_target: MovementTarget,
 }
 
-pub(crate) fn party_ai(_: &Party, _: &[Detection], goal: Goal) -> PartyAction {
+pub(crate) fn party_ai(_: &Party, detections: &[Detection], goal: Goal) -> PartyAction {
     let movement_target = match goal {
         Goal::Idle => MovementTarget::Immobile,
         Goal::MoveTo(pos) => MovementTarget::FixedPos(pos),
-        Goal::Follow(target) => MovementTarget::Party(target),
+        Goal::ToParty { target, distance } => {
+            let close_to_target = detections
+                .iter()
+                .find(|d| target == d.target)
+                .map(|d| d.distance <= distance)
+                .unwrap_or(false);
+
+            if !close_to_target {
+                MovementTarget::Party(target)
+            } else {
+                MovementTarget::Immobile
+            }
+        }
     };
 
     PartyAction { movement_target }

@@ -94,13 +94,22 @@ pub(crate) fn tick_movement<G: MovementGraph>(
             // Calculate next position
             let terrain_mult = {
                 let (x, y) = pos_to_tile(element.pos);
-                graph.get_speed_at(x, y)
+                let speed = graph.get_speed_at(x, y);
+                if speed == 0.0 && !element.direct {
+                    // If the tile is impassable, but we are moving not direct, we are
+                    // allowed to move with speed 1.
+                    1.0
+                } else {
+                    speed
+                }
             };
             let speed = element.speed * terrain_mult * SPEED_MULT;
             let next_pos = interpolate_position(element.pos, next_step, speed);
+
             let can_travel = {
                 let (x, y) = pos_to_tile(next_pos);
-                graph.get_speed_at(x, y) > 0.
+                // If we are not moving "direct", we ar allowed to enter unmovable areas.
+                !element.direct || graph.get_speed_at(x, y) > 0.
             };
             (element.id, if can_travel { next_pos } else { element.pos })
         })
@@ -207,12 +216,15 @@ fn can_simplify_pair<G: MovementGraph>(p1: V2, p2: V2, graph: &G) -> bool {
 }
 
 fn calculate_new_path<G: MovementGraph>(source: V2, destination: V2, graph: &G) -> MovementPath {
-    if source == destination {
-        // TODO: Actual pathfinding, once we have a terrain grid
+    let destination_is_passable = {
+        let (x, y) = pos_to_tile(destination);
+        graph.get_speed_at(x, y) > 0.
+    };
+    if source == destination || !destination_is_passable {
         return MovementPath {
-            destination,
-            next_step: destination,
-            steps_reversed: vec![destination],
+            destination: source,
+            next_step: source,
+            steps_reversed: vec![],
         };
     }
 

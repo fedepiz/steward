@@ -85,7 +85,7 @@ pub(crate) fn init(sim: &mut Simulation, req: InitRequest) {
         },
         Desc {
             name: "Caer Ligualid",
-            pos: (595., 507.),
+            pos: (597., 509.),
             party_typ: "town",
             speed: 0.,
             vars: &[(Var::Prosperity, 0.5)],
