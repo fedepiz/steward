@@ -20,6 +20,7 @@ pub(crate) struct Simulation {
     pub parties: Parties,
     movement_cache: movement::MovementCache,
     pub agents: Agents,
+    player_movement_target: MovementTarget,
 }
 
 impl Simulation {
@@ -37,26 +38,15 @@ fn tick(sim: &mut Simulation, mut request: Request) -> Response {
 
     // Input handling
     {
-        let mut command = None;
-
         // From move pos
         if let Some((x, y)) = request.move_to_pos.take() {
-            command = Some(MovementTarget::FixedPos(V2::new(x, y)));
+            sim.player_movement_target = MovementTarget::FixedPos(V2::new(x, y));
         }
 
         // From move to target
         if let Some(item_id) = request.move_to_item.take() {
             let id = PartyId::from(KeyData::from_ffi(item_id.0));
-            command = Some(MovementTarget::Follow(id));
-        }
-
-        // Update entity positions
-        for entity in sim.parties.iter_mut() {
-            entity.movement_target = if entity.is_player {
-                command.unwrap_or(entity.movement_target)
-            } else {
-                MovementTarget::FixedPos(V2::new(500., 500.))
-            }
+            sim.player_movement_target = MovementTarget::Party(id);
         }
     }
 
@@ -65,19 +55,33 @@ fn tick(sim: &mut Simulation, mut request: Request) -> Response {
 
         let mut movement_elements = Vec::with_capacity(sim.parties.len());
 
-        // Extract data from entities in linear pass
         for entity in sim.parties.iter() {
-            let destination = match entity.movement_target {
-                MovementTarget::Immobile => entity.body.pos,
-                MovementTarget::FixedPos(pos) => pos,
-                MovementTarget::Follow(id) => sim.parties[id].body.pos,
+            let movement_target = if entity.is_player {
+                sim.player_movement_target
+            } else {
+                let goal = if entity.speed == 0.0 {
+                    Goal::Idle
+                } else {
+                    Goal::MoveTo(V2::splat(500.))
+                };
+                let detection = sim.parties.detections.get(entity.id);
+                crate::parties::party_ai(entity, detection, goal).movement_target
             };
 
+            // Resolve movement target
+            let (destination, direct) = match movement_target {
+                MovementTarget::Immobile => (entity.body.pos, false),
+                MovementTarget::FixedPos(pos) => (pos, false),
+                MovementTarget::Party(id) => (sim.parties[id].body.pos, false),
+            };
+
+            // Actual movement element
             movement_elements.push(movement::Element {
                 id: entity.id,
                 speed: entity.speed,
                 pos: entity.body.pos,
                 destination,
+                direct,
             });
         }
 

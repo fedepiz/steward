@@ -123,6 +123,19 @@ impl std::ops::IndexMut<PartyTypeId> for Parties {
     }
 }
 
+#[derive(Clone, Copy, PartialEq, PartialOrd)]
+pub(crate) enum Goal {
+    Idle,
+    MoveTo(V2),
+    Follow(PartyId),
+}
+
+impl Default for Goal {
+    fn default() -> Self {
+        Self::Idle
+    }
+}
+
 #[derive(Default, Clone, Copy)]
 pub(crate) struct PartyType {
     pub id: PartyTypeId,
@@ -141,7 +154,6 @@ pub(crate) struct Party {
     pub type_id: PartyTypeId,
     pub body: Body,
     pub speed: f32,
-    pub movement_target: MovementTarget,
     pub is_player: bool,
     pub agent: AgentId,
 }
@@ -150,7 +162,7 @@ pub(crate) struct Party {
 pub(crate) enum MovementTarget {
     Immobile,
     FixedPos(V2),
-    Follow(PartyId),
+    Party(PartyId),
 }
 
 impl Default for MovementTarget {
@@ -163,4 +175,18 @@ impl Default for MovementTarget {
 pub(crate) struct Body {
     pub pos: V2,
     pub size: f32,
+}
+
+pub(crate) struct PartyAction {
+    pub movement_target: MovementTarget,
+}
+
+pub(crate) fn party_ai(_: &Party, _: &[Detection], goal: Goal) -> PartyAction {
+    let movement_target = match goal {
+        Goal::Idle => MovementTarget::Immobile,
+        Goal::MoveTo(pos) => MovementTarget::FixedPos(pos),
+        Goal::Follow(target) => MovementTarget::Party(target),
+    };
+
+    PartyAction { movement_target }
 }

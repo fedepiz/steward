@@ -10,6 +10,7 @@ pub(crate) struct Element {
     pub speed: f32,
     pub pos: V2,
     pub destination: V2,
+    pub direct: bool,
 }
 
 pub(crate) struct Output {
@@ -54,7 +55,9 @@ pub(crate) fn tick_movement<G: MovementGraph>(
         .iter()
         .map(|element| {
             // Derive the next step
-            let next_step = {
+            let next_step = if element.direct {
+                element.destination
+            } else {
                 // Temporary on-stack location for a fresh path
                 let mut new_path = None;
 
@@ -89,16 +92,17 @@ pub(crate) fn tick_movement<G: MovementGraph>(
             };
 
             // Calculate next position
-            let current_tile = pos_to_tile(element.pos);
-            // Define a minimum speed, to make sure nothing gets stuck even in the 'unlikely event' entities try to
-            // traverse untraversable spaces.
-            const MINIMUM_SPEED: f32 = 0.1;
-            let terrain_mult = graph
-                .get_speed_at(current_tile.0, current_tile.1)
-                .max(MINIMUM_SPEED);
+            let terrain_mult = {
+                let (x, y) = pos_to_tile(element.pos);
+                graph.get_speed_at(x, y)
+            };
             let speed = element.speed * terrain_mult * SPEED_MULT;
             let next_pos = interpolate_position(element.pos, next_step, speed);
-            (element.id, next_pos)
+            let can_travel = {
+                let (x, y) = pos_to_tile(next_pos);
+                graph.get_speed_at(x, y) > 0.
+            };
+            (element.id, if can_travel { next_pos } else { element.pos })
         })
         .collect();
 
