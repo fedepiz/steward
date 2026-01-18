@@ -235,13 +235,23 @@ fn view(sim: &Simulation, req: &Request, response: &mut Response) {
             .map(|id| id.as_entity())
             .unwrap_or_default();
 
-        for entity in sim.parties.iter() {
+        // Get parties and types, sorted by layer
+        let mut parties: Vec<_> = sim
+            .parties
+            .iter()
+            .map(|party| (party, sim.parties.get_type(party.type_id).layer))
+            .collect();
+
+        parties.sort_by_key(|(_, layer)| *layer);
+
+        for (entity, _) in parties {
             // TODO: Filter here for being in view
             let typ = sim.parties.get_type(entity.type_id);
 
             let is_highlighted = highlighted_entity == entity.id;
+            let show_name = is_highlighted || typ.always_show_name;
 
-            let name = if is_highlighted {
+            let name = if show_name {
                 let name = sim.names.resolve(entity.name);
                 ctx.names.push(name)
             } else {

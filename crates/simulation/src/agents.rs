@@ -18,8 +18,8 @@ pub(crate) enum Var {
 
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, EnumCount, EnumIter)]
 pub(crate) enum Set {
-    IsPerson,
-    IsSettlement,
+    People,
+    Settlements,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, EnumCount, EnumIter)]
@@ -288,6 +288,13 @@ impl<'a> VarsMut<'a> {
         let idx = var as usize;
         if let Some(var) = self.0.get_mut(idx) {
             *var = value;
+        }
+    }
+
+    #[inline]
+    pub(crate) fn set_many(&mut self, vars: &[(Var, f64)]) {
+        for &(var, value) in vars {
+            self.set(var, value);
         }
     }
 
@@ -738,17 +745,17 @@ mod tests {
         let a = insert_agent(&mut agents);
         let b = insert_agent(&mut agents);
 
-        assert!(agents.add_to_set(Set::IsPerson, a));
-        assert!(agents.add_to_set(Set::IsPerson, b));
-        assert!(!agents.add_to_set(Set::IsPerson, a));
+        assert!(agents.add_to_set(Set::People, a));
+        assert!(agents.add_to_set(Set::People, b));
+        assert!(!agents.add_to_set(Set::People, a));
 
-        let mut members: Vec<_> = agents.iter_set(Set::IsPerson).collect();
+        let mut members: Vec<_> = agents.iter_set(Set::People).collect();
         members.sort();
         assert_eq!(members, vec![a, b]);
 
-        assert!(agents.remove_from_set(Set::IsPerson, a));
-        assert!(!agents.remove_from_set(Set::IsPerson, a));
-        let members: Vec<_> = agents.iter_set(Set::IsPerson).collect();
+        assert!(agents.remove_from_set(Set::People, a));
+        assert!(!agents.remove_from_set(Set::People, a));
+        let members: Vec<_> = agents.iter_set(Set::People).collect();
         assert_eq!(members, vec![b]);
     }
 
@@ -758,11 +765,11 @@ mod tests {
         let a = insert_agent(&mut agents);
         let b = insert_agent(&mut agents);
 
-        agents.add_to_set(Set::IsSettlement, a);
-        agents.add_to_set(Set::IsSettlement, b);
+        agents.add_to_set(Set::Settlements, a);
+        agents.add_to_set(Set::Settlements, b);
 
         agents.despawn(a);
-        let members: Vec<_> = agents.iter_set(Set::IsSettlement).collect();
+        let members: Vec<_> = agents.iter_set(Set::Settlements).collect();
         assert_eq!(members, vec![b]);
     }
 

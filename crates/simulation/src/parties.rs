@@ -130,6 +130,8 @@ pub(crate) struct PartyType {
     pub image: &'static str,
     pub name: Name,
     pub size: f32,
+    pub always_show_name: bool,
+    pub layer: usize,
 }
 
 #[derive(Default, Clone, Copy)]

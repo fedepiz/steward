@@ -1,4 +1,4 @@
-use crate::agents::Var;
+use crate::agents::{Set, Var};
 use crate::names::Name;
 use crate::simulation::*;
 use crate::{geom::*, terrain_map};
@@ -7,31 +7,107 @@ pub(crate) fn init(sim: &mut Simulation, req: InitRequest) {
     sim.terrain_map = terrain_map::init(&req.elevations, req.map_width, req.map_height);
 
     {
-        let person = sim.parties.add_type();
-        person.tag = "person";
-        person.image = "pawns/person";
-        person.name = Name::simple(sim.names.define("Person"));
-        person.size = 1.0;
+        let typ = sim.parties.add_type();
+        typ.tag = "person";
+        typ.image = "pawns/person";
+        typ.name = Name::simple(sim.names.define("Person"));
+        typ.size = 1.0;
+        typ.layer = 1;
+    }
+
+    {
+        let typ = sim.parties.add_type();
+        typ.tag = "village";
+        typ.image = "pawns/village";
+        typ.name = Name::simple(sim.names.define("Village"));
+        typ.size = 2.0;
+        typ.always_show_name = true;
+    }
+
+    {
+        let typ = sim.parties.add_type();
+        typ.tag = "town";
+        typ.image = "pawns/town";
+        typ.name = Name::simple(sim.names.define("Town"));
+        typ.size = 2.5;
+        typ.always_show_name = true;
+    }
+
+    #[derive(Default)]
+    struct Desc<'a> {
+        name: &'a str,
+        pos: (f32, f32),
+        party_typ: &'a str,
+        speed: f32,
+        vars: &'a [(Var, f64)],
+        sets: &'a [Set],
+        is_player: bool,
     }
 
     let descs = [
-        V2::new(580., 520.),
-        V2::new(610., 520.),
-        V2::new(600., 520.),
-        V2::new(600., 500.),
+        Desc {
+            pos: (580., 520.),
+            party_typ: "person",
+            speed: 5.,
+            vars: &[(Var::Renown, 10.)],
+            is_player: true,
+            ..Default::default()
+        },
+        Desc {
+            pos: (610., 520.),
+            party_typ: "person",
+            speed: 1.,
+            vars: &[(Var::Renown, 10.)],
+            ..Default::default()
+        },
+        Desc {
+            pos: (600., 520.),
+            party_typ: "person",
+            speed: 1.,
+            vars: &[(Var::Renown, 10.)],
+            ..Default::default()
+        },
+        Desc {
+            pos: (600., 500.),
+            party_typ: "person",
+            speed: 1.,
+            vars: &[(Var::Renown, 10.)],
+            ..Default::default()
+        },
+        Desc {
+            name: "Caer Ligualid",
+            pos: (595., 507.),
+            party_typ: "town",
+            speed: 0.,
+            vars: &[(Var::Prosperity, 0.5)],
+            sets: &[Set::Settlements],
+            ..Default::default()
+        },
+        Desc {
+            name: "Anava",
+            pos: (603., 500.),
+            party_typ: "village",
+            speed: 0.,
+            vars: &[(Var::Prosperity, 0.5)],
+            sets: &[Set::Settlements],
+            ..Default::default()
+        },
     ];
 
     let player_name = Name::simple(sim.names.define("Player"));
-
-    for (idx, pos) in descs.into_iter().enumerate() {
-        let typ = sim.parties.find_type_by_tag("person").unwrap();
+    for desc in descs {
+        let typ = sim.parties.find_type_by_tag(desc.party_typ).unwrap();
         let party = sim.parties.spawn_with_type(typ.id);
-        let is_player = idx == 0;
-        party.is_player = is_player;
-
-        party.name = if is_player { player_name } else { typ.name };
-        party.speed = if is_player { 5. } else { 1. };
-        party.body.pos = pos;
+        party.is_player = desc.is_player;
+        party.name = if desc.is_player {
+            player_name
+        } else if desc.name.is_empty() {
+            typ.name
+        } else {
+            Name::simple(sim.names.define(desc.name))
+        };
+        party.speed = desc.speed;
+        party.body.pos = V2::new(desc.pos.0, desc.pos.1);
 
         let agent = sim.agents.spawn();
         agent.name = party.name;
@@ -39,8 +115,12 @@ pub(crate) fn init(sim: &mut Simulation, req: InitRequest) {
         party.agent = agent.id;
         let agent = agent.id;
 
-        sim.agents.vars_mut(agent).with(Var::Renown, 10.);
+        sim.agents.vars_mut(agent).set_many(desc.vars);
 
-        party.agent = agent
+        for &set in desc.sets {
+            sim.agents.add_to_set(set, agent);
+        }
+
+        party.agent = agent;
     }
 }
