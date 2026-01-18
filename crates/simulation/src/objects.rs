@@ -13,9 +13,7 @@ pub struct Objects {
     interner: DefaultStringInterner,
     text: StringPool,
     instances: Vec<Object>,
-    // SOA of properties: keys and values split (for faster search?)
-    prop_keys: Vec<Symbol>,
-    prop_values: Vec<Property>,
+    properties: Properties,
     // Contiguous list of list items
     list_items: Vec<ObjectId>,
     // String keyed lookup of object id
@@ -27,8 +25,7 @@ impl Objects {
         self.text.clear();
         self.interner = DefaultStringInterner::default();
         self.instances.clear();
-        self.prop_keys.clear();
-        self.prop_values.clear();
+        self.properties.clear();
         self.list_items.clear();
         self.tags.clear();
     }
@@ -57,9 +54,7 @@ impl Objects {
             None => return Default::default(),
         };
 
-        // Find the index of the symbol in the prop_keys array
-        let prop_idx = property_span.index_where(&self.prop_keys, |x| *x == symbol)?;
-        self.prop_values.get(prop_idx).copied()
+        self.properties.lookup(property_span, symbol)
     }
 
     pub fn try_str<'a>(&'a self, id: ObjectId, key: &str) -> Option<&'a str> {
@@ -135,6 +130,34 @@ enum Property {
 }
 
 #[derive(Default)]
+struct Properties {
+    // SOA of properties: keys and values split (for faster search?)
+    keys: Vec<Symbol>,
+    values: Vec<Property>,
+}
+
+impl Properties {
+    fn clear(&mut self) {
+        self.keys.clear();
+        self.values.clear();
+    }
+
+    fn get_pos(&self) -> usize {
+        self.keys.len()
+    }
+
+    fn push(&mut self, key: Symbol, value: Property) {
+        self.keys.push(key);
+        self.values.push(value);
+    }
+
+    fn lookup(&self, span: Span, key: Symbol) -> Option<Property> {
+        let prop_idx = span.index_where(&self.keys, |x| *x == key)?;
+        self.values.get(prop_idx).copied()
+    }
+}
+
+#[derive(Default)]
 pub struct ObjectsBuilder {
     data: Objects,
     /// A stack of object ids, mirroring the order of spawn calls.
@@ -157,14 +180,14 @@ impl ObjectsBuilder {
     }
 
     pub fn spawn(&mut self, build: impl FnOnce(&mut ObjectsBuilder) -> ()) -> ObjectId {
-        let props_base = self.data.prop_keys.len();
+        let props_base = self.data.properties.get_pos();
 
         let object_id = ObjectId(self.data.instances.len());
         self.data.instances.push(Object::default());
         self.active_stack.push(object_id);
         build(self);
 
-        let props_end = self.data.prop_keys.len();
+        let props_end = self.data.properties.get_pos();
         self.data.instances[object_id.0].properties = Span::between(props_base, props_end);
 
         // If there is an open list, add yourself to it.
@@ -188,8 +211,7 @@ impl ObjectsBuilder {
 
     fn set_property(&mut self, key: &'static str, value: Property) {
         let symbol = self.data.interner.get_or_intern_static(key);
-        self.data.prop_keys.push(symbol);
-        self.data.prop_values.push(value);
+        self.data.properties.push(symbol, value);
     }
 
     pub fn str(&mut self, key: &'static str, value: impl AsRef<str>) {
