@@ -3,7 +3,7 @@ use slotmap::{Key, KeyData};
 use util::string_pool::*;
 
 use crate::{
-    agents::{Agents, Var},
+    agents::{self, AgentId, Agents, Behavior, Hierarchy, Var},
     geom::V2,
     movement::{self, SpatialMap},
     names::Names,
@@ -24,13 +24,13 @@ pub(crate) struct Simulation {
 }
 
 impl Simulation {
-    pub(crate) fn tick(&mut self, request: Request, _: &Bump) -> Response {
+    pub(crate) fn tick(&mut self, request: Request, arena: &Bump) -> Response {
         let _span = tracing::info_span!("Tick").entered();
-        tick(self, request)
+        tick(self, request, arena)
     }
 }
 
-fn tick(sim: &mut Simulation, mut request: Request) -> Response {
+fn tick(sim: &mut Simulation, mut request: Request, arena: &Bump) -> Response {
     if let Some(req) = request.init.take() {
         *sim = Simulation::default();
         crate::init::init(sim, req);
@@ -56,46 +56,44 @@ fn tick(sim: &mut Simulation, mut request: Request) -> Response {
     if request.advance_time {
         sim.turn_num = sim.turn_num.wrapping_add(1);
 
+        spawn_farmers(sim, arena);
+        move_farmers(sim, arena);
+
         let mut movement_elements = Vec::with_capacity(sim.parties.len());
 
-        for entity in sim.parties.iter() {
-            let goal = if entity.speed == 0.0 {
-                Goal::Idle
-            } else if entity.is_player {
-                sim.player_party_goal
-            } else {
-                Goal::MoveTo(V2::splat(500.))
-            };
+        // Parties logical update
+        for party in sim.parties.iter() {
+            let goal = determine_party_goal(sim, party);
 
-            let detection = sim.parties.detections.get(entity.id);
+            let detection = sim.parties.detections.get(party.id);
 
-            let movement_target = crate::parties::party_ai(entity, detection, goal).movement_target;
+            let movement_target = determine_party_movement_target(party, detection, goal);
 
             // Resolve movement target
             let (destination, direct) = match movement_target {
-                MovementTarget::Immobile => (entity.body.pos, false),
+                MovementTarget::Immobile => (party.body.pos, false),
                 MovementTarget::FixedPos(pos) => (pos, false),
                 MovementTarget::Party(id) => (sim.parties[id].body.pos, false),
             };
 
             // Actual movement element
             movement_elements.push(movement::Element {
-                id: entity.id,
-                speed: entity.speed,
-                pos: entity.body.pos,
+                id: party.id,
+                speed: party.speed,
+                pos: party.body.pos,
                 destination,
                 direct,
             });
         }
 
-        // Apply movement results back to entities
+        // Apply movement results back to parties
         let movement_result = movement::tick_movement(
             &mut sim.movement_cache,
             &movement_elements,
             &sim.terrain_map,
         );
 
-        // Detection check
+        // Party detection check
         {
             let spatial_map = &movement_result.spatial_map;
             let mut detections = std::mem::take(&mut sim.parties.detections);
@@ -176,7 +174,7 @@ fn detections(detections: &mut Detections, entities: &Parties, spatial_map: &Spa
         let detection_range = 1.;
         let neighbours = spatial_map.search(entity.body.pos, detection_range);
         for target in neighbours {
-            // Do not look at yourself, skip "disembodied" entities
+            // Do not look at yourself
             if target == entity.id {
                 continue;
             }
@@ -184,7 +182,7 @@ fn detections(detections: &mut Detections, entities: &Parties, spatial_map: &Spa
             let center_to_center_distance = V2::distance(entity.body.pos, target.body.pos);
             let collision_range = (entity.body.size + target.body.size) / 2.;
 
-            // Non-colliding
+            // Distance net of sizes. 0 or lower means collision
             let distance = center_to_center_distance - collision_range;
 
             scratch.push(Detection {
@@ -355,4 +353,126 @@ pub struct MapTerrain {
     pub hash: u64,
     pub size: (usize, usize),
     pub tiles: Vec<(u8, u8, u8)>,
+}
+
+fn spawn_farmers(sim: &mut Simulation, arena: &Bump) {
+    let mut spawns = bumpalo::collections::Vec::new_in(arena);
+    let farmer_type = sim.parties.find_type_by_tag("farmers").unwrap().id;
+
+    for agent in sim.agents.iter_set(crate::agents::Set::Villages) {
+        // Check for all the dependents
+        let dependents = sim.agents.children_of(Hierarchy::Attachment, agent.id);
+        // Do we have a farmer?
+        let has_farmer = dependents
+            .into_iter()
+            .any(|child| sim.agents[child].in_set(agents::Set::Farmers));
+
+        // If we do not have a farmer, we will need to spawn one
+        if !has_farmer {
+            let party = &sim.parties[agent.party];
+            spawns.push((agent.id, party.body.pos));
+        }
+    }
+
+    // Spawn the farmers as necessary
+    for (center, pos) in spawns {
+        // Spawn agent (now ihere, later floated out)
+        let party = sim.parties.spawn_with_type(farmer_type);
+        party.body.pos = pos;
+
+        let agent = sim.agents.spawn();
+        agent.name = party.name;
+
+        // Tie agent and party together
+        agent.party = party.id;
+        party.agent = agent.id;
+
+        let agent = agent.id;
+        sim.agents.add_to_set(agents::Set::Farmers, agent);
+        sim.agents.set_parent(Hierarchy::Attachment, center, agent);
+    }
+}
+
+fn move_farmers(sim: &mut Simulation, arena: &Bump) {
+    let mut changes = bumpalo::collections::Vec::new_in(arena);
+
+    for farmer in sim.agents.iter_set(agents::Set::Farmers) {
+        let home = sim.agents.parent_of(Hierarchy::Attachment, farmer.id);
+        let target = sim.agents.parent_of(Hierarchy::LocalMarket, home);
+
+        if same_agent_position(sim, farmer.id, home) && !target.is_null() {
+            changes.push((farmer.id, Behavior::GoTo(target)));
+        } else if same_agent_position(sim, farmer.id, target) {
+            changes.push((farmer.id, Behavior::GoTo(home)));
+        }
+    }
+
+    for (id, behavior) in changes {
+        sim.agents[id].behavior = behavior;
+    }
+}
+
+fn same_agent_position(sim: &Simulation, id1: AgentId, id2: AgentId) -> bool {
+    if id1.is_null() || id2.is_null() {
+        return false;
+    }
+    let p1 = sim
+        .parties
+        .get(sim.agents[id1].party)
+        .map(|party| party.body.pos);
+    let p2 = sim
+        .parties
+        .get(sim.agents[id2].party)
+        .map(|party| party.body.pos);
+    p1.is_some() && p1 == p2
+}
+
+fn determine_party_goal(sim: &Simulation, party: &Party) -> Goal {
+    if party.speed == 0.0 {
+        return Goal::Idle;
+    }
+
+    let agent = match sim.agents.get(party.agent) {
+        Some(agent) => agent,
+        None => return Goal::Idle,
+    };
+
+    match agent.behavior {
+        Behavior::Idle => Goal::Idle,
+        Behavior::Player => sim.player_party_goal,
+        Behavior::Test => Goal::MoveTo(V2::splat(500.)),
+        Behavior::GoTo(target) => sim
+            .agents
+            .get(target)
+            .and_then(|agent| sim.parties.get(agent.party))
+            .map(|party| Goal::ToParty {
+                target: party.id,
+                distance: std::f32::NEG_INFINITY,
+            })
+            .unwrap_or_default(),
+    }
+}
+
+pub(crate) fn determine_party_movement_target(
+    _: &Party,
+    detections: &[Detection],
+    goal: Goal,
+) -> MovementTarget {
+    match goal {
+        Goal::Idle => MovementTarget::Immobile,
+        Goal::MoveTo(pos) => MovementTarget::FixedPos(pos),
+        Goal::ToParty { target, distance } => {
+            let close_to_target = detections
+                .iter()
+                .find(|d| target == d.target)
+                .map(|d| d.distance <= distance)
+                .unwrap_or(false);
+
+            if !close_to_target {
+                MovementTarget::Party(target)
+            } else {
+                MovementTarget::Immobile
+            }
+        }
+    }
 }

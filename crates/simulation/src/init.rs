@@ -1,4 +1,6 @@
-use crate::agents::{Set, Var};
+use std::collections::HashMap;
+
+use crate::agents::{Behavior, Hierarchy, Set, Var};
 use crate::names::Name;
 use crate::simulation::*;
 use crate::{geom::*, terrain_map};
@@ -11,6 +13,17 @@ pub(crate) fn init(sim: &mut Simulation, req: InitRequest) {
         typ.tag = "person";
         typ.image = "pawns/person";
         typ.name = Name::simple(sim.names.define("Person"));
+        typ.size = 2.0;
+        typ.layer = 1;
+        typ.speed = 2.;
+    }
+
+    {
+        let typ = sim.parties.add_type();
+        typ.tag = "farmers";
+        typ.image = "pawns/farmers";
+        typ.name = Name::simple(sim.names.define("Farmers"));
+        typ.speed = 1.;
         typ.size = 2.0;
         typ.layer = 1;
     }
@@ -42,14 +55,15 @@ pub(crate) fn init(sim: &mut Simulation, req: InitRequest) {
         typ.always_show_name = true;
     }
 
-    #[derive(Default)]
+    #[derive(Default, Clone, Copy)]
     struct Desc<'a> {
+        key: &'a str,
         name: &'a str,
         pos: (f32, f32),
         party_typ: &'a str,
-        speed: f32,
         vars: &'a [(Var, f64)],
         sets: &'a [Set],
+        parents: &'a [(Hierarchy, &'a str)],
         is_player: bool,
     }
 
@@ -57,7 +71,6 @@ pub(crate) fn init(sim: &mut Simulation, req: InitRequest) {
         Desc {
             pos: (590., 520.),
             party_typ: "person",
-            speed: 5.,
             vars: &[(Var::Renown, 10.)],
             is_player: true,
             ..Default::default()
@@ -65,29 +78,26 @@ pub(crate) fn init(sim: &mut Simulation, req: InitRequest) {
         Desc {
             pos: (610., 520.),
             party_typ: "person",
-            speed: 1.,
             vars: &[(Var::Renown, 10.)],
             ..Default::default()
         },
         Desc {
             pos: (600., 520.),
             party_typ: "person",
-            speed: 1.,
             vars: &[(Var::Renown, 10.)],
             ..Default::default()
         },
         Desc {
             pos: (600., 500.),
             party_typ: "person",
-            speed: 1.,
             vars: &[(Var::Renown, 10.)],
             ..Default::default()
         },
         Desc {
+            key: "caer_ligualid",
             name: "Caer Ligualid",
             pos: (597., 509.),
             party_typ: "town",
-            speed: 0.,
             vars: &[(Var::Prosperity, 0.5)],
             sets: &[Set::Settlements],
             ..Default::default()
@@ -96,16 +106,15 @@ pub(crate) fn init(sim: &mut Simulation, req: InitRequest) {
             name: "Llan Heledd",
             pos: (580., 520.),
             party_typ: "village",
-            speed: 0.,
             vars: &[(Var::Prosperity, 0.5)],
-            sets: &[Set::Settlements],
+            sets: &[Set::Settlements, Set::Villages],
+            parents: &[(Hierarchy::LocalMarket, "caer_ligualid")],
             ..Default::default()
         },
         Desc {
             name: "Din Drust",
             pos: (570., 490.),
             party_typ: "hillfort",
-            speed: 0.,
             vars: &[(Var::Prosperity, 0.5)],
             sets: &[Set::Settlements],
             ..Default::default()
@@ -114,7 +123,6 @@ pub(crate) fn init(sim: &mut Simulation, req: InitRequest) {
             name: "Din Reghed",
             pos: (530., 500.),
             party_typ: "hillfort",
-            speed: 0.,
             vars: &[(Var::Prosperity, 0.5)],
             sets: &[Set::Settlements],
             ..Default::default()
@@ -123,34 +131,30 @@ pub(crate) fn init(sim: &mut Simulation, req: InitRequest) {
             name: "Ad Candidam Casam",
             pos: (530., 520.),
             party_typ: "village",
-            speed: 0.,
             vars: &[(Var::Prosperity, 0.5)],
-            sets: &[Set::Settlements],
+            sets: &[Set::Settlements, Set::Villages],
             ..Default::default()
         },
         Desc {
             name: "Isura",
             pos: (560., 500.),
             party_typ: "village",
-            speed: 0.,
             vars: &[(Var::Prosperity, 0.5)],
-            sets: &[Set::Settlements],
+            sets: &[Set::Settlements, Set::Villages],
             ..Default::default()
         },
         Desc {
             name: "Anava",
             pos: (603., 500.),
             party_typ: "village",
-            speed: 0.,
             vars: &[(Var::Prosperity, 0.5)],
-            sets: &[Set::Settlements],
+            sets: &[Set::Settlements, Set::Villages],
             ..Default::default()
         },
         Desc {
             name: "Caer Wenddoleu",
             pos: (625., 505.),
             party_typ: "hillfort",
-            speed: 0.,
             vars: &[(Var::Prosperity, 0.5)],
             sets: &[Set::Settlements],
             ..Default::default()
@@ -158,22 +162,34 @@ pub(crate) fn init(sim: &mut Simulation, req: InitRequest) {
     ];
 
     let player_name = Name::simple(sim.names.define("Player"));
+
+    let mut keys = HashMap::new();
+    let mut pass2 = vec![];
+
     for desc in descs {
         let typ = sim.parties.find_type_by_tag(desc.party_typ).unwrap();
         let party = sim.parties.spawn_with_type(typ.id);
-        party.is_player = desc.is_player;
-        party.name = if desc.is_player {
+        let name = if desc.is_player {
             player_name
         } else if desc.name.is_empty() {
             typ.name
         } else {
             Name::simple(sim.names.define(desc.name))
         };
-        party.speed = desc.speed;
+        party.name = name;
+        if desc.is_player {
+            party.speed = 5.;
+        }
         party.body.pos = V2::new(desc.pos.0, desc.pos.1);
 
         let agent = sim.agents.spawn();
-        agent.name = party.name;
+        agent.name = name;
+        agent.is_player = desc.is_player;
+        agent.behavior = if desc.is_player {
+            Behavior::Player
+        } else {
+            Behavior::Test
+        };
         agent.party = party.id;
         party.agent = agent.id;
         let agent = agent.id;
@@ -185,5 +201,17 @@ pub(crate) fn init(sim: &mut Simulation, req: InitRequest) {
         }
 
         party.agent = agent;
+
+        if !desc.key.is_empty() {
+            keys.insert(desc.key, agent);
+        }
+        pass2.push((desc, agent));
+    }
+
+    for (desc, agent) in pass2 {
+        for &(hierarchy, key) in desc.parents {
+            let parent = keys.get(key).copied().unwrap();
+            sim.agents.set_parent(hierarchy, parent, agent);
+        }
     }
 }

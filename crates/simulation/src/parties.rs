@@ -63,7 +63,9 @@ impl Parties {
 
     fn set_type(entity: &mut Party, typ: &PartyType) {
         entity.type_id = typ.id;
+        entity.name = typ.name;
         entity.body.size = typ.size;
+        entity.speed = typ.speed;
     }
 
     pub(crate) fn add_type(&mut self) -> &mut PartyType {
@@ -79,6 +81,10 @@ impl Parties {
 
     pub(crate) fn get_type(&self, id: PartyTypeId) -> PartyType {
         self.types.get(id).copied().unwrap_or_default()
+    }
+
+    pub(crate) fn get(&self, id: PartyId) -> Option<&Party> {
+        self.entities.get(id)
     }
 
     pub(crate) fn iter(&self) -> slotmap::basic::Values<'_, PartyId, Party> {
@@ -142,6 +148,7 @@ pub(crate) struct PartyType {
     pub image: &'static str,
     pub name: Name,
     pub size: f32,
+    pub speed: f32,
     pub always_show_name: bool,
     pub layer: usize,
 }
@@ -153,7 +160,6 @@ pub(crate) struct Party {
     pub type_id: PartyTypeId,
     pub body: Body,
     pub speed: f32,
-    pub is_player: bool,
     pub agent: AgentId,
 }
 
@@ -174,30 +180,4 @@ impl Default for MovementTarget {
 pub(crate) struct Body {
     pub pos: V2,
     pub size: f32,
-}
-
-pub(crate) struct PartyAction {
-    pub movement_target: MovementTarget,
-}
-
-pub(crate) fn party_ai(_: &Party, detections: &[Detection], goal: Goal) -> PartyAction {
-    let movement_target = match goal {
-        Goal::Idle => MovementTarget::Immobile,
-        Goal::MoveTo(pos) => MovementTarget::FixedPos(pos),
-        Goal::ToParty { target, distance } => {
-            let close_to_target = detections
-                .iter()
-                .find(|d| target == d.target)
-                .map(|d| d.distance <= distance)
-                .unwrap_or(false);
-
-            if !close_to_target {
-                MovementTarget::Party(target)
-            } else {
-                MovementTarget::Immobile
-            }
-        }
-    };
-
-    PartyAction { movement_target }
 }

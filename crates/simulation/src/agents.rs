@@ -20,11 +20,15 @@ pub(crate) enum Var {
 pub(crate) enum Set {
     People,
     Settlements,
+    Villages,
+    Farmers,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, EnumCount, EnumIter)]
 pub(crate) enum Hierarchy {
+    Attachment,
     FactionMembership,
+    LocalMarket,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, EnumCount, EnumIter)]
@@ -80,7 +84,11 @@ impl Agents {
         }
     }
 
-    pub(crate) fn iter(&self) -> impl Iterator<Item = AgentId> {
+    pub(crate) fn iter(&self) -> impl Iterator<Item = &Agent> {
+        self.entries.values()
+    }
+
+    pub(crate) fn ids(&self) -> impl Iterator<Item = AgentId> {
         self.entries.keys()
     }
 
@@ -122,8 +130,12 @@ impl Agents {
         self.sets[idx].remove(&agent)
     }
 
-    pub fn iter_set(&self, set: Set) -> impl Iterator<Item = AgentId> + use<'_> {
+    pub fn iter_set_ids(&self, set: Set) -> impl Iterator<Item = AgentId> + use<'_> {
         self.sets[set as usize].iter().copied()
+    }
+
+    pub fn iter_set(&self, set: Set) -> impl Iterator<Item = &Agent> + use<'_> {
+        self.iter_set_ids(set).map(|id| &self.entries[id])
     }
 
     pub fn set_parent(&mut self, hierarchy: Hierarchy, parent: AgentId, child: AgentId) {
@@ -143,6 +155,11 @@ impl Agents {
     ) -> impl Iterator<Item = AgentId> + use<'_> {
         let h_data = &self.hierarchies[hierarchy as usize];
         h_data.children_of(parent)
+    }
+
+    pub fn parent_of(&self, hierarchy: Hierarchy, child: AgentId) -> AgentId {
+        let h_data = &self.hierarchies[hierarchy as usize];
+        h_data.parent_of(child)
     }
 
     pub fn set_relationship(
@@ -216,8 +233,24 @@ pub(crate) struct Agent {
     pub id: AgentId,
     pub name: Name,
     pub party: PartyId,
+    pub is_player: bool,
+    pub behavior: Behavior,
     vars: Span,
     sets: BitSet<SET_BITSET_SIZE>,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub enum Behavior {
+    Idle,
+    GoTo(AgentId),
+    Player,
+    Test,
+}
+
+impl Default for Behavior {
+    fn default() -> Self {
+        Self::Idle
+    }
 }
 
 impl Agent {
@@ -749,13 +782,13 @@ mod tests {
         assert!(agents.add_to_set(Set::People, b));
         assert!(!agents.add_to_set(Set::People, a));
 
-        let mut members: Vec<_> = agents.iter_set(Set::People).collect();
+        let mut members: Vec<_> = agents.iter_set_ids(Set::People).collect();
         members.sort();
         assert_eq!(members, vec![a, b]);
 
         assert!(agents.remove_from_set(Set::People, a));
         assert!(!agents.remove_from_set(Set::People, a));
-        let members: Vec<_> = agents.iter_set(Set::People).collect();
+        let members: Vec<_> = agents.iter_set_ids(Set::People).collect();
         assert_eq!(members, vec![b]);
     }
 
@@ -769,7 +802,7 @@ mod tests {
         agents.add_to_set(Set::Settlements, b);
 
         agents.despawn(a);
-        let members: Vec<_> = agents.iter_set(Set::Settlements).collect();
+        let members: Vec<_> = agents.iter_set_ids(Set::Settlements).collect();
         assert_eq!(members, vec![b]);
     }
 
@@ -777,9 +810,9 @@ mod tests {
     fn vars_default_to_zero() {
         let mut agents = Agents::default();
         agents.spawn();
-        let id = agents.iter().next().unwrap();
+        let agent = agents.iter().next().unwrap();
 
-        let vars = agents.vars(id);
+        let vars = agents.vars(agent.id);
         assert_eq!(vars.get(Var::Renown), 0.0);
         assert_eq!(vars.get(Var::Population), 0.0);
         assert_eq!(vars.get(Var::Prosperity), 0.0);
@@ -789,7 +822,7 @@ mod tests {
     fn vars_mut_set_persists() {
         let mut agents = Agents::default();
         agents.spawn();
-        let id = agents.iter().next().unwrap();
+        let id = agents.ids().next().unwrap();
 
         {
             let mut vars = agents.vars_mut(id);
@@ -806,7 +839,7 @@ mod tests {
     fn vars_copy_out_to_vec() {
         let mut agents = Agents::default();
         agents.spawn();
-        let id = agents.iter().next().unwrap();
+        let id = agents.ids().next().unwrap();
 
         {
             let mut vars = agents.vars_mut(id);
@@ -825,7 +858,7 @@ mod tests {
     fn vars_copy_out_mut_is_independent() {
         let mut agents = Agents::default();
         agents.spawn();
-        let id = agents.iter().next().unwrap();
+        let id = agents.ids().next().unwrap();
 
         {
             let mut vars = agents.vars_mut(id);
