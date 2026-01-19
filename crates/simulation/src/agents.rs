@@ -3,7 +3,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use crate::{names::Name, parties::PartyId};
 use slotmap::*;
 use strum::*;
-use util::{bitset::BitSet, span::Span};
+use util::bitset::BitSet;
 
 new_key_type! { pub struct AgentId; }
 
@@ -40,7 +40,6 @@ pub(crate) enum Relationship {
 #[derive(Default)]
 pub(crate) struct Agents {
     entries: SlotMap<AgentId, Agent>,
-    var_storage: VarStorage,
     hierarchies: [HierarchyData; Hierarchy::COUNT],
     relationships: [RelationshipData; Relationship::COUNT],
     sets: [BTreeSet<AgentId>; Set::COUNT],
@@ -49,10 +48,8 @@ pub(crate) struct Agents {
 impl Agents {
     pub(crate) fn spawn(&mut self) -> &mut Agent {
         let id = self.entries.insert(Agent::default());
-        let vars = self.var_storage.alloc();
         let agent = Agent {
             id,
-            vars,
             ..Default::default()
         };
         let entry = &mut self.entries[id];
@@ -67,9 +64,6 @@ impl Agents {
                 return;
             }
         };
-
-        // Add var packs to free lists
-        self.var_storage.free(entity.vars);
 
         for set_idx in entity.sets.iter() {
             self.sets[set_idx].remove(&entity.id);
@@ -101,21 +95,14 @@ impl Agents {
     }
 
     pub fn vars(&self, id: AgentId) -> Vars<'_> {
-        let slice = self
-            .entries
-            .get(id)
-            .map(|agent| agent.vars.view(self.var_storage.inner()))
-            .unwrap_or_default();
-        Vars(slice)
+        self.entries.get(id).map(Agent::vars).unwrap_or_default()
     }
 
     pub fn vars_mut(&mut self, id: AgentId) -> VarsMut<'_> {
-        let slice = self
-            .entries
-            .get(id)
-            .map(|agent| agent.vars.view_mut(self.var_storage.inner_mut()))
-            .unwrap_or_default();
-        VarsMut(slice)
+        self.entries
+            .get_mut(id)
+            .map(Agent::vars_mut)
+            .unwrap_or_default()
     }
 
     pub fn add_to_set(&mut self, set: Set, agent: AgentId) -> bool {
@@ -235,7 +222,7 @@ pub(crate) struct Agent {
     pub party: PartyId,
     pub is_player: bool,
     pub behavior: Behavior,
-    vars: Span,
+    vars: [f64; Var::COUNT],
     sets: BitSet<SET_BITSET_SIZE>,
 }
 
@@ -256,6 +243,14 @@ impl Default for Behavior {
 impl Agent {
     pub(crate) fn in_set(&self, flag: Set) -> bool {
         self.sets.get(flag as usize)
+    }
+
+    pub(crate) fn vars(&self) -> Vars<'_> {
+        Vars(&self.vars)
+    }
+
+    pub(crate) fn vars_mut(&mut self) -> VarsMut<'_> {
+        VarsMut(&mut self.vars)
     }
 }
 
@@ -340,39 +335,6 @@ impl<'a> VarsMut<'a> {
     pub(crate) fn with(mut self, var: Var, value: f64) -> Self {
         self.set(var, value);
         self
-    }
-}
-
-#[derive(Default)]
-struct VarStorage {
-    vars: Vec<f64>,
-    free_list: Vec<Span>,
-}
-
-impl VarStorage {
-    fn alloc(&mut self) -> Span {
-        match self.free_list.pop() {
-            Some(span) => {
-                span.fill_with_copy(&mut self.vars, 0.);
-                span
-            }
-            None => {
-                let zeros = std::iter::repeat_n(0., Var::COUNT);
-                Span::of_extension(&mut self.vars, zeros)
-            }
-        }
-    }
-
-    fn free(&mut self, span: Span) {
-        self.free_list.push(span);
-    }
-
-    fn inner(&self) -> &[f64] {
-        &self.vars
-    }
-
-    fn inner_mut(&mut self) -> &mut [f64] {
-        &mut self.vars
     }
 }
 
@@ -872,5 +834,21 @@ mod tests {
 
         let vars = agents.vars(id);
         assert_eq!(vars.get(Var::Renown), 2.0);
+    }
+
+    #[test]
+    fn vars_agent_methods_are_consistent() {
+        let mut agents = Agents::default();
+        let id = agents.spawn().id;
+
+        {
+            let agent = agents.get_mut(id).unwrap();
+            let mut vars = agent.vars_mut();
+            vars.set(Var::Renown, 4.0);
+        }
+
+        let agent = agents.get(id).unwrap();
+        let vars = agent.vars();
+        assert_eq!(vars.get(Var::Renown), 4.0);
     }
 }
