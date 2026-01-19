@@ -3,7 +3,7 @@ use slotmap::{Key, KeyData};
 use util::string_pool::*;
 
 use crate::{
-    agents::{self, Agent, AgentId, Agents, Behavior, Hierarchy, Location, Var},
+    agents::{self, Agent, AgentId, Agents, Behavior, Hierarchy, Location, Task, TaskKind, Var},
     geom::V2,
     movement::{self, SpatialMap},
     names::Names,
@@ -58,6 +58,10 @@ fn tick(sim: &mut Simulation, mut request: Request, arena: &Bump) -> Response {
 
         spawn_farmers(sim, arena);
         move_farmers(sim, arena);
+
+        if sim.turn_num % 100 == 0 {
+            food_production_and_consumption(sim, arena);
+        }
 
         let mut movement_elements = Vec::with_capacity(sim.parties.len());
 
@@ -287,14 +291,27 @@ fn view(sim: &Simulation, req: &Request, response: &mut Response) {
 
         // Create requested objects
         for view_entity in &req.view_entities {
-            let entity = &sim.parties[view_entity.entity];
+            let party = &sim.parties[view_entity.entity];
             ctx.spawn(|ctx| {
                 let tag = req.strings.get(view_entity.tag);
                 ctx.tag(tag);
-                ctx.display("name", sim.names.resolve(entity.name));
+                ctx.display("name", sim.names.resolve(party.name));
 
-                let vars = sim.agents.vars(entity.agent);
-                ctx.display("renown", vars.get(Var::Renown));
+                let agent = &sim.agents[party.agent];
+
+                ctx.display("food", agent.get_var(Var::Food));
+
+                if agent.in_set(agents::Set::People) {
+                    ctx.display("renown", agent.get_var(Var::Renown));
+                }
+
+                if agent.in_set(agents::Set::Settlements) {
+                    ctx.display("population", agent.get_var(Var::Population));
+                    ctx.fmt(
+                        "prosperity",
+                        format_args!("{:1.2}%", agent.get_var(Var::Prosperity) * 100.),
+                    );
+                }
             });
         }
 
@@ -467,24 +484,92 @@ fn spawn_farmers(sim: &mut Simulation, arena: &Bump) {
 }
 
 fn move_farmers(sim: &mut Simulation, arena: &Bump) {
-    let mut changes = bumpalo::collections::Vec::new_in(arena);
+    let mut behavior_changes = bumpalo::collections::Vec::new_in(arena);
+    let mut var_changes = bumpalo::collections::Vec::new_in(arena);
+    const MIN_CARRIED_FOOD: i64 = 100;
+    const MAX_CARRIED_FOOD: i64 = 500;
+    const MAX_CARRIED_PROP: f64 = 0.5;
 
     for farmer in sim.agents.iter_set(agents::Set::Farmers) {
         let home = sim.agents.parent_of(Hierarchy::Attachment, farmer.id);
         let target = sim.agents.parent_of(Hierarchy::LocalMarket, home);
 
+        let current_food = farmer.get_var(Var::Food) as i64;
+
         // If the farmer is at home, and it has a valid target, move to the target
         if farmer.location == Location::AtAgent(home) && !target.is_null() {
-            changes.push((farmer.id, Behavior::GoTo(target)));
+            let home = &sim.agents[home];
+
+            let mut at_settlement = home.get_var(Var::Food) as i64;
+            // Export up to a fixed proportion of settlement stock, capped by what's available.
+            let max_exportable = (at_settlement as f64 * MAX_CARRIED_PROP)
+                .min(at_settlement as f64)
+                .round() as i64;
+
+            if current_food + max_exportable >= MIN_CARRIED_FOOD {
+                // Load as much as allowed, then shed any excess to respect carrying cap.
+                let mut on_farmer = current_food + max_exportable;
+                let put_down = (on_farmer - MAX_CARRIED_FOOD).max(0);
+                on_farmer -= put_down;
+                // Settlement stock decreases by export, then regains whatever couldn't be carried.
+                at_settlement = at_settlement - max_exportable + put_down;
+
+                var_changes.push((farmer.id, Var::Food, on_farmer as f64));
+                var_changes.push((home.id, Var::Food, at_settlement as f64));
+
+                behavior_changes.push((farmer.id, Behavior::GoTo(target)));
+            }
         } else
         // If the farmer is at the target, comeback home
         if farmer.location == Location::AtAgent(target) {
-            changes.push((farmer.id, Behavior::GoTo(home)));
+            let target = &sim.agents[target];
+            let on_farmer = farmer.get_var(Var::Food) as i64;
+            let on_settlement = target.get_var(Var::Food) as i64;
+            let new_at_settlement = on_farmer + on_settlement;
+
+            var_changes.push((farmer.id, Var::Food, 0.));
+            var_changes.push((target.id, Var::Food, new_at_settlement as f64));
+
+            behavior_changes.push((farmer.id, Behavior::GoTo(home)));
         }
     }
 
-    for (id, behavior) in changes {
+    for (id, behavior) in behavior_changes {
         sim.agents[id].behavior = behavior;
+    }
+
+    for (id, var, value) in var_changes {
+        sim.agents[id].vars_mut().with(var, value);
+    }
+}
+
+fn food_production_and_consumption(sim: &mut Simulation, arena: &Bump) {
+    let mut changes = bumpalo::collections::Vec::new_in(arena);
+    for settlement in sim.agents.iter_set(agents::Set::Settlements) {
+        let mut food = settlement.get_var(Var::Food) as i64;
+        let population = settlement.get_var(Var::Population) as i64;
+        let food_production = 100;
+        let mut max_food = 0;
+        if settlement.in_set(agents::Set::Villages) {
+            max_food += 1000;
+        }
+        if settlement.in_set(agents::Set::Hillforts) {
+            max_food += 10_000;
+        }
+        if settlement.in_set(agents::Set::Towns) {
+            max_food += 10_000;
+        }
+        food = (food + food_production - population).min(max_food);
+        if food < 0 {
+            // Shortfall
+            food = 0;
+        }
+        changes.push((settlement.id, food as f64));
+    }
+
+    for (agent, food) in changes {
+        let agent = &mut sim.agents[agent];
+        agent.vars_mut().with(Var::Food, food);
     }
 }
 

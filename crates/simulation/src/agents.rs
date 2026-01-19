@@ -14,6 +14,7 @@ pub(crate) enum Var {
     /// Settlement
     Population,
     Prosperity,
+    Food,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, EnumCount, EnumIter)]
@@ -21,6 +22,8 @@ pub(crate) enum Set {
     People,
     Settlements,
     Villages,
+    Hillforts,
+    Towns,
     Farmers,
 }
 
@@ -227,6 +230,7 @@ pub(crate) struct Agent {
     pub is_player: bool,
     pub behavior: Behavior,
     pub location: Location,
+    pub task: Task,
     vars: [f64; Var::COUNT],
     sets: BitSet<SET_BITSET_SIZE>,
 }
@@ -242,6 +246,28 @@ pub(crate) enum Location {
 impl Default for Location {
     fn default() -> Self {
         Self::Nowhere
+    }
+}
+
+#[derive(Default, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub(crate) struct Task {
+    pub kind: TaskKind,
+    /// Some tasks have a meaningful source 'location'
+    pub source: AgentId,
+    /// Primary destination of this task
+    pub destination: AgentId,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub(crate) enum TaskKind {
+    Init,
+    DeliverFood,
+    ReturnHome,
+}
+
+impl Default for TaskKind {
+    fn default() -> Self {
+        Self::Init
     }
 }
 
@@ -270,6 +296,10 @@ impl Agent {
 
     pub(crate) fn vars_mut(&mut self) -> VarsMut<'_> {
         VarsMut(&mut self.vars)
+    }
+
+    pub(crate) fn get_var(&self, var: Var) -> f64 {
+        self.vars[var as usize]
     }
 }
 

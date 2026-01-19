@@ -339,9 +339,20 @@ fn gui(ctx: &egui::Context, response: &simulation::Response) {
                     ui.label("Name");
                     ui.label(objs.str(root, "name"));
                     ui.end_row();
-                    ui.label("Renown");
-                    ui.label(objs.str(root, "renown"));
-                    ui.end_row();
+
+                    let vars = [
+                        ("renown", "Renown"),
+                        ("population", "Population"),
+                        ("food", "Food"),
+                        ("prosperity", "Prosperity"),
+                    ];
+                    for (id, label) in vars {
+                        if let Some(value) = objs.try_str(root, id) {
+                            ui.label(label);
+                            ui.label(value);
+                            ui.end_row();
+                        }
+                    }
                 })
         });
     }

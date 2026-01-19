@@ -99,7 +99,7 @@ pub(crate) fn init(sim: &mut Simulation, req: InitRequest) {
             pos: (597., 509.),
             party_typ: "town",
             vars: &[(Var::Prosperity, 0.5)],
-            sets: &[Set::Settlements],
+            sets: &[Set::Settlements, Set::Towns],
             ..Default::default()
         },
         Desc {
@@ -116,7 +116,7 @@ pub(crate) fn init(sim: &mut Simulation, req: InitRequest) {
             pos: (570., 490.),
             party_typ: "hillfort",
             vars: &[(Var::Prosperity, 0.5)],
-            sets: &[Set::Settlements],
+            sets: &[Set::Settlements, Set::Hillforts],
             ..Default::default()
         },
         Desc {
@@ -124,7 +124,7 @@ pub(crate) fn init(sim: &mut Simulation, req: InitRequest) {
             pos: (530., 500.),
             party_typ: "hillfort",
             vars: &[(Var::Prosperity, 0.5)],
-            sets: &[Set::Settlements],
+            sets: &[Set::Settlements, Set::Hillforts],
             ..Default::default()
         },
         Desc {
