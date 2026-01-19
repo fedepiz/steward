@@ -3,7 +3,7 @@ use slotmap::{Key, KeyData};
 use util::string_pool::*;
 
 use crate::{
-    agents::{self, AgentId, Agents, Behavior, Hierarchy, Var},
+    agents::{self, Agent, AgentId, Agents, Behavior, Hierarchy, Location, Var},
     geom::V2,
     movement::{self, SpatialMap},
     names::Names,
@@ -65,7 +65,7 @@ fn tick(sim: &mut Simulation, mut request: Request, arena: &Bump) -> Response {
         for party in sim.parties.iter() {
             let goal = determine_party_goal(sim, party);
 
-            let detection = sim.parties.detections.get(party.id);
+            let detection = sim.parties.detections.get_for(party.id);
 
             let movement_target = determine_party_movement_target(party, detection, goal);
 
@@ -94,8 +94,8 @@ fn tick(sim: &mut Simulation, mut request: Request, arena: &Bump) -> Response {
         );
 
         // Party detection check
+        let spatial_map = &movement_result.spatial_map;
         {
-            let spatial_map = &movement_result.spatial_map;
             let mut detections = std::mem::take(&mut sim.parties.detections);
             self::detections(&mut detections, &sim.parties, spatial_map);
             sim.parties.detections = detections;
@@ -105,10 +105,30 @@ fn tick(sim: &mut Simulation, mut request: Request, arena: &Bump) -> Response {
         {
             let mut positions = movement_result.positions.into_iter();
 
-            for entity in sim.parties.iter_mut() {
+            for party in sim.parties.iter_mut() {
                 let (id, pos) = positions.next().unwrap();
-                assert!(id == entity.id);
-                entity.body.pos = pos;
+                assert!(id == party.id);
+                party.body.pos = pos;
+            }
+        }
+
+        // Determine agent location
+        {
+            let _span = tracing::info_span!("Calculate agent locations").entered();
+            let mut scratch = vec![];
+
+            let output: Vec<_> = sim
+                .agents
+                .iter()
+                .map(|agent| {
+                    let location = location_of_agent(sim, agent, &mut scratch);
+                    (agent.id, location)
+                })
+                .collect();
+
+            // Writeback
+            for (id, location) in output {
+                sim.agents[id].location = location;
             }
         }
     }
@@ -116,6 +136,49 @@ fn tick(sim: &mut Simulation, mut request: Request, arena: &Bump) -> Response {
     let mut response = Response::default();
     view(sim, &request, &mut response);
     response
+}
+
+fn location_of_agent(
+    sim: &Simulation,
+    agent: &Agent,
+    scratch: &mut Vec<(AgentId, f32)>,
+) -> Location {
+    // Disembodied agent has no location
+    if agent.party.is_null() {
+        return Location::Nowhere;
+    }
+
+    // If the agent is a settlement, then it's at a settlement!
+    let party = &sim.parties[agent.party];
+    if party.is_location {
+        return Location::AtAgent(agent.id);
+    }
+
+    // Otherwise, look at the detections, collecting into scratch space
+    let detections = sim.parties.detections.get_for(party.id);
+
+    scratch.clear();
+
+    // Only consider parties in the target set
+    scratch.extend(
+        detections
+            .iter()
+            .filter(|det| !det.location_agent.is_null())
+            .map(|det| (det.location_agent, det.distance)),
+    );
+
+    // Get the closest. If none, we are just "far out"
+    scratch
+        .iter()
+        .min_by_key(|(_, d)| (d * 100.).round() as i64)
+        .map(|&(id, distance)| {
+            if distance <= 0. {
+                Location::AtAgent(id)
+            } else {
+                Location::Near(id)
+            }
+        })
+        .unwrap_or(Location::FarOut)
 }
 
 impl movement::MovementGraph for TerrainMap {
@@ -171,8 +234,8 @@ fn detections(detections: &mut Detections, entities: &Parties, spatial_map: &Spa
 
     let mut scratch = Vec::with_capacity(100);
     for entity in entities.iter() {
-        let detection_range = 1.;
-        let neighbours = spatial_map.search(entity.body.pos, detection_range);
+        const DETECTION_RANGE: f32 = 20.;
+        let neighbours = spatial_map.search(entity.body.pos, DETECTION_RANGE);
         for target in neighbours {
             // Do not look at yourself
             if target == entity.id {
@@ -185,8 +248,15 @@ fn detections(detections: &mut Detections, entities: &Parties, spatial_map: &Spa
             // Distance net of sizes. 0 or lower means collision
             let distance = center_to_center_distance - collision_range;
 
+            let location_agent = if target.is_location {
+                target.agent
+            } else {
+                AgentId::null()
+            };
+
             scratch.push(Detection {
                 target: target.id,
+                location_agent,
                 distance,
             });
         }
@@ -385,6 +455,9 @@ fn spawn_farmers(sim: &mut Simulation, arena: &Bump) {
 
         // Tie agent and party together
         agent.party = party.id;
+        // NOTE: This should ideally be auto-computed, but that means moving spawns around.
+        // Spawning should ideally not happen here anyways.
+        agent.location = Location::AtAgent(center);
         party.agent = agent.id;
 
         let agent = agent.id;
@@ -400,9 +473,12 @@ fn move_farmers(sim: &mut Simulation, arena: &Bump) {
         let home = sim.agents.parent_of(Hierarchy::Attachment, farmer.id);
         let target = sim.agents.parent_of(Hierarchy::LocalMarket, home);
 
-        if same_agent_position(sim, farmer.id, home) && !target.is_null() {
+        // If the farmer is at home, and it has a valid target, move to the target
+        if farmer.location == Location::AtAgent(home) && !target.is_null() {
             changes.push((farmer.id, Behavior::GoTo(target)));
-        } else if same_agent_position(sim, farmer.id, target) {
+        } else
+        // If the farmer is at the target, comeback home
+        if farmer.location == Location::AtAgent(target) {
             changes.push((farmer.id, Behavior::GoTo(home)));
         }
     }
@@ -410,21 +486,6 @@ fn move_farmers(sim: &mut Simulation, arena: &Bump) {
     for (id, behavior) in changes {
         sim.agents[id].behavior = behavior;
     }
-}
-
-fn same_agent_position(sim: &Simulation, id1: AgentId, id2: AgentId) -> bool {
-    if id1.is_null() || id2.is_null() {
-        return false;
-    }
-    let p1 = sim
-        .parties
-        .get(sim.agents[id1].party)
-        .map(|party| party.body.pos);
-    let p2 = sim
-        .parties
-        .get(sim.agents[id2].party)
-        .map(|party| party.body.pos);
-    p1.is_some() && p1 == p2
 }
 
 fn determine_party_goal(sim: &Simulation, party: &Party) -> Goal {

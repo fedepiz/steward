@@ -133,6 +133,7 @@ pub(crate) fn init(sim: &mut Simulation, req: InitRequest) {
             party_typ: "village",
             vars: &[(Var::Prosperity, 0.5)],
             sets: &[Set::Settlements, Set::Villages],
+            parents: &[(Hierarchy::LocalMarket, "caer_ligualid")],
             ..Default::default()
         },
         Desc {
@@ -141,6 +142,7 @@ pub(crate) fn init(sim: &mut Simulation, req: InitRequest) {
             party_typ: "village",
             vars: &[(Var::Prosperity, 0.5)],
             sets: &[Set::Settlements, Set::Villages],
+            parents: &[(Hierarchy::LocalMarket, "caer_ligualid")],
             ..Default::default()
         },
         Desc {
@@ -149,6 +151,7 @@ pub(crate) fn init(sim: &mut Simulation, req: InitRequest) {
             party_typ: "village",
             vars: &[(Var::Prosperity, 0.5)],
             sets: &[Set::Settlements, Set::Villages],
+            parents: &[(Hierarchy::LocalMarket, "caer_ligualid")],
             ..Default::default()
         },
         Desc {
@@ -192,6 +195,10 @@ pub(crate) fn init(sim: &mut Simulation, req: InitRequest) {
         };
         agent.party = party.id;
         party.agent = agent.id;
+
+        // Settlements are locations
+        party.is_location = desc.sets.contains(&Set::Settlements);
+
         let agent = agent.id;
 
         sim.agents.vars_mut(agent).set_many(desc.vars);

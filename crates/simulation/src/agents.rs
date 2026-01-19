@@ -78,11 +78,15 @@ impl Agents {
         }
     }
 
-    pub(crate) fn iter(&self) -> impl Iterator<Item = &Agent> {
+    pub(crate) fn iter(&self) -> impl Iterator<Item = &Agent> + ExactSizeIterator {
         self.entries.values()
     }
 
-    pub(crate) fn ids(&self) -> impl Iterator<Item = AgentId> {
+    pub(crate) fn len(&self) -> usize {
+        self.entries.len()
+    }
+
+    pub(crate) fn ids(&self) -> impl Iterator<Item = AgentId> + ExactSizeIterator {
         self.entries.keys()
     }
 
@@ -222,8 +226,23 @@ pub(crate) struct Agent {
     pub party: PartyId,
     pub is_player: bool,
     pub behavior: Behavior,
+    pub location: Location,
     vars: [f64; Var::COUNT],
     sets: BitSet<SET_BITSET_SIZE>,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug)]
+pub(crate) enum Location {
+    Nowhere,
+    FarOut,
+    AtAgent(AgentId),
+    Near(AgentId),
+}
+
+impl Default for Location {
+    fn default() -> Self {
+        Self::Nowhere
+    }
 }
 
 #[derive(Clone, Copy, Debug)]

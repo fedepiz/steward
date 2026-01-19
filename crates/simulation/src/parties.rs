@@ -32,7 +32,7 @@ impl Detections {
         self.spans.insert(id, span);
     }
 
-    pub(crate) fn get(&self, id: PartyId) -> &[Detection] {
+    pub(crate) fn get_for(&self, id: PartyId) -> &[Detection] {
         self.spans
             .get(id)
             .map(|span| span.view(&self.data))
@@ -44,6 +44,7 @@ impl Detections {
 pub(crate) struct Detection {
     pub target: PartyId,
     pub distance: f32,
+    pub location_agent: AgentId,
 }
 
 impl Parties {
@@ -161,6 +162,8 @@ pub(crate) struct Party {
     pub body: Body,
     pub speed: f32,
     pub agent: AgentId,
+    // Is this the kind of party which is a 'location'?
+    pub is_location: bool,
 }
 
 #[derive(Clone, Copy, PartialEq, PartialOrd)]
