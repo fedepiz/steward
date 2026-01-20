@@ -56,7 +56,7 @@ fn tick(sim: &mut Simulation, mut request: Request, arena: &Bump) -> Response {
         }
     }
 
-    if request.advance_time {
+    for _ in 0..request.advance_ticks {
         sim.turn_num = sim.turn_num.wrapping_add(1);
 
         spawn_worker(
@@ -261,7 +261,7 @@ impl movement::MovementGraph for TerrainMap {
 #[derive(Default)]
 pub struct Request {
     pub init: Option<InitRequest>,
-    pub advance_time: bool,
+    pub advance_ticks: u32,
     pub move_to_pos: Option<(f32, f32)>,
     pub move_to_item: Option<MapItemId>,
     pub highlighted_item: Option<MapItemId>,

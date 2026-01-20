@@ -184,7 +184,30 @@ async fn amain() {
             has_tick
         };
 
-        request.advance_time = has_tick && !is_paused && !reload && !sim_actor.has_critical_error();
+        let is_fast_forward = {
+            let ctrl = mq::is_key_down(mq::KeyCode::LeftControl)
+                || mq::is_key_down(mq::KeyCode::RightControl);
+            let shift = mq::is_key_down(mq::KeyCode::LeftShift)
+                || mq::is_key_down(mq::KeyCode::RightShift);
+            let mut mult = 1;
+            if ctrl {
+                mult *= 2;
+            }
+            if shift {
+                mult *= 5;
+            }
+            mult
+        };
+
+        request.advance_ticks = if has_tick
+            && !is_paused
+            && !reload
+            && !sim_actor.has_critical_error()
+        {
+            is_fast_forward as u32
+        } else {
+            0
+        };
 
         request.highlighted_item = selected_item;
 
@@ -271,10 +294,15 @@ async fn amain() {
         egui_macroquad::draw();
 
         {
+            let mut speed_text = bumpalo::collections::String::new_in(&arena);
             let (text, color) = if sim_actor.has_critical_error() {
                 ("Critical Error", mq::RED)
             } else if is_paused {
                 ("Paused", mq::WHITE)
+            } else if is_fast_forward > 1 {
+                use std::fmt::Write;
+                let _ = write!(&mut speed_text, "Speed {}x", is_fast_forward);
+                (speed_text.as_str(), mq::WHITE)
             } else {
                 ("", mq::WHITE)
             };
