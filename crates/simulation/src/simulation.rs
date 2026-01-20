@@ -79,7 +79,8 @@ fn tick(sim: &mut Simulation, mut request: Request, arena: &Bump) -> Response {
 
         agent_tasking(sim, arena);
 
-        if sim.turn_num % 100 == 0 {
+        const ECONOMY_TICK_RATE: usize = 200;
+        if sim.turn_num % ECONOMY_TICK_RATE == 0 {
             food_production_and_consumption(sim, arena);
             // Food stock sets the target population; this nudges population toward that target.
             population_from_food(sim, arena);
@@ -380,8 +381,6 @@ fn view(sim: &Simulation, req: &Request, response: &mut Response) {
                         format_args!("{:1.2}%", agent.get_var(Var::Prosperity) * 100.),
                     );
                 }
-
-                ctx.display("location", format_args!("{:?}", agent.location));
             });
         }
 
@@ -746,6 +745,8 @@ fn agent_tasking(sim: &mut Simulation, arena: &Bump) {
     }
 }
 
+const SHORT_WAIT: u32 = 20;
+
 fn farmer_tasking(kind: TaskKind) -> Task {
     match kind {
         TaskKind::Init => Task {
@@ -757,15 +758,7 @@ fn farmer_tasking(kind: TaskKind) -> Task {
             kind: TaskKind::Load,
             destination: TaskDestination::Home,
             interaction: TaskInteraction::with(Interaction::LoadFood),
-            ..Default::default()
-        },
-        TaskKind::Deliver => Task {
-            kind: TaskKind::ReturnHome,
-            destination: TaskDestination::Home,
-            interaction: TaskInteraction::new(&[
-                Interaction::IncreaseProsperity,
-                Interaction::ResetProsperityBonus,
-            ]),
+            arrival_wait: SHORT_WAIT,
             ..Default::default()
         },
         TaskKind::Load => Task {
@@ -775,6 +768,16 @@ fn farmer_tasking(kind: TaskKind) -> Task {
             interaction: TaskInteraction::new(&[
                 Interaction::UnloadFood,
                 Interaction::LoadProsperityBonus,
+            ]),
+            arrival_wait: SHORT_WAIT,
+            ..Default::default()
+        },
+        TaskKind::Deliver => Task {
+            kind: TaskKind::ReturnHome,
+            destination: TaskDestination::Home,
+            interaction: TaskInteraction::new(&[
+                Interaction::IncreaseProsperity,
+                Interaction::ResetProsperityBonus,
             ]),
             ..Default::default()
         },
@@ -792,6 +795,14 @@ fn miner_tasking(kind: TaskKind) -> Task {
             kind: TaskKind::Load,
             destination: TaskDestination::Home,
             interaction: TaskInteraction::default(),
+            arrival_wait: SHORT_WAIT,
+            ..Default::default()
+        },
+        TaskKind::Load => Task {
+            kind: TaskKind::Deliver,
+            destination: TaskDestination::MarketOfHome,
+            interaction: TaskInteraction::with(Interaction::IncreaseProsperity),
+            arrival_wait: SHORT_WAIT,
             ..Default::default()
         },
         TaskKind::Deliver => Task {
@@ -799,16 +810,20 @@ fn miner_tasking(kind: TaskKind) -> Task {
             destination: TaskDestination::Home,
             ..Default::default()
         },
-        TaskKind::Load => Task {
-            kind: TaskKind::Deliver,
-            destination: TaskDestination::MarketOfHome,
-            interaction: TaskInteraction::with(Interaction::IncreaseProsperity),
-            ..Default::default()
-        },
     }
 }
 
-fn task_for_agent(sim: &Simulation, subject: &Agent, mut task: Task) -> (Task, AgentId, Behavior) {
+#[derive(Default, Clone, Copy)]
+struct Destination {
+    target: AgentId,
+    enter: bool,
+}
+
+fn task_for_agent(
+    sim: &Simulation,
+    subject: &Agent,
+    mut task: Task,
+) -> (Task, Destination, Behavior) {
     // Retask when initializing or once the current task is complete.
     let retask = task.kind == TaskKind::Init || task.is_complete;
     if retask {
@@ -823,31 +838,38 @@ fn task_for_agent(sim: &Simulation, subject: &Agent, mut task: Task) -> (Task, A
     }
 
     // Resolve the concrete target for the task's symbolic destination.
-    let (destination, enter_on_arrival) = match task.destination {
-        TaskDestination::Nothing => (AgentId::null(), false),
-        TaskDestination::Home => (
-            sim.agents.parent_of(Hierarchy::Attachment, subject.id),
-            false,
-        ),
+    let destination = match task.destination {
+        TaskDestination::Nothing => Destination::default(),
+        TaskDestination::Home => {
+            let target = sim.agents.parent_of(Hierarchy::Attachment, subject.id);
+            Destination {
+                target,
+                enter: true,
+            }
+        }
         TaskDestination::MarketOfHome => {
             let home = sim.agents.parent_of(Hierarchy::Attachment, subject.id);
-            (sim.agents.parent_of(Hierarchy::LocalMarket, home), true)
+            let target = sim.agents.parent_of(Hierarchy::LocalMarket, home);
+            Destination {
+                target,
+                enter: true,
+            }
         }
     };
 
     // Reset task if destination is not valid
-    let is_valid = !destination.is_null();
+    let is_valid = !destination.target.is_null();
     if !is_valid {
-        return (Task::default(), AgentId::null(), Behavior::Idle);
+        return (Task::default(), destination, Behavior::Idle);
     }
 
     // Behavior is driven by the task destination.
-    let behavior = if destination.is_null() {
+    let behavior = if destination.target.is_null() {
         subject.behavior
     } else {
         Behavior::GoTo {
-            target: destination,
-            enter_on_arrival: enter_on_arrival,
+            target: destination.target,
+            enter_on_arrival: destination.enter,
         }
     };
 
@@ -857,17 +879,30 @@ fn task_for_agent(sim: &Simulation, subject: &Agent, mut task: Task) -> (Task, A
 fn resolve_task_effects(
     sim: &mut Simulation,
     subject: AgentId,
-    destination: AgentId,
+    destination: Destination,
     task: &mut Task,
 ) {
-    let at_destination = !destination.is_null() && sim.agents[subject].location.is_at(destination);
+    let target = destination.target;
+    let at_destination = !target.is_null() && {
+        let location = sim.agents[subject].location;
+        if destination.enter {
+            location == Location::Inside(target)
+        } else {
+            location.is_at(target)
+        }
+    };
 
     if !at_destination {
         return;
     }
 
+    if task.arrival_wait > 0 {
+        task.arrival_wait = task.arrival_wait.saturating_sub(1);
+        return;
+    }
+
     for interaction in task.interaction.iter_active() {
-        let is_complete = handle_interaction(sim, interaction, subject, destination);
+        let is_complete = handle_interaction(sim, interaction, subject, destination.target);
         if is_complete {
             task.interaction.set(interaction, false);
         }
@@ -880,16 +915,16 @@ fn handle_interaction(
     sim: &mut Simulation,
     interaction: Interaction,
     subject: AgentId,
-    destination: AgentId,
+    target: AgentId,
 ) -> bool {
     match interaction {
         Interaction::UnloadFood => {
             let on_farmer = sim.agents[subject].get_var(Var::FoodStored) as i64;
-            let on_settlement = sim.agents[destination].get_var(Var::FoodStored) as i64;
+            let on_settlement = sim.agents[target].get_var(Var::FoodStored) as i64;
             let new_at_settlement = on_farmer + on_settlement;
 
             sim.agents[subject].vars_mut().with(Var::FoodStored, 0.);
-            sim.agents[destination]
+            sim.agents[target]
                 .vars_mut()
                 .with(Var::FoodStored, new_at_settlement as f64);
             true
@@ -900,7 +935,7 @@ fn handle_interaction(
             const MAX_CARRIED_PROP: f64 = 0.5;
 
             let current_food = sim.agents[subject].get_var(Var::FoodStored) as i64;
-            let mut at_settlement = sim.agents[destination].get_var(Var::FoodStored) as i64;
+            let mut at_settlement = sim.agents[target].get_var(Var::FoodStored) as i64;
             let max_exportable = (at_settlement as f64 * MAX_CARRIED_PROP)
                 .min(at_settlement as f64)
                 .round() as i64;
@@ -914,7 +949,7 @@ fn handle_interaction(
                 sim.agents[subject]
                     .vars_mut()
                     .with(Var::FoodStored, on_farmer as f64);
-                sim.agents[destination]
+                sim.agents[target]
                     .vars_mut()
                     .with(Var::FoodStored, at_settlement as f64);
                 true
@@ -925,7 +960,7 @@ fn handle_interaction(
         Interaction::LoadProsperityBonus => {
             // Capture town prosperity as a bonus to be applied when returning home.
             const PROSPERITY_BONUS_SCALE: f64 = 0.025;
-            let prosperity = sim.agents[destination].get_var(Var::Prosperity);
+            let prosperity = sim.agents[target].get_var(Var::Prosperity);
             let bonus = (prosperity * PROSPERITY_BONUS_SCALE).max(0.0);
             sim.agents[subject]
                 .vars_mut()
@@ -934,7 +969,7 @@ fn handle_interaction(
         }
         Interaction::IncreaseProsperity => {
             let value = sim.agents[subject].get_var(Var::ProsperityBonus);
-            sim.agents[destination]
+            sim.agents[target]
                 .vars_mut()
                 .modify(Var::Prosperity, |x| x + value);
             true

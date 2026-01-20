@@ -306,6 +306,8 @@ pub(crate) struct Task {
     pub destination: TaskDestination,
     /// Interaction to be performed at destination
     pub interaction: TaskInteraction,
+    /// Ticks to wait after arrival before interactions can resolve.
+    pub arrival_wait: u32,
     /// Has the task actually been accomplished?
     pub is_complete: bool,
 }
