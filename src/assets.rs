@@ -48,7 +48,8 @@ impl Assets {
     pub(crate) fn apply_event(&mut self, event: Event) {
         match event.kind {
             AssetKind::Texture => {
-                let texture = mq::Texture2D::from_file_with_format(&event.bytes, None);
+                let texture =
+                    mq::Texture2D::from_file_with_format(&event.bytes, Some(mq::ImageFormat::Png));
                 self.textures.insert(event.name, texture);
             }
             AssetKind::Font => {
@@ -114,6 +115,10 @@ fn load_dir(base: &Path, kind: AssetKind, tx: &Sender<Event>) {
     collect_files(base, &mut files);
 
     for path in files {
+        if !is_allowed_extension(kind, &path) {
+            continue;
+        }
+
         let key = match asset_key(base, &path) {
             Some(key) => key,
             None => {
@@ -151,6 +156,18 @@ fn collect_files(dir: &Path, out: &mut Vec<PathBuf>) {
         } else if path.is_file() {
             out.push(path);
         }
+    }
+}
+
+fn is_allowed_extension(kind: AssetKind, path: &Path) -> bool {
+    let ext = match path.extension().and_then(|ext| ext.to_str()) {
+        Some(ext) => ext.to_ascii_lowercase(),
+        None => return false,
+    };
+
+    match kind {
+        AssetKind::Texture => ext == "png",
+        AssetKind::Font => ext == "ttf" || ext == "otf",
     }
 }
 

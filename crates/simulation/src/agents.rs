@@ -20,16 +20,19 @@ pub(crate) enum Var {
 
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, EnumCount, EnumIter)]
 pub(crate) enum Set {
+    Locations,
     People,
     Settlements,
     Villages,
     Hillforts,
     Towns,
+    Mines,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, EnumCount, EnumIter)]
 pub(crate) enum Flag {
     IsFarmer,
+    IsMiner,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, EnumCount, EnumIter)]
@@ -273,11 +276,11 @@ pub(crate) struct Task {
     pub is_complete: bool,
 }
 
-#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug)]
 pub(crate) enum TaskKind {
     Init,
-    DeliverFood,
-    LoadFood,
+    Deliver,
+    Load,
     ReturnHome,
 }
 
@@ -365,26 +368,6 @@ impl Vars<'_> {
 
     pub(crate) fn copy_out_mut<'a>(&self, alloc: impl VarAllocator<'a>) -> VarsMut<'a> {
         alloc.host_vars(self)
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn agent_flags_default_false() {
-        let agent = Agent::default();
-        assert!(!agent.get_flag(Flag::IsFarmer));
-    }
-
-    #[test]
-    fn agent_flags_set_and_clear() {
-        let mut agent = Agent::default();
-        agent.set_flag(Flag::IsFarmer, true);
-        assert!(agent.get_flag(Flag::IsFarmer));
-        agent.set_flag(Flag::IsFarmer, false);
-        assert!(!agent.get_flag(Flag::IsFarmer));
     }
 }
 
@@ -962,5 +945,20 @@ mod tests {
         let agent = agents.get(id).unwrap();
         let vars = agent.vars();
         assert_eq!(vars.get(Var::Renown), 4.0);
+    }
+
+    #[test]
+    fn agent_flags_default_false() {
+        let agent = Agent::default();
+        assert!(!agent.get_flag(Flag::IsFarmer));
+    }
+
+    #[test]
+    fn agent_flags_set_and_clear() {
+        let mut agent = Agent::default();
+        agent.set_flag(Flag::IsFarmer, true);
+        assert!(agent.get_flag(Flag::IsFarmer));
+        agent.set_flag(Flag::IsFarmer, false);
+        assert!(!agent.get_flag(Flag::IsFarmer));
     }
 }

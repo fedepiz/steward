@@ -59,6 +59,7 @@ fn tick(sim: &mut Simulation, mut request: Request, arena: &Bump) -> Response {
         sim.turn_num = sim.turn_num.wrapping_add(1);
 
         spawn_farmers(sim, arena);
+        spawn_miners(sim, arena);
         agent_tasking(sim, arena);
 
         if sim.turn_num % 100 == 0 {
@@ -494,6 +495,49 @@ fn spawn_farmers(sim: &mut Simulation, arena: &Bump) {
         sim.agents.set_parent(Hierarchy::Attachment, center, agent);
     }
 }
+
+fn spawn_miners(sim: &mut Simulation, arena: &Bump) {
+    let mut spawns = AVec::new_in(arena);
+    let party_typ = sim.parties.find_type_by_tag("miners").unwrap().id;
+
+    for agent in sim.agents.iter_set(crate::agents::Set::Mines) {
+        // Check for all the dependents
+        let dependents = sim.agents.children_of(Hierarchy::Attachment, agent.id);
+        // Do we have a farmer?
+        let has_miner = dependents
+            .into_iter()
+            .any(|child| sim.agents[child].get_flag(agents::Flag::IsMiner));
+
+        // If we do not have a farmer, we will need to spawn one
+        if !has_miner {
+            let party = &sim.parties[agent.party];
+            spawns.push((agent.id, party.body.pos));
+        }
+    }
+
+    // Spawn the farmers as necessary
+    for (center, pos) in spawns {
+        // Spawn agent (now ihere, later floated out)
+        let party = sim.parties.spawn_with_type(party_typ);
+        party.body.pos = pos;
+
+        let agent = sim.agents.spawn();
+        agent.name = party.name;
+
+        // Tie agent and party together
+        agent.party = party.id;
+        // NOTE: This should ideally be auto-computed, but that means moving spawns around.
+        // Spawning should ideally not happen here anyways.
+        agent.location = Location::AtAgent(center);
+        agent.set_flag(agents::Flag::IsMiner, true);
+
+        party.agent = agent.id;
+
+        let agent = agent.id;
+        sim.agents.set_parent(Hierarchy::Attachment, center, agent);
+    }
+}
+
 fn food_production_and_consumption(sim: &mut Simulation, arena: &Bump) {
     const CONSUMPTION_PER_HEAD: f64 = 0.01;
     let mut changes = AVec::new_in(arena);
@@ -605,7 +649,7 @@ fn farmer_tasking(kind: TaskKind) -> Task {
             ..Default::default()
         },
         TaskKind::ReturnHome => Task {
-            kind: TaskKind::LoadFood,
+            kind: TaskKind::Load,
             destination: TaskDestination::Home,
             interaction: TaskInteraction {
                 load_food: true,
@@ -613,16 +657,47 @@ fn farmer_tasking(kind: TaskKind) -> Task {
             },
             ..Default::default()
         },
-        TaskKind::DeliverFood => Task {
+        TaskKind::Deliver => Task {
             kind: TaskKind::ReturnHome,
             destination: TaskDestination::Home,
             ..Default::default()
         },
-        TaskKind::LoadFood => Task {
-            kind: TaskKind::DeliverFood,
+        TaskKind::Load => Task {
+            kind: TaskKind::Deliver,
             destination: TaskDestination::MarketOfHome,
             interaction: TaskInteraction {
                 unload_food: true,
+                ..Default::default()
+            },
+            ..Default::default()
+        },
+    }
+}
+
+fn miner_tasking(kind: TaskKind) -> Task {
+    match kind {
+        TaskKind::Init => Task {
+            kind: TaskKind::ReturnHome,
+            destination: TaskDestination::Home,
+            ..Default::default()
+        },
+        TaskKind::ReturnHome => Task {
+            kind: TaskKind::Load,
+            destination: TaskDestination::Home,
+            interaction: TaskInteraction {
+                ..Default::default()
+            },
+            ..Default::default()
+        },
+        TaskKind::Deliver => Task {
+            kind: TaskKind::ReturnHome,
+            destination: TaskDestination::Home,
+            ..Default::default()
+        },
+        TaskKind::Load => Task {
+            kind: TaskKind::Deliver,
+            destination: TaskDestination::MarketOfHome,
+            interaction: TaskInteraction {
                 ..Default::default()
             },
             ..Default::default()
@@ -637,6 +712,8 @@ fn task_for_agent(sim: &Simulation, subject: &Agent, mut task: Task) -> (Task, A
         let is_farmer = subject.get_flag(agents::Flag::IsFarmer);
         task = if is_farmer {
             farmer_tasking(task.kind)
+        } else if subject.get_flag(agents::Flag::IsMiner) {
+            miner_tasking(task.kind)
         } else {
             Task::default()
         };

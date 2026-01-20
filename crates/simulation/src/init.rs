@@ -8,14 +8,21 @@ use crate::{geom::*, terrain_map};
 pub(crate) fn init(sim: &mut Simulation, req: InitRequest) {
     sim.terrain_map = terrain_map::init(&req.elevations, req.map_width, req.map_height);
 
+    const BASE_SPEED: f32 = 2.;
+    const WALK_SPEED: f32 = 1.;
+
+    const LOCATION_SETS: &[Set] = &[Set::Settlements, Set::Mines];
+
+    const SIZE_SMALL: f32 = 2.;
+
     {
         let typ = sim.parties.add_type();
         typ.tag = "person";
         typ.image = "pawns/person";
         typ.name = Name::simple(sim.names.define("Person"));
-        typ.size = 2.0;
+        typ.size = SIZE_SMALL;
         typ.layer = 1;
-        typ.speed = 2.;
+        typ.speed = BASE_SPEED;
     }
 
     {
@@ -23,9 +30,30 @@ pub(crate) fn init(sim: &mut Simulation, req: InitRequest) {
         typ.tag = "farmers";
         typ.image = "pawns/farmers";
         typ.name = Name::simple(sim.names.define("Farmers"));
+        typ.size = SIZE_SMALL;
         typ.speed = 1.;
-        typ.size = 2.0;
         typ.layer = 1;
+        typ.speed = WALK_SPEED;
+    }
+
+    {
+        let typ = sim.parties.add_type();
+        typ.tag = "miners";
+        typ.image = "pawns/miners";
+        typ.name = Name::simple(sim.names.define("Miners"));
+        typ.size = SIZE_SMALL;
+        typ.layer = 1;
+        typ.speed = WALK_SPEED;
+    }
+
+    {
+        let typ = sim.parties.add_type();
+        typ.tag = "mine";
+        typ.image = "pawns/mine";
+        typ.name = Name::simple(sim.names.define("Mine"));
+        typ.speed = 0.;
+        typ.size = 2.5;
+        typ.layer = 0;
     }
 
     {
@@ -203,6 +231,14 @@ pub(crate) fn init(sim: &mut Simulation, req: InitRequest) {
             sets: &[Set::Settlements],
             ..Default::default()
         },
+        Desc {
+            name: "Lligwy Mine",
+            pos: (600., 522.),
+            party_typ: "mine",
+            sets: &[Set::Mines],
+            parents: &[(Hierarchy::LocalMarket, "caer_ligualid")],
+            ..Default::default()
+        },
     ];
 
     let player_name = Name::simple(sim.names.define("Player"));
@@ -238,7 +274,7 @@ pub(crate) fn init(sim: &mut Simulation, req: InitRequest) {
         party.agent = agent.id;
 
         // Settlements are locations
-        party.is_location = desc.sets.contains(&Set::Settlements);
+        party.is_location = LOCATION_SETS.iter().any(|set| desc.sets.contains(set));
 
         let agent = agent.id;
 
@@ -246,6 +282,9 @@ pub(crate) fn init(sim: &mut Simulation, req: InitRequest) {
 
         for &set in desc.sets {
             sim.agents.add_to_set(set, agent);
+        }
+        if party.is_location {
+            sim.agents.add_to_set(Set::Locations, agent);
         }
 
         party.agent = agent;
