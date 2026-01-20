@@ -58,8 +58,22 @@ fn tick(sim: &mut Simulation, mut request: Request, arena: &Bump) -> Response {
     if request.advance_time {
         sim.turn_num = sim.turn_num.wrapping_add(1);
 
-        spawn_farmers(sim, arena);
-        spawn_miners(sim, arena);
+        spawn_worker(
+            sim,
+            arena,
+            agents::Set::Villages,
+            agents::Flag::IsFarmer,
+            "farmers",
+        );
+
+        spawn_worker(
+            sim,
+            arena,
+            agents::Set::Mines,
+            agents::Flag::IsMiner,
+            "miners",
+        );
+
         agent_tasking(sim, arena);
 
         if sim.turn_num % 100 == 0 {
@@ -454,88 +468,68 @@ pub struct MapTerrain {
     pub tiles: Vec<(u8, u8, u8)>,
 }
 
-fn spawn_farmers(sim: &mut Simulation, arena: &Bump) {
+fn spawn_worker(
+    sim: &mut Simulation,
+    arena: &Bump,
+    source_set: agents::Set,
+    worker_flag: agents::Flag,
+    party_type: &str,
+) {
     let mut spawns = AVec::new_in(arena);
-    let farmer_type = sim.parties.find_type_by_tag("farmers").unwrap().id;
+    let party_type = sim.parties.find_type_by_tag(party_type).unwrap().id;
 
-    for agent in sim.agents.iter_set(crate::agents::Set::Villages) {
+    for agent in sim.agents.iter_set(source_set) {
         // Check for all the dependents
         let dependents = sim.agents.children_of(Hierarchy::Attachment, agent.id);
-        // Do we have a farmer?
-        let has_farmer = dependents
+        // Do we have a worker?
+        let has_worker = dependents
             .into_iter()
-            .any(|child| sim.agents[child].get_flag(agents::Flag::IsFarmer));
+            .any(|child| sim.agents[child].flags.get(worker_flag));
 
-        // If we do not have a farmer, we will need to spawn one
-        if !has_farmer {
-            let party = &sim.parties[agent.party];
-            spawns.push((agent.id, party.body.pos));
+        // If we do not have a worker, we will need to spawn one
+        if !has_worker {
+            let spawn = SpawnSubagent {
+                party_type,
+                parent: agent.id,
+                flags: Flags::default().with(worker_flag),
+            };
+            spawns.push(spawn);
         }
     }
 
-    // Spawn the farmers as necessary
-    for (center, pos) in spawns {
-        // Spawn agent (now ihere, later floated out)
-        let party = sim.parties.spawn_with_type(farmer_type);
-        party.body.pos = pos;
-
-        let agent = sim.agents.spawn();
-        agent.name = party.name;
-
-        // Tie agent and party together
-        agent.party = party.id;
-        // NOTE: This should ideally be auto-computed, but that means moving spawns around.
-        // Spawning should ideally not happen here anyways.
-        agent.location = Location::AtAgent(center);
-        agent.set_flag(agents::Flag::IsFarmer, true);
-
-        party.agent = agent.id;
-
-        let agent = agent.id;
-        sim.agents.set_parent(Hierarchy::Attachment, center, agent);
+    // Spawn the miners as necessary
+    for spawn in spawns {
+        spawn_subagent(sim, spawn);
     }
 }
 
-fn spawn_miners(sim: &mut Simulation, arena: &Bump) {
-    let mut spawns = AVec::new_in(arena);
-    let party_typ = sim.parties.find_type_by_tag("miners").unwrap().id;
+struct SpawnSubagent {
+    party_type: PartyTypeId,
+    parent: AgentId,
+    flags: Flags,
+}
 
-    for agent in sim.agents.iter_set(crate::agents::Set::Mines) {
-        // Check for all the dependents
-        let dependents = sim.agents.children_of(Hierarchy::Attachment, agent.id);
-        // Do we have a farmer?
-        let has_miner = dependents
-            .into_iter()
-            .any(|child| sim.agents[child].get_flag(agents::Flag::IsMiner));
+fn spawn_subagent(sim: &mut Simulation, spawn: SpawnSubagent) {
+    // Spawn agent (now ihere, later floated out)
+    let pos = sim.parties[sim.agents[spawn.parent].party].body.pos;
+    let party = sim.parties.spawn_with_type(spawn.party_type);
+    party.body.pos = pos;
 
-        // If we do not have a farmer, we will need to spawn one
-        if !has_miner {
-            let party = &sim.parties[agent.party];
-            spawns.push((agent.id, party.body.pos));
-        }
-    }
+    let agent = sim.agents.spawn();
+    agent.name = party.name;
 
-    // Spawn the farmers as necessary
-    for (center, pos) in spawns {
-        // Spawn agent (now ihere, later floated out)
-        let party = sim.parties.spawn_with_type(party_typ);
-        party.body.pos = pos;
+    // Tie agent and party together
+    agent.party = party.id;
+    // NOTE: This should ideally be auto-computed, but that means moving spawns around.
+    // Spawning should ideally not happen here anyways.
+    agent.location = Location::AtAgent(spawn.parent);
+    agent.flags = spawn.flags;
 
-        let agent = sim.agents.spawn();
-        agent.name = party.name;
+    party.agent = agent.id;
 
-        // Tie agent and party together
-        agent.party = party.id;
-        // NOTE: This should ideally be auto-computed, but that means moving spawns around.
-        // Spawning should ideally not happen here anyways.
-        agent.location = Location::AtAgent(center);
-        agent.set_flag(agents::Flag::IsMiner, true);
-
-        party.agent = agent.id;
-
-        let agent = agent.id;
-        sim.agents.set_parent(Hierarchy::Attachment, center, agent);
-    }
+    let agent = agent.id;
+    sim.agents
+        .set_parent(Hierarchy::Attachment, spawn.parent, agent);
 }
 
 fn food_production_and_consumption(sim: &mut Simulation, arena: &Bump) {
@@ -709,10 +703,10 @@ fn task_for_agent(sim: &Simulation, subject: &Agent, mut task: Task) -> (Task, A
     // Retask when initializing or once the current task is complete.
     let retask = task.kind == TaskKind::Init || task.is_complete;
     if retask {
-        let is_farmer = subject.get_flag(agents::Flag::IsFarmer);
+        let is_farmer = subject.flags.get(agents::Flag::IsFarmer);
         task = if is_farmer {
             farmer_tasking(task.kind)
-        } else if subject.get_flag(agents::Flag::IsMiner) {
+        } else if subject.flags.get(agents::Flag::IsMiner) {
             miner_tasking(task.kind)
         } else {
             Task::default()

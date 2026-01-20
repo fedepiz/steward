@@ -247,7 +247,28 @@ pub(crate) struct Agent {
     pub task: Task,
     vars: [f64; Var::COUNT],
     sets: BitSet<SET_BITSET_SIZE>,
-    flags: BitSet<FLAG_BITSET_SIZE>,
+    pub flags: Flags,
+}
+
+#[derive(Default, Clone, Copy)]
+pub struct Flags(BitSet<FLAG_BITSET_SIZE>);
+
+impl Flags {
+    #[inline]
+    pub(crate) fn get(&self, flag: Flag) -> bool {
+        self.0.get(flag as usize)
+    }
+
+    #[inline]
+    pub(crate) fn set(&mut self, flag: Flag, value: bool) {
+        self.0.set(flag as usize, value);
+    }
+
+    #[inline]
+    pub(crate) fn with(mut self, flag: Flag) -> Self {
+        self.set(flag, true);
+        self
+    }
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug)]
@@ -326,14 +347,6 @@ impl Default for Behavior {
 impl Agent {
     pub(crate) fn in_set(&self, flag: Set) -> bool {
         self.sets.get(flag as usize)
-    }
-
-    pub(crate) fn get_flag(&self, flag: Flag) -> bool {
-        self.flags.get(flag as usize)
-    }
-
-    pub(crate) fn set_flag(&mut self, flag: Flag, value: bool) {
-        self.flags.set(flag as usize, value);
     }
 
     pub(crate) fn vars(&self) -> Vars<'_> {
@@ -950,15 +963,15 @@ mod tests {
     #[test]
     fn agent_flags_default_false() {
         let agent = Agent::default();
-        assert!(!agent.get_flag(Flag::IsFarmer));
+        assert!(!agent.flags.get(Flag::IsFarmer));
     }
 
     #[test]
     fn agent_flags_set_and_clear() {
         let mut agent = Agent::default();
-        agent.set_flag(Flag::IsFarmer, true);
-        assert!(agent.get_flag(Flag::IsFarmer));
-        agent.set_flag(Flag::IsFarmer, false);
-        assert!(!agent.get_flag(Flag::IsFarmer));
+        agent.flags.set(Flag::IsFarmer, true);
+        assert!(agent.flags.get(Flag::IsFarmer));
+        agent.flags.set(Flag::IsFarmer, false);
+        assert!(!agent.flags.get(Flag::IsFarmer));
     }
 }
