@@ -3,7 +3,10 @@ use slotmap::{Key, KeyData};
 use util::string_pool::*;
 
 use crate::{
-    agents::{self, Agent, AgentId, Agents, Behavior, Hierarchy, Location, Task, TaskKind, Var},
+    agents::{
+        self, Agent, AgentId, Agents, Behavior, Hierarchy, Location, Task, TaskDestination,
+        TaskInteraction, TaskKind, Var,
+    },
     geom::V2,
     movement::{self, SpatialMap},
     names::Names,
@@ -57,7 +60,7 @@ fn tick(sim: &mut Simulation, mut request: Request, arena: &Bump) -> Response {
         sim.turn_num = sim.turn_num.wrapping_add(1);
 
         spawn_farmers(sim, arena);
-        move_farmers(sim, arena);
+        agent_tasking(sim, arena);
 
         if sim.turn_num % 100 == 0 {
             food_production_and_consumption(sim, arena);
@@ -482,67 +485,6 @@ fn spawn_farmers(sim: &mut Simulation, arena: &Bump) {
         sim.agents.set_parent(Hierarchy::Attachment, center, agent);
     }
 }
-
-fn move_farmers(sim: &mut Simulation, arena: &Bump) {
-    let mut behavior_changes = bumpalo::collections::Vec::new_in(arena);
-    let mut var_changes = bumpalo::collections::Vec::new_in(arena);
-    const MIN_CARRIED_FOOD: i64 = 100;
-    const MAX_CARRIED_FOOD: i64 = 500;
-    const MAX_CARRIED_PROP: f64 = 0.5;
-
-    for farmer in sim.agents.iter_set(agents::Set::Farmers) {
-        let home = sim.agents.parent_of(Hierarchy::Attachment, farmer.id);
-        let target = sim.agents.parent_of(Hierarchy::LocalMarket, home);
-
-        let current_food = farmer.get_var(Var::Food) as i64;
-
-        // If the farmer is at home, and it has a valid target, move to the target
-        if farmer.location == Location::AtAgent(home) && !target.is_null() {
-            let home = &sim.agents[home];
-
-            let mut at_settlement = home.get_var(Var::Food) as i64;
-            // Export up to a fixed proportion of settlement stock, capped by what's available.
-            let max_exportable = (at_settlement as f64 * MAX_CARRIED_PROP)
-                .min(at_settlement as f64)
-                .round() as i64;
-
-            if current_food + max_exportable >= MIN_CARRIED_FOOD {
-                // Load as much as allowed, then shed any excess to respect carrying cap.
-                let mut on_farmer = current_food + max_exportable;
-                let put_down = (on_farmer - MAX_CARRIED_FOOD).max(0);
-                on_farmer -= put_down;
-                // Settlement stock decreases by export, then regains whatever couldn't be carried.
-                at_settlement = at_settlement - max_exportable + put_down;
-
-                var_changes.push((farmer.id, Var::Food, on_farmer as f64));
-                var_changes.push((home.id, Var::Food, at_settlement as f64));
-
-                behavior_changes.push((farmer.id, Behavior::GoTo(target)));
-            }
-        } else
-        // If the farmer is at the target, comeback home
-        if farmer.location == Location::AtAgent(target) {
-            let target = &sim.agents[target];
-            let on_farmer = farmer.get_var(Var::Food) as i64;
-            let on_settlement = target.get_var(Var::Food) as i64;
-            let new_at_settlement = on_farmer + on_settlement;
-
-            var_changes.push((farmer.id, Var::Food, 0.));
-            var_changes.push((target.id, Var::Food, new_at_settlement as f64));
-
-            behavior_changes.push((farmer.id, Behavior::GoTo(home)));
-        }
-    }
-
-    for (id, behavior) in behavior_changes {
-        sim.agents[id].behavior = behavior;
-    }
-
-    for (id, var, value) in var_changes {
-        sim.agents[id].vars_mut().with(var, value);
-    }
-}
-
 fn food_production_and_consumption(sim: &mut Simulation, arena: &Bump) {
     let mut changes = bumpalo::collections::Vec::new_in(arena);
     for settlement in sim.agents.iter_set(agents::Set::Settlements) {
@@ -621,4 +563,161 @@ pub(crate) fn determine_party_movement_target(
             }
         }
     }
+}
+
+// Agent tasking
+type AVec<'a, T> = bumpalo::collections::Vec<'a, T>;
+
+fn agent_tasking(sim: &mut Simulation, arena: &Bump) {
+    // Snapshot tasks so task selection can read and write without aliasing agents.
+    let tasks = AVec::from_iter_in(
+        sim.agents
+            .iter_mut()
+            .map(|agent| std::mem::take(&mut agent.task)),
+        arena,
+    );
+
+    // Determine task, destination, and desired behavior for each agent.
+    let mut results = AVec::with_capacity_in(tasks.len(), arena);
+    for (subject, task) in sim.agents.iter().zip(tasks) {
+        let (task, destination, behavior) = task_for_agent(sim, subject, task);
+        results.push((subject.id, task, destination, behavior));
+    }
+
+    // Resolve task effects once agents are at their destinations.
+    for (subject, task, destination, _) in &mut results {
+        resolve_task_effects(sim, *subject, *destination, task);
+    }
+
+    // Commit task/behavior changes; fixed behavior overrides task-driven behavior.
+    for (agent, (_, task, _, behavior)) in sim.agents.iter_mut().zip(results) {
+        agent.task = task;
+        agent.behavior = agent.fixed_behavior.unwrap_or(behavior);
+    }
+}
+
+fn farmer_tasking(kind: TaskKind) -> Task {
+    match kind {
+        TaskKind::Init => Task {
+            kind: TaskKind::ReturnHome,
+            destination: TaskDestination::Home,
+            ..Default::default()
+        },
+        TaskKind::ReturnHome => Task {
+            kind: TaskKind::LoadFood,
+            destination: TaskDestination::Home,
+            interaction: TaskInteraction {
+                load_food: true,
+                ..Default::default()
+            },
+            ..Default::default()
+        },
+        TaskKind::DeliverFood => Task {
+            kind: TaskKind::ReturnHome,
+            destination: TaskDestination::Home,
+            ..Default::default()
+        },
+        TaskKind::LoadFood => Task {
+            kind: TaskKind::DeliverFood,
+            destination: TaskDestination::MarketOfHome,
+            interaction: TaskInteraction {
+                unload_food: true,
+                ..Default::default()
+            },
+            ..Default::default()
+        },
+    }
+}
+
+fn task_for_agent(sim: &Simulation, subject: &Agent, mut task: Task) -> (Task, AgentId, Behavior) {
+    // Retask when initializing or once the current task is complete.
+    let retask = task.kind == TaskKind::Init || task.is_complete;
+    if retask {
+        let is_farmer = subject.in_set(agents::Set::Farmers);
+        task = if is_farmer {
+            farmer_tasking(task.kind)
+        } else {
+            Task::default()
+        };
+    }
+
+    // Resolve the concrete target for the task's symbolic destination.
+    let destination = match task.destination {
+        TaskDestination::Nothing => AgentId::null(),
+        TaskDestination::Home => sim.agents.parent_of(Hierarchy::Attachment, subject.id),
+        TaskDestination::MarketOfHome => {
+            let home = sim.agents.parent_of(Hierarchy::Attachment, subject.id);
+            sim.agents.parent_of(Hierarchy::LocalMarket, home)
+        }
+    };
+
+    // Reset task if destination is not valid
+    let is_valid = !destination.is_null();
+    if !is_valid {
+        return (Task::default(), AgentId::null(), Behavior::Idle);
+    }
+
+    // Behavior is driven by the task destination.
+    let behavior = if destination.is_null() {
+        subject.behavior
+    } else {
+        Behavior::GoTo(destination)
+    };
+
+    (task, destination, behavior)
+}
+
+fn resolve_task_effects(
+    sim: &mut Simulation,
+    subject: AgentId,
+    destination: AgentId,
+    task: &mut Task,
+) {
+    const MIN_CARRIED_FOOD: i64 = 100;
+    const MAX_CARRIED_FOOD: i64 = 500;
+    const MAX_CARRIED_PROP: f64 = 0.5;
+
+    let at_destination =
+        !destination.is_null() && sim.agents[subject].location == Location::AtAgent(destination);
+    if !at_destination {
+        return;
+    }
+
+    if task.interaction.load_food {
+        let current_food = sim.agents[subject].get_var(Var::Food) as i64;
+        let mut at_settlement = sim.agents[destination].get_var(Var::Food) as i64;
+        let max_exportable = (at_settlement as f64 * MAX_CARRIED_PROP)
+            .min(at_settlement as f64)
+            .round() as i64;
+
+        if current_food + max_exportable >= MIN_CARRIED_FOOD {
+            let mut on_farmer = current_food + max_exportable;
+            let put_down = (on_farmer - MAX_CARRIED_FOOD).max(0);
+            on_farmer -= put_down;
+            at_settlement = at_settlement - max_exportable + put_down;
+
+            sim.agents[subject]
+                .vars_mut()
+                .with(Var::Food, on_farmer as f64);
+            sim.agents[destination]
+                .vars_mut()
+                .with(Var::Food, at_settlement as f64);
+            task.interaction.load_food = false;
+        }
+    }
+
+    if task.interaction.unload_food {
+        let on_farmer = sim.agents[subject].get_var(Var::Food) as i64;
+        let on_settlement = sim.agents[destination].get_var(Var::Food) as i64;
+        let new_at_settlement = on_farmer + on_settlement;
+
+        sim.agents[subject].vars_mut().with(Var::Food, 0.);
+        sim.agents[destination]
+            .vars_mut()
+            .with(Var::Food, new_at_settlement as f64);
+        task.interaction.unload_food = false;
+    }
+
+    let has_interaction = task.interaction.load_food || task.interaction.unload_food;
+    task.is_complete = at_destination && !has_interaction;
 }

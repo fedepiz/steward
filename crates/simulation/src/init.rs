@@ -188,11 +188,11 @@ pub(crate) fn init(sim: &mut Simulation, req: InitRequest) {
         let agent = sim.agents.spawn();
         agent.name = name;
         agent.is_player = desc.is_player;
-        agent.behavior = if desc.is_player {
+        agent.fixed_behavior = Some(if desc.is_player {
             Behavior::Player
         } else {
             Behavior::Test
-        };
+        });
         agent.party = party.id;
         party.agent = agent.id;
 

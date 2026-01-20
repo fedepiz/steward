@@ -85,6 +85,10 @@ impl Agents {
         self.entries.values()
     }
 
+    pub(crate) fn iter_mut(&mut self) -> impl Iterator<Item = &mut Agent> + ExactSizeIterator {
+        self.entries.values_mut()
+    }
+
     pub(crate) fn len(&self) -> usize {
         self.entries.len()
     }
@@ -229,6 +233,7 @@ pub(crate) struct Agent {
     pub party: PartyId,
     pub is_player: bool,
     pub behavior: Behavior,
+    pub fixed_behavior: Option<Behavior>,
     pub location: Location,
     pub task: Task,
     vars: [f64; Var::COUNT],
@@ -249,19 +254,23 @@ impl Default for Location {
     }
 }
 
-#[derive(Default, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Default, Clone, Copy)]
 pub(crate) struct Task {
+    /// The kind of the taks. Useful to know what we are even doing
     pub kind: TaskKind,
-    /// Some tasks have a meaningful source 'location'
-    pub source: AgentId,
     /// Primary destination of this task
-    pub destination: AgentId,
+    pub destination: TaskDestination,
+    /// Interaction to be performed at destination
+    pub interaction: TaskInteraction,
+    /// Has the task actually been accomplished?
+    pub is_complete: bool,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) enum TaskKind {
     Init,
     DeliverFood,
+    LoadFood,
     ReturnHome,
 }
 
@@ -269,6 +278,25 @@ impl Default for TaskKind {
     fn default() -> Self {
         Self::Init
     }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub(crate) enum TaskDestination {
+    Nothing,
+    Home,
+    MarketOfHome,
+}
+
+impl Default for TaskDestination {
+    fn default() -> Self {
+        Self::Nothing
+    }
+}
+
+#[derive(Default, Clone, Copy)]
+pub(crate) struct TaskInteraction {
+    pub load_food: bool,
+    pub unload_food: bool,
 }
 
 #[derive(Clone, Copy, Debug)]
