@@ -233,7 +233,7 @@ pub(crate) fn init(sim: &mut Simulation, req: InitRequest) {
         },
         Desc {
             name: "Lligwy Mine",
-            pos: (600., 522.),
+            pos: (600., 530.),
             party_typ: "mine",
             sets: &[Set::Mines],
             parents: &[(Hierarchy::LocalMarket, "caer_ligualid")],

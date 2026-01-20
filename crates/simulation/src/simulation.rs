@@ -61,17 +61,19 @@ fn tick(sim: &mut Simulation, mut request: Request, arena: &Bump) -> Response {
         spawn_worker(
             sim,
             arena,
+            "farmers",
             agents::Set::Villages,
             agents::Flag::IsFarmer,
-            "farmers",
+            &[],
         );
 
         spawn_worker(
             sim,
             arena,
+            "miners",
             agents::Set::Mines,
             agents::Flag::IsMiner,
-            "miners",
+            &[(Var::ProsperityBonus, 0.01)],
         );
 
         agent_tasking(sim, arena);
@@ -471,9 +473,10 @@ pub struct MapTerrain {
 fn spawn_worker(
     sim: &mut Simulation,
     arena: &Bump,
+    party_type: &str,
     source_set: agents::Set,
     worker_flag: agents::Flag,
-    party_type: &str,
+    vars: &[(Var, f64)],
 ) {
     let mut spawns = AVec::new_in(arena);
     let party_type = sim.parties.find_type_by_tag(party_type).unwrap().id;
@@ -492,6 +495,7 @@ fn spawn_worker(
                 party_type,
                 parent: agent.id,
                 flags: Flags::default().with(worker_flag),
+                vars,
             };
             spawns.push(spawn);
         }
@@ -503,10 +507,11 @@ fn spawn_worker(
     }
 }
 
-struct SpawnSubagent {
+struct SpawnSubagent<'a> {
     party_type: PartyTypeId,
     parent: AgentId,
     flags: Flags,
+    vars: &'a [(Var, f64)],
 }
 
 fn spawn_subagent(sim: &mut Simulation, spawn: SpawnSubagent) {
@@ -524,6 +529,7 @@ fn spawn_subagent(sim: &mut Simulation, spawn: SpawnSubagent) {
     // Spawning should ideally not happen here anyways.
     agent.location = Location::AtAgent(spawn.parent);
     agent.flags = spawn.flags;
+    agent.vars_mut().set_many(spawn.vars);
 
     party.agent = agent.id;
 
@@ -692,6 +698,7 @@ fn miner_tasking(kind: TaskKind) -> Task {
             kind: TaskKind::Deliver,
             destination: TaskDestination::MarketOfHome,
             interaction: TaskInteraction {
+                increase_prosperity: true,
                 ..Default::default()
             },
             ..Default::default()
@@ -790,6 +797,17 @@ fn resolve_task_effects(
         task.interaction.unload_food = false;
     }
 
-    let has_interaction = task.interaction.load_food || task.interaction.unload_food;
+    if task.interaction.increase_prosperity {
+        let value = sim.agents[subject].get_var(Var::ProsperityBonus);
+        sim.agents[destination]
+            .vars_mut()
+            .modify(Var::Prosperity, |x| x + value);
+        task.interaction.increase_prosperity = false;
+    }
+
+    let has_interaction = task.interaction.load_food
+        || task.interaction.unload_food
+        || task.interaction.increase_prosperity;
+
     task.is_complete = at_destination && !has_interaction;
 }

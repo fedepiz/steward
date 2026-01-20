@@ -9,13 +9,15 @@ new_key_type! { pub struct AgentId; }
 
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, EnumCount, EnumIter)]
 pub(crate) enum Var {
-    /// Person
+    // Person
     Renown,
-    /// Settlement
+    // Settlement
     Population,
     Prosperity,
     FoodStored,
     FoodCapacity,
+    // Economic action
+    ProsperityBonus,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, EnumCount, EnumIter)]
@@ -328,6 +330,7 @@ impl Default for TaskDestination {
 pub(crate) struct TaskInteraction {
     pub load_food: bool,
     pub unload_food: bool,
+    pub increase_prosperity: bool,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -432,6 +435,12 @@ impl<'a> VarsMut<'a> {
         for &(var, value) in vars {
             self.set(var, value);
         }
+    }
+
+    #[inline]
+    pub(crate) fn modify(&mut self, var: Var, f: impl FnOnce(f64) -> f64) {
+        let x = self.get(var);
+        self.set(var, f(x));
     }
 
     #[inline]

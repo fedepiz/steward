@@ -313,11 +313,11 @@ impl Board {
         }
 
         for pawn in &self.pawns {
-            pawn.draw_shape(assets);
+            pawn.draw_label(&self.camera, assets.get_font("board"), &self.strings);
         }
 
         for pawn in &self.pawns {
-            pawn.draw_label(&self.camera, assets.get_font("board"), &self.strings);
+            pawn.draw_shape(assets);
         }
 
         mq::set_default_camera();
