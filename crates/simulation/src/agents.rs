@@ -277,8 +277,19 @@ impl Flags {
 pub(crate) enum Location {
     Nowhere,
     FarOut,
-    AtAgent(AgentId),
     Near(AgentId),
+    Proximate(AgentId),
+    Inside(AgentId),
+}
+
+impl Location {
+    pub fn is_at(self, agent: AgentId) -> bool {
+        match self {
+            Self::Proximate(id) => id == agent,
+            Self::Inside(id) => id == agent,
+            _ => false,
+        }
+    }
 }
 
 impl Default for Location {
@@ -377,7 +388,10 @@ impl TaskInteraction {
 #[derive(Clone, Copy, Debug)]
 pub enum Behavior {
     Idle,
-    GoTo(AgentId),
+    GoTo {
+        target: AgentId,
+        enter_on_arrival: bool,
+    },
     Player,
     Test,
 }

@@ -51,6 +51,7 @@ fn tick(sim: &mut Simulation, mut request: Request, arena: &Bump) -> Response {
             sim.player_party_goal = Goal::ToParty {
                 target,
                 distance: 0.,
+                enter_on_arrival: false,
             };
         }
     }
@@ -86,7 +87,8 @@ fn tick(sim: &mut Simulation, mut request: Request, arena: &Bump) -> Response {
             prosperity_towards_equilibrium(sim, arena);
         }
 
-        let mut movement_elements = Vec::with_capacity(sim.parties.len());
+        let mut movement_elements = AVec::with_capacity_in(sim.parties.len(), arena);
+        let mut desired_change_of_container = AVec::with_capacity_in(sim.parties.len(), arena);
 
         // Parties logical update
         for party in sim.parties.iter() {
@@ -95,6 +97,18 @@ fn tick(sim: &mut Simulation, mut request: Request, arena: &Bump) -> Response {
             let detection = sim.parties.detections.get_for(party.id);
 
             let movement_target = determine_party_movement_target(party, detection, goal);
+
+            let desired_container = match goal {
+                Goal::ToParty {
+                    target,
+                    enter_on_arrival: true,
+                    ..
+                } => target,
+                _ => PartyId::null(),
+            };
+            if desired_container != party.inside_of {
+                desired_change_of_container.push((party.id, desired_container))
+            }
 
             // Resolve movement target
             let (destination, direct) = match movement_target {
@@ -122,7 +136,9 @@ fn tick(sim: &mut Simulation, mut request: Request, arena: &Bump) -> Response {
 
         // Party detection check
         let spatial_map = &movement_result.spatial_map;
+
         {
+            let _span = tracing::info_span!("Detections").entered();
             let mut detections = std::mem::take(&mut sim.parties.detections);
             self::detections(&mut detections, &sim.parties, spatial_map);
             sim.parties.detections = detections;
@@ -139,9 +155,24 @@ fn tick(sim: &mut Simulation, mut request: Request, arena: &Bump) -> Response {
             }
         }
 
+        // Resolve desired changes of party container
+        for (party, container) in desired_change_of_container {
+            if container.is_null() {
+                sim.parties[party].inside_of = PartyId::null();
+            } else {
+                let pos = sim.parties[container].body.pos;
+                let party = &mut sim.parties[party];
+                party.inside_of = if party.body.pos == pos {
+                    container
+                } else {
+                    PartyId::null()
+                };
+            }
+        }
+
         // Determine agent location
         {
-            let _span = tracing::info_span!("Calculate agent locations").entered();
+            let _span = tracing::info_span!("Agent Locations").entered();
             let mut scratch = vec![];
 
             let output: Vec<_> = sim
@@ -178,7 +209,12 @@ fn location_of_agent(
     // If the agent is a settlement, then it's at a settlement!
     let party = &sim.parties[agent.party];
     if party.is_location {
-        return Location::AtAgent(agent.id);
+        return Location::Proximate(agent.id);
+    }
+
+    // If an agent's party is inside another party, that the agent party is at the location
+    if let Some(container) = sim.parties.get(party.inside_of) {
+        return Location::Inside(container.agent);
     }
 
     // Otherwise, look at the detections, collecting into scratch space
@@ -200,7 +236,7 @@ fn location_of_agent(
         .min_by_key(|(_, d)| (d * 100.).round() as i64)
         .map(|&(id, distance)| {
             if distance <= 0. {
-                Location::AtAgent(id)
+                Location::Proximate(id)
             } else {
                 Location::Near(id)
             }
@@ -344,6 +380,8 @@ fn view(sim: &Simulation, req: &Request, response: &mut Response) {
                         format_args!("{:1.2}%", agent.get_var(Var::Prosperity) * 100.),
                     );
                 }
+
+                ctx.display("location", format_args!("{:?}", agent.location));
             });
         }
 
@@ -368,6 +406,9 @@ fn view(sim: &Simulation, req: &Request, response: &mut Response) {
         parties.sort_by_key(|(_, layer)| *layer);
 
         for (entity, _) in parties {
+            if !entity.inside_of.is_null() {
+                continue;
+            }
             // TODO: Filter here for being in view
             let typ = sim.parties.get_type(entity.type_id);
 
@@ -520,9 +561,13 @@ struct SpawnSubagent<'a> {
 
 fn spawn_subagent(sim: &mut Simulation, spawn: SpawnSubagent) {
     // Spawn agent (now ihere, later floated out)
-    let pos = sim.parties[sim.agents[spawn.parent].party].body.pos;
+    let (parent_party, parent_pos) = {
+        let party = &sim.parties[sim.agents[spawn.parent].party];
+        (party.id, party.body.pos)
+    };
     let party = sim.parties.spawn_with_type(spawn.party_type);
-    party.body.pos = pos;
+    party.body.pos = parent_pos;
+    party.inside_of = parent_party;
 
     let agent = sim.agents.spawn();
     agent.name = party.name;
@@ -531,7 +576,7 @@ fn spawn_subagent(sim: &mut Simulation, spawn: SpawnSubagent) {
     agent.party = party.id;
     // NOTE: This should ideally be auto-computed, but that means moving spawns around.
     // Spawning should ideally not happen here anyways.
-    agent.location = Location::AtAgent(spawn.parent);
+    agent.location = Location::Inside(spawn.parent);
     agent.flags = spawn.flags;
     agent.vars_mut().set_many(spawn.vars);
 
@@ -628,13 +673,17 @@ fn determine_party_goal(sim: &Simulation, party: &Party) -> Goal {
         Behavior::Idle => Goal::Idle,
         Behavior::Player => sim.player_party_goal,
         Behavior::Test => Goal::MoveTo(V2::splat(500.)),
-        Behavior::GoTo(target) => sim
+        Behavior::GoTo {
+            target,
+            enter_on_arrival,
+        } => sim
             .agents
             .get(target)
             .and_then(|agent| sim.parties.get(agent.party))
             .map(|party| Goal::ToParty {
                 target: party.id,
                 distance: std::f32::NEG_INFINITY,
+                enter_on_arrival,
             })
             .unwrap_or_default(),
     }
@@ -648,7 +697,9 @@ pub(crate) fn determine_party_movement_target(
     match goal {
         Goal::Idle => MovementTarget::Immobile,
         Goal::MoveTo(pos) => MovementTarget::FixedPos(pos),
-        Goal::ToParty { target, distance } => {
+        Goal::ToParty {
+            target, distance, ..
+        } => {
             let close_to_target = detections
                 .iter()
                 .find(|d| target == d.target)
@@ -667,6 +718,7 @@ pub(crate) fn determine_party_movement_target(
 // Agent tasking
 
 fn agent_tasking(sim: &mut Simulation, arena: &Bump) {
+    let _span = tracing::info_span!("Agent tasking").entered();
     // Snapshot tasks so task selection can read and write without aliasing agents.
     let tasks = AVec::from_iter_in(
         sim.agents
@@ -771,12 +823,15 @@ fn task_for_agent(sim: &Simulation, subject: &Agent, mut task: Task) -> (Task, A
     }
 
     // Resolve the concrete target for the task's symbolic destination.
-    let destination = match task.destination {
-        TaskDestination::Nothing => AgentId::null(),
-        TaskDestination::Home => sim.agents.parent_of(Hierarchy::Attachment, subject.id),
+    let (destination, enter_on_arrival) = match task.destination {
+        TaskDestination::Nothing => (AgentId::null(), false),
+        TaskDestination::Home => (
+            sim.agents.parent_of(Hierarchy::Attachment, subject.id),
+            false,
+        ),
         TaskDestination::MarketOfHome => {
             let home = sim.agents.parent_of(Hierarchy::Attachment, subject.id);
-            sim.agents.parent_of(Hierarchy::LocalMarket, home)
+            (sim.agents.parent_of(Hierarchy::LocalMarket, home), true)
         }
     };
 
@@ -790,7 +845,10 @@ fn task_for_agent(sim: &Simulation, subject: &Agent, mut task: Task) -> (Task, A
     let behavior = if destination.is_null() {
         subject.behavior
     } else {
-        Behavior::GoTo(destination)
+        Behavior::GoTo {
+            target: destination,
+            enter_on_arrival: enter_on_arrival,
+        }
     };
 
     (task, destination, behavior)
@@ -802,8 +860,8 @@ fn resolve_task_effects(
     destination: AgentId,
     task: &mut Task,
 ) {
-    let at_destination =
-        !destination.is_null() && sim.agents[subject].location == Location::AtAgent(destination);
+    let at_destination = !destination.is_null() && sim.agents[subject].location.is_at(destination);
+
     if !at_destination {
         return;
     }
