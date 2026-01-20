@@ -330,6 +330,7 @@ impl Default for TaskDestination {
 pub(crate) enum Interaction {
     UnloadFood,
     LoadFood,
+    LoadProsperityBonus,
     IncreaseProsperity,
     ResetProsperityBonus,
 }

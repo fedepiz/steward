@@ -80,6 +80,10 @@ fn tick(sim: &mut Simulation, mut request: Request, arena: &Bump) -> Response {
 
         if sim.turn_num % 100 == 0 {
             food_production_and_consumption(sim, arena);
+            // Food stock sets the target population; this nudges population toward that target.
+            population_from_food(sim, arena);
+            // Prosperity drifts toward a baseline over time.
+            prosperity_towards_equilibrium(sim, arena);
         }
 
         let mut movement_elements = Vec::with_capacity(sim.parties.len());
@@ -538,15 +542,25 @@ fn spawn_subagent(sim: &mut Simulation, spawn: SpawnSubagent) {
         .set_parent(Hierarchy::Attachment, spawn.parent, agent);
 }
 
+// Units of food consumed per unit population per economic tick.
+const FOOD_CONSUMPTION_PER_HEAD: f64 = 0.01;
+
 fn food_production_and_consumption(sim: &mut Simulation, arena: &Bump) {
-    const CONSUMPTION_PER_HEAD: f64 = 0.01;
+    // Prosperity scales the base food output from villages and towns.
+    const BASE_FOOD_PRODUCTION: f64 = 100.0;
+    const PROSPERITY_IMPACT_ON_FOOD_PRODUCTION: f64 = 0.1;
     let mut changes = AVec::new_in(arena);
     for settlement in sim.agents.iter_set(agents::Set::Settlements) {
         let mut food = settlement.get_var(Var::FoodStored) as i64;
         let population = settlement.get_var(Var::Population);
+        let prosperity = settlement.get_var(Var::Prosperity).clamp(0.0, 1.0);
         let max_food = settlement.get_var(Var::FoodCapacity) as i64;
-        let food_demand = (population * CONSUMPTION_PER_HEAD).round() as i64;
-        let food_production = 100;
+        let food_demand = (population * FOOD_CONSUMPTION_PER_HEAD).round() as i64;
+
+        let food_production = {
+            let modifier = 1.0 + prosperity * PROSPERITY_IMPACT_ON_FOOD_PRODUCTION;
+            (BASE_FOOD_PRODUCTION * modifier).round().max(0.0) as i64
+        };
         food = (food + food_production - food_demand).min(max_food);
         if food < 0 {
             // Shortfall
@@ -558,6 +572,45 @@ fn food_production_and_consumption(sim: &mut Simulation, arena: &Bump) {
     for (agent, food) in changes {
         let agent = &mut sim.agents[agent];
         agent.vars_mut().with(Var::FoodStored, food);
+    }
+}
+
+fn population_from_food(sim: &mut Simulation, arena: &Bump) {
+    // Convert food stock into a target population and converge gradually.
+    const POPULATION_CONVERGENCE: f64 = 0.01;
+    // The target is some kind of multiple of the food consumption
+    const TICK_OF_SLACK: f64 = 100.;
+    let mut changes = AVec::new_in(arena);
+
+    for settlement in sim.agents.iter_set(agents::Set::Settlements) {
+        let food = settlement.get_var(Var::FoodStored);
+        let population = settlement.get_var(Var::Population);
+        let target = (food / (FOOD_CONSUMPTION_PER_HEAD * TICK_OF_SLACK)).max(0.0);
+        let next = population + (target - population) * POPULATION_CONVERGENCE;
+        changes.push((settlement.id, next.max(0.0).round()));
+    }
+
+    for (agent, population) in changes {
+        let agent = &mut sim.agents[agent];
+        agent.vars_mut().with(Var::Population, population);
+    }
+}
+
+fn prosperity_towards_equilibrium(sim: &mut Simulation, arena: &Bump) {
+    // Simple baseline drift so prosperity doesn't stick forever at extremes.
+    const PROSPERITY_EQUILIBRIUM: f64 = 0.5;
+    const PROSPERITY_CONVERGENCE: f64 = 0.001;
+    let mut changes = AVec::new_in(arena);
+
+    for settlement in sim.agents.iter_set(agents::Set::Settlements) {
+        let prosperity = settlement.get_var(Var::Prosperity);
+        let next = prosperity + (PROSPERITY_EQUILIBRIUM - prosperity) * PROSPERITY_CONVERGENCE;
+        changes.push((settlement.id, next.clamp(0.0, 1.0)));
+    }
+
+    for (agent, prosperity) in changes {
+        let agent = &mut sim.agents[agent];
+        agent.vars_mut().with(Var::Prosperity, prosperity);
     }
 }
 
@@ -666,7 +719,11 @@ fn farmer_tasking(kind: TaskKind) -> Task {
         TaskKind::Load => Task {
             kind: TaskKind::Deliver,
             destination: TaskDestination::MarketOfHome,
-            interaction: TaskInteraction::with(Interaction::UnloadFood),
+            // Deliver food to town and load a prosperity bonus for the return trip.
+            interaction: TaskInteraction::new(&[
+                Interaction::UnloadFood,
+                Interaction::LoadProsperityBonus,
+            ]),
             ..Default::default()
         },
     }
@@ -806,6 +863,16 @@ fn handle_interaction(
             } else {
                 false
             }
+        }
+        Interaction::LoadProsperityBonus => {
+            // Capture town prosperity as a bonus to be applied when returning home.
+            const PROSPERITY_BONUS_SCALE: f64 = 0.025;
+            let prosperity = sim.agents[destination].get_var(Var::Prosperity);
+            let bonus = (prosperity * PROSPERITY_BONUS_SCALE).max(0.0);
+            sim.agents[subject]
+                .vars_mut()
+                .with(Var::ProsperityBonus, bonus);
+            true
         }
         Interaction::IncreaseProsperity => {
             let value = sim.agents[subject].get_var(Var::ProsperityBonus);
