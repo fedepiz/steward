@@ -14,7 +14,8 @@ pub(crate) enum Var {
     /// Settlement
     Population,
     Prosperity,
-    Food,
+    FoodStored,
+    FoodCapacity,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, EnumCount, EnumIter)]
@@ -24,7 +25,11 @@ pub(crate) enum Set {
     Villages,
     Hillforts,
     Towns,
-    Farmers,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, EnumCount, EnumIter)]
+pub(crate) enum Flag {
+    IsFarmer,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, EnumCount, EnumIter)]
@@ -225,6 +230,7 @@ impl std::ops::IndexMut<AgentId> for Agents {
 }
 
 const SET_BITSET_SIZE: usize = (Set::COUNT + 63) / 64;
+const FLAG_BITSET_SIZE: usize = (Flag::COUNT + 63) / 64;
 
 #[derive(Default, Clone, Copy)]
 pub(crate) struct Agent {
@@ -238,6 +244,7 @@ pub(crate) struct Agent {
     pub task: Task,
     vars: [f64; Var::COUNT],
     sets: BitSet<SET_BITSET_SIZE>,
+    flags: BitSet<FLAG_BITSET_SIZE>,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug)]
@@ -318,6 +325,14 @@ impl Agent {
         self.sets.get(flag as usize)
     }
 
+    pub(crate) fn get_flag(&self, flag: Flag) -> bool {
+        self.flags.get(flag as usize)
+    }
+
+    pub(crate) fn set_flag(&mut self, flag: Flag, value: bool) {
+        self.flags.set(flag as usize, value);
+    }
+
     pub(crate) fn vars(&self) -> Vars<'_> {
         Vars(&self.vars)
     }
@@ -350,6 +365,26 @@ impl Vars<'_> {
 
     pub(crate) fn copy_out_mut<'a>(&self, alloc: impl VarAllocator<'a>) -> VarsMut<'a> {
         alloc.host_vars(self)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn agent_flags_default_false() {
+        let agent = Agent::default();
+        assert!(!agent.get_flag(Flag::IsFarmer));
+    }
+
+    #[test]
+    fn agent_flags_set_and_clear() {
+        let mut agent = Agent::default();
+        agent.set_flag(Flag::IsFarmer, true);
+        assert!(agent.get_flag(Flag::IsFarmer));
+        agent.set_flag(Flag::IsFarmer, false);
+        assert!(!agent.get_flag(Flag::IsFarmer));
     }
 }
 

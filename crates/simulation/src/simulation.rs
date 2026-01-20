@@ -3,17 +3,16 @@ use slotmap::{Key, KeyData};
 use util::string_pool::*;
 
 use crate::{
-    agents::{
-        self, Agent, AgentId, Agents, Behavior, Hierarchy, Location, Task, TaskDestination,
-        TaskInteraction, TaskKind, Var,
-    },
+    agents::{self, *},
     geom::V2,
     movement::{self, SpatialMap},
     names::Names,
-    objects::{Objects, ObjectsBuilder},
+    objects::*,
     parties::{self, *},
     terrain_map::TerrainMap,
 };
+
+type AVec<'a, T> = bumpalo::collections::Vec<'a, T>;
 
 #[derive(Default)]
 pub(crate) struct Simulation {
@@ -302,7 +301,16 @@ fn view(sim: &Simulation, req: &Request, response: &mut Response) {
 
                 let agent = &sim.agents[party.agent];
 
-                ctx.display("food", agent.get_var(Var::Food));
+                {
+                    // Display food
+                    let stored = agent.get_var(Var::FoodStored);
+                    if agent.in_set(Set::Settlements) {
+                        let capacity = agent.get_var(Var::FoodCapacity);
+                        ctx.display("food", format_args!("{stored}/{capacity}"));
+                    } else {
+                        ctx.display("food", stored);
+                    }
+                }
 
                 if agent.in_set(agents::Set::People) {
                     ctx.display("renown", agent.get_var(Var::Renown));
@@ -446,7 +454,7 @@ pub struct MapTerrain {
 }
 
 fn spawn_farmers(sim: &mut Simulation, arena: &Bump) {
-    let mut spawns = bumpalo::collections::Vec::new_in(arena);
+    let mut spawns = AVec::new_in(arena);
     let farmer_type = sim.parties.find_type_by_tag("farmers").unwrap().id;
 
     for agent in sim.agents.iter_set(crate::agents::Set::Villages) {
@@ -455,7 +463,7 @@ fn spawn_farmers(sim: &mut Simulation, arena: &Bump) {
         // Do we have a farmer?
         let has_farmer = dependents
             .into_iter()
-            .any(|child| sim.agents[child].in_set(agents::Set::Farmers));
+            .any(|child| sim.agents[child].get_flag(agents::Flag::IsFarmer));
 
         // If we do not have a farmer, we will need to spawn one
         if !has_farmer {
@@ -478,30 +486,24 @@ fn spawn_farmers(sim: &mut Simulation, arena: &Bump) {
         // NOTE: This should ideally be auto-computed, but that means moving spawns around.
         // Spawning should ideally not happen here anyways.
         agent.location = Location::AtAgent(center);
+        agent.set_flag(agents::Flag::IsFarmer, true);
+
         party.agent = agent.id;
 
         let agent = agent.id;
-        sim.agents.add_to_set(agents::Set::Farmers, agent);
         sim.agents.set_parent(Hierarchy::Attachment, center, agent);
     }
 }
 fn food_production_and_consumption(sim: &mut Simulation, arena: &Bump) {
-    let mut changes = bumpalo::collections::Vec::new_in(arena);
+    const CONSUMPTION_PER_HEAD: f64 = 0.01;
+    let mut changes = AVec::new_in(arena);
     for settlement in sim.agents.iter_set(agents::Set::Settlements) {
-        let mut food = settlement.get_var(Var::Food) as i64;
-        let population = settlement.get_var(Var::Population) as i64;
+        let mut food = settlement.get_var(Var::FoodStored) as i64;
+        let population = settlement.get_var(Var::Population);
+        let max_food = settlement.get_var(Var::FoodCapacity) as i64;
+        let food_demand = (population * CONSUMPTION_PER_HEAD).round() as i64;
         let food_production = 100;
-        let mut max_food = 0;
-        if settlement.in_set(agents::Set::Villages) {
-            max_food += 1000;
-        }
-        if settlement.in_set(agents::Set::Hillforts) {
-            max_food += 10_000;
-        }
-        if settlement.in_set(agents::Set::Towns) {
-            max_food += 10_000;
-        }
-        food = (food + food_production - population).min(max_food);
+        food = (food + food_production - food_demand).min(max_food);
         if food < 0 {
             // Shortfall
             food = 0;
@@ -511,7 +513,7 @@ fn food_production_and_consumption(sim: &mut Simulation, arena: &Bump) {
 
     for (agent, food) in changes {
         let agent = &mut sim.agents[agent];
-        agent.vars_mut().with(Var::Food, food);
+        agent.vars_mut().with(Var::FoodStored, food);
     }
 }
 
@@ -566,7 +568,6 @@ pub(crate) fn determine_party_movement_target(
 }
 
 // Agent tasking
-type AVec<'a, T> = bumpalo::collections::Vec<'a, T>;
 
 fn agent_tasking(sim: &mut Simulation, arena: &Bump) {
     // Snapshot tasks so task selection can read and write without aliasing agents.
@@ -633,7 +634,7 @@ fn task_for_agent(sim: &Simulation, subject: &Agent, mut task: Task) -> (Task, A
     // Retask when initializing or once the current task is complete.
     let retask = task.kind == TaskKind::Init || task.is_complete;
     if retask {
-        let is_farmer = subject.in_set(agents::Set::Farmers);
+        let is_farmer = subject.get_flag(agents::Flag::IsFarmer);
         task = if is_farmer {
             farmer_tasking(task.kind)
         } else {
@@ -673,10 +674,6 @@ fn resolve_task_effects(
     destination: AgentId,
     task: &mut Task,
 ) {
-    const MIN_CARRIED_FOOD: i64 = 100;
-    const MAX_CARRIED_FOOD: i64 = 500;
-    const MAX_CARRIED_PROP: f64 = 0.5;
-
     let at_destination =
         !destination.is_null() && sim.agents[subject].location == Location::AtAgent(destination);
     if !at_destination {
@@ -684,8 +681,12 @@ fn resolve_task_effects(
     }
 
     if task.interaction.load_food {
-        let current_food = sim.agents[subject].get_var(Var::Food) as i64;
-        let mut at_settlement = sim.agents[destination].get_var(Var::Food) as i64;
+        const MIN_CARRIED_FOOD: i64 = 50;
+        const MAX_CARRIED_FOOD: i64 = 500;
+        const MAX_CARRIED_PROP: f64 = 0.5;
+
+        let current_food = sim.agents[subject].get_var(Var::FoodStored) as i64;
+        let mut at_settlement = sim.agents[destination].get_var(Var::FoodStored) as i64;
         let max_exportable = (at_settlement as f64 * MAX_CARRIED_PROP)
             .min(at_settlement as f64)
             .round() as i64;
@@ -698,23 +699,23 @@ fn resolve_task_effects(
 
             sim.agents[subject]
                 .vars_mut()
-                .with(Var::Food, on_farmer as f64);
+                .with(Var::FoodStored, on_farmer as f64);
             sim.agents[destination]
                 .vars_mut()
-                .with(Var::Food, at_settlement as f64);
+                .with(Var::FoodStored, at_settlement as f64);
             task.interaction.load_food = false;
         }
     }
 
     if task.interaction.unload_food {
-        let on_farmer = sim.agents[subject].get_var(Var::Food) as i64;
-        let on_settlement = sim.agents[destination].get_var(Var::Food) as i64;
+        let on_farmer = sim.agents[subject].get_var(Var::FoodStored) as i64;
+        let on_settlement = sim.agents[destination].get_var(Var::FoodStored) as i64;
         let new_at_settlement = on_farmer + on_settlement;
 
-        sim.agents[subject].vars_mut().with(Var::Food, 0.);
+        sim.agents[subject].vars_mut().with(Var::FoodStored, 0.);
         sim.agents[destination]
             .vars_mut()
-            .with(Var::Food, new_at_settlement as f64);
+            .with(Var::FoodStored, new_at_settlement as f64);
         task.interaction.unload_food = false;
     }
 

@@ -67,30 +67,39 @@ pub(crate) fn init(sim: &mut Simulation, req: InitRequest) {
         is_player: bool,
     }
 
+    const SETTLEMENT_PROSPERITY: f64 = 0.5;
+    const TOWN_POPULATION: f64 = 5000.;
+    const VILLAGE_POPULATION: f64 = 1000.;
+    const HILLFORT_POPULATION: f64 = 1000.;
+    const VILLAGE_FOOD_CAPACITY: f64 = 1000.;
+    const HILLFORT_FOOD_CAPACITY: f64 = 10_000.;
+    const TOWN_FOOD_CAPACITY: f64 = 10_000.;
+    const PERSON_RENOWN: f64 = 10.;
+
     let descs = [
         Desc {
             pos: (590., 520.),
             party_typ: "person",
-            vars: &[(Var::Renown, 10.)],
+            vars: &[(Var::Renown, PERSON_RENOWN)],
             is_player: true,
             ..Default::default()
         },
         Desc {
             pos: (610., 520.),
             party_typ: "person",
-            vars: &[(Var::Renown, 10.)],
+            vars: &[(Var::Renown, PERSON_RENOWN)],
             ..Default::default()
         },
         Desc {
             pos: (600., 520.),
             party_typ: "person",
-            vars: &[(Var::Renown, 10.)],
+            vars: &[(Var::Renown, PERSON_RENOWN)],
             ..Default::default()
         },
         Desc {
             pos: (600., 500.),
             party_typ: "person",
-            vars: &[(Var::Renown, 10.)],
+            vars: &[(Var::Renown, PERSON_RENOWN)],
             ..Default::default()
         },
         Desc {
@@ -98,7 +107,11 @@ pub(crate) fn init(sim: &mut Simulation, req: InitRequest) {
             name: "Caer Ligualid",
             pos: (597., 509.),
             party_typ: "town",
-            vars: &[(Var::Prosperity, 0.5)],
+            vars: &[
+                (Var::Prosperity, SETTLEMENT_PROSPERITY),
+                (Var::Population, TOWN_POPULATION),
+                (Var::FoodCapacity, TOWN_FOOD_CAPACITY),
+            ],
             sets: &[Set::Settlements, Set::Towns],
             ..Default::default()
         },
@@ -106,7 +119,11 @@ pub(crate) fn init(sim: &mut Simulation, req: InitRequest) {
             name: "Llan Heledd",
             pos: (580., 520.),
             party_typ: "village",
-            vars: &[(Var::Prosperity, 0.5)],
+            vars: &[
+                (Var::Prosperity, SETTLEMENT_PROSPERITY),
+                (Var::Population, VILLAGE_POPULATION),
+                (Var::FoodCapacity, VILLAGE_FOOD_CAPACITY),
+            ],
             sets: &[Set::Settlements, Set::Villages],
             parents: &[(Hierarchy::LocalMarket, "caer_ligualid")],
             ..Default::default()
@@ -115,7 +132,11 @@ pub(crate) fn init(sim: &mut Simulation, req: InitRequest) {
             name: "Din Drust",
             pos: (570., 490.),
             party_typ: "hillfort",
-            vars: &[(Var::Prosperity, 0.5)],
+            vars: &[
+                (Var::Prosperity, SETTLEMENT_PROSPERITY),
+                (Var::Population, HILLFORT_POPULATION),
+                (Var::FoodCapacity, HILLFORT_FOOD_CAPACITY),
+            ],
             sets: &[Set::Settlements, Set::Hillforts],
             ..Default::default()
         },
@@ -123,7 +144,11 @@ pub(crate) fn init(sim: &mut Simulation, req: InitRequest) {
             name: "Din Reghed",
             pos: (530., 500.),
             party_typ: "hillfort",
-            vars: &[(Var::Prosperity, 0.5)],
+            vars: &[
+                (Var::Prosperity, SETTLEMENT_PROSPERITY),
+                (Var::Population, HILLFORT_POPULATION),
+                (Var::FoodCapacity, HILLFORT_FOOD_CAPACITY),
+            ],
             sets: &[Set::Settlements, Set::Hillforts],
             ..Default::default()
         },
@@ -131,7 +156,11 @@ pub(crate) fn init(sim: &mut Simulation, req: InitRequest) {
             name: "Ad Candidam Casam",
             pos: (530., 520.),
             party_typ: "village",
-            vars: &[(Var::Prosperity, 0.5)],
+            vars: &[
+                (Var::Prosperity, SETTLEMENT_PROSPERITY),
+                (Var::Population, VILLAGE_POPULATION),
+                (Var::FoodCapacity, VILLAGE_FOOD_CAPACITY),
+            ],
             sets: &[Set::Settlements, Set::Villages],
             parents: &[(Hierarchy::LocalMarket, "caer_ligualid")],
             ..Default::default()
@@ -140,7 +169,11 @@ pub(crate) fn init(sim: &mut Simulation, req: InitRequest) {
             name: "Isura",
             pos: (560., 500.),
             party_typ: "village",
-            vars: &[(Var::Prosperity, 0.5)],
+            vars: &[
+                (Var::Prosperity, SETTLEMENT_PROSPERITY),
+                (Var::Population, VILLAGE_POPULATION),
+                (Var::FoodCapacity, VILLAGE_FOOD_CAPACITY),
+            ],
             sets: &[Set::Settlements, Set::Villages],
             parents: &[(Hierarchy::LocalMarket, "caer_ligualid")],
             ..Default::default()
@@ -149,7 +182,11 @@ pub(crate) fn init(sim: &mut Simulation, req: InitRequest) {
             name: "Anava",
             pos: (603., 500.),
             party_typ: "village",
-            vars: &[(Var::Prosperity, 0.5)],
+            vars: &[
+                (Var::Prosperity, SETTLEMENT_PROSPERITY),
+                (Var::Population, VILLAGE_POPULATION),
+                (Var::FoodCapacity, VILLAGE_FOOD_CAPACITY),
+            ],
             sets: &[Set::Settlements, Set::Villages],
             parents: &[(Hierarchy::LocalMarket, "caer_ligualid")],
             ..Default::default()
@@ -158,7 +195,11 @@ pub(crate) fn init(sim: &mut Simulation, req: InitRequest) {
             name: "Caer Wenddoleu",
             pos: (625., 505.),
             party_typ: "hillfort",
-            vars: &[(Var::Prosperity, 0.5)],
+            vars: &[
+                (Var::Prosperity, SETTLEMENT_PROSPERITY),
+                (Var::Population, HILLFORT_POPULATION),
+                (Var::FoodCapacity, HILLFORT_FOOD_CAPACITY),
+            ],
             sets: &[Set::Settlements],
             ..Default::default()
         },
