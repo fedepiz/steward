@@ -651,24 +651,22 @@ fn farmer_tasking(kind: TaskKind) -> Task {
         TaskKind::ReturnHome => Task {
             kind: TaskKind::Load,
             destination: TaskDestination::Home,
-            interaction: TaskInteraction {
-                load_food: true,
-                ..Default::default()
-            },
+            interaction: TaskInteraction::with(Interaction::LoadFood),
             ..Default::default()
         },
         TaskKind::Deliver => Task {
             kind: TaskKind::ReturnHome,
             destination: TaskDestination::Home,
+            interaction: TaskInteraction::new(&[
+                Interaction::IncreaseProsperity,
+                Interaction::ResetProsperityBonus,
+            ]),
             ..Default::default()
         },
         TaskKind::Load => Task {
             kind: TaskKind::Deliver,
             destination: TaskDestination::MarketOfHome,
-            interaction: TaskInteraction {
-                unload_food: true,
-                ..Default::default()
-            },
+            interaction: TaskInteraction::with(Interaction::UnloadFood),
             ..Default::default()
         },
     }
@@ -684,9 +682,7 @@ fn miner_tasking(kind: TaskKind) -> Task {
         TaskKind::ReturnHome => Task {
             kind: TaskKind::Load,
             destination: TaskDestination::Home,
-            interaction: TaskInteraction {
-                ..Default::default()
-            },
+            interaction: TaskInteraction::default(),
             ..Default::default()
         },
         TaskKind::Deliver => Task {
@@ -697,10 +693,7 @@ fn miner_tasking(kind: TaskKind) -> Task {
         TaskKind::Load => Task {
             kind: TaskKind::Deliver,
             destination: TaskDestination::MarketOfHome,
-            interaction: TaskInteraction {
-                increase_prosperity: true,
-                ..Default::default()
-            },
+            interaction: TaskInteraction::with(Interaction::IncreaseProsperity),
             ..Default::default()
         },
     }
@@ -758,56 +751,72 @@ fn resolve_task_effects(
         return;
     }
 
-    if task.interaction.load_food {
-        const MIN_CARRIED_FOOD: i64 = 50;
-        const MAX_CARRIED_FOOD: i64 = 500;
-        const MAX_CARRIED_PROP: f64 = 0.5;
-
-        let current_food = sim.agents[subject].get_var(Var::FoodStored) as i64;
-        let mut at_settlement = sim.agents[destination].get_var(Var::FoodStored) as i64;
-        let max_exportable = (at_settlement as f64 * MAX_CARRIED_PROP)
-            .min(at_settlement as f64)
-            .round() as i64;
-
-        if current_food + max_exportable >= MIN_CARRIED_FOOD {
-            let mut on_farmer = current_food + max_exportable;
-            let put_down = (on_farmer - MAX_CARRIED_FOOD).max(0);
-            on_farmer -= put_down;
-            at_settlement = at_settlement - max_exportable + put_down;
-
-            sim.agents[subject]
-                .vars_mut()
-                .with(Var::FoodStored, on_farmer as f64);
-            sim.agents[destination]
-                .vars_mut()
-                .with(Var::FoodStored, at_settlement as f64);
-            task.interaction.load_food = false;
+    for interaction in task.interaction.iter_active() {
+        let is_complete = handle_interaction(sim, interaction, subject, destination);
+        if is_complete {
+            task.interaction.set(interaction, false);
         }
     }
 
-    if task.interaction.unload_food {
-        let on_farmer = sim.agents[subject].get_var(Var::FoodStored) as i64;
-        let on_settlement = sim.agents[destination].get_var(Var::FoodStored) as i64;
-        let new_at_settlement = on_farmer + on_settlement;
+    task.is_complete = at_destination && !task.interaction.any();
+}
 
-        sim.agents[subject].vars_mut().with(Var::FoodStored, 0.);
-        sim.agents[destination]
-            .vars_mut()
-            .with(Var::FoodStored, new_at_settlement as f64);
-        task.interaction.unload_food = false;
+fn handle_interaction(
+    sim: &mut Simulation,
+    interaction: Interaction,
+    subject: AgentId,
+    destination: AgentId,
+) -> bool {
+    match interaction {
+        Interaction::UnloadFood => {
+            let on_farmer = sim.agents[subject].get_var(Var::FoodStored) as i64;
+            let on_settlement = sim.agents[destination].get_var(Var::FoodStored) as i64;
+            let new_at_settlement = on_farmer + on_settlement;
+
+            sim.agents[subject].vars_mut().with(Var::FoodStored, 0.);
+            sim.agents[destination]
+                .vars_mut()
+                .with(Var::FoodStored, new_at_settlement as f64);
+            true
+        }
+        Interaction::LoadFood => {
+            const MIN_CARRIED_FOOD: i64 = 50;
+            const MAX_CARRIED_FOOD: i64 = 500;
+            const MAX_CARRIED_PROP: f64 = 0.5;
+
+            let current_food = sim.agents[subject].get_var(Var::FoodStored) as i64;
+            let mut at_settlement = sim.agents[destination].get_var(Var::FoodStored) as i64;
+            let max_exportable = (at_settlement as f64 * MAX_CARRIED_PROP)
+                .min(at_settlement as f64)
+                .round() as i64;
+
+            if current_food + max_exportable >= MIN_CARRIED_FOOD {
+                let mut on_farmer = current_food + max_exportable;
+                let put_down = (on_farmer - MAX_CARRIED_FOOD).max(0);
+                on_farmer -= put_down;
+                at_settlement = at_settlement - max_exportable + put_down;
+
+                sim.agents[subject]
+                    .vars_mut()
+                    .with(Var::FoodStored, on_farmer as f64);
+                sim.agents[destination]
+                    .vars_mut()
+                    .with(Var::FoodStored, at_settlement as f64);
+                true
+            } else {
+                false
+            }
+        }
+        Interaction::IncreaseProsperity => {
+            let value = sim.agents[subject].get_var(Var::ProsperityBonus);
+            sim.agents[destination]
+                .vars_mut()
+                .modify(Var::Prosperity, |x| x + value);
+            true
+        }
+        Interaction::ResetProsperityBonus => {
+            sim.agents[subject].vars_mut().set(Var::ProsperityBonus, 0.);
+            true
+        }
     }
-
-    if task.interaction.increase_prosperity {
-        let value = sim.agents[subject].get_var(Var::ProsperityBonus);
-        sim.agents[destination]
-            .vars_mut()
-            .modify(Var::Prosperity, |x| x + value);
-        task.interaction.increase_prosperity = false;
-    }
-
-    let has_interaction = task.interaction.load_food
-        || task.interaction.unload_food
-        || task.interaction.increase_prosperity;
-
-    task.is_complete = at_destination && !has_interaction;
 }

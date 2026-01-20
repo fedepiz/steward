@@ -326,11 +326,51 @@ impl Default for TaskDestination {
     }
 }
 
-#[derive(Default, Clone, Copy)]
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, EnumCount, EnumIter)]
+pub(crate) enum Interaction {
+    UnloadFood,
+    LoadFood,
+    IncreaseProsperity,
+    ResetProsperityBonus,
+}
+
+const INTERACTION_BITSET_SIZE: usize = (Interaction::COUNT + 63) / 64;
+
+#[derive(Default, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) struct TaskInteraction {
-    pub load_food: bool,
-    pub unload_food: bool,
-    pub increase_prosperity: bool,
+    flags: BitSet<INTERACTION_BITSET_SIZE>,
+}
+
+impl TaskInteraction {
+    pub(crate) fn new(to_set: &[Interaction]) -> Self {
+        let mut this = Self::default();
+        for &x in to_set {
+            this.set(x, true);
+        }
+        this
+    }
+
+    pub(crate) fn with(interaction: Interaction) -> Self {
+        let mut this = Self::default();
+        this.set(interaction, true);
+        this
+    }
+
+    pub(crate) fn get(&self, interaction: Interaction) -> bool {
+        self.flags.get(interaction as usize)
+    }
+
+    pub(crate) fn set(&mut self, interaction: Interaction, value: bool) {
+        self.flags.set(interaction as usize, value);
+    }
+
+    pub(crate) fn any(&self) -> bool {
+        self.flags.iter().next().is_some()
+    }
+
+    pub(crate) fn iter_active(self) -> impl Iterator<Item = Interaction> {
+        Interaction::iter().filter(move |&x| self.get(x))
+    }
 }
 
 #[derive(Clone, Copy, Debug)]
