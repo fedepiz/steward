@@ -184,30 +184,21 @@ async fn amain() {
             has_tick
         };
 
-        let is_fast_forward = {
-            let ctrl = mq::is_key_down(mq::KeyCode::LeftControl)
-                || mq::is_key_down(mq::KeyCode::RightControl);
-            let shift = mq::is_key_down(mq::KeyCode::LeftShift)
-                || mq::is_key_down(mq::KeyCode::RightShift);
-            let mut mult = 1;
-            if ctrl {
-                mult *= 2;
+        let tick_speed = {
+            let mut speed = 1;
+            if mq::is_key_down(mq::KeyCode::LeftControl) {
+                speed *= 2;
             }
-            if shift {
-                mult *= 5;
+            if mq::is_key_down(mq::KeyCode::LeftShift) {
+                speed *= 5;
             }
-            mult
+            speed
         };
+        request.advance_ticks = tick_speed;
 
-        request.advance_ticks = if has_tick
-            && !is_paused
-            && !reload
-            && !sim_actor.has_critical_error()
-        {
-            is_fast_forward as u32
-        } else {
-            0
-        };
+        if has_tick && !is_paused && !reload && !sim_actor.has_critical_error() {
+            request.advance_ticks = 0;
+        }
 
         request.highlighted_item = selected_item;
 
@@ -294,21 +285,18 @@ async fn amain() {
         egui_macroquad::draw();
 
         {
-            let mut speed_text = bumpalo::collections::String::new_in(&arena);
             let (text, color) = if sim_actor.has_critical_error() {
                 ("Critical Error", mq::RED)
             } else if is_paused {
                 ("Paused", mq::WHITE)
-            } else if is_fast_forward > 1 {
-                use std::fmt::Write;
-                let _ = write!(&mut speed_text, "Speed {}x", is_fast_forward);
-                (speed_text.as_str(), mq::WHITE)
+            } else if tick_speed > 1 {
+                let text = bumpalo::format!(in &arena, "Speed {}x", tick_speed);
+                (text.into_bump_str(), mq::WHITE)
             } else {
                 ("", mq::WHITE)
             };
 
             let font = assets.get_font("board");
-
             if !text.is_empty() {
                 draw_overlay_text(text, color, font, 100.0, mq::vec2(0.5, 0.25));
             }
