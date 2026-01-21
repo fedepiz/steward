@@ -425,7 +425,7 @@ fn spawn_subagent(sim: &mut Simulation, spawn: SpawnSubagent) {
 }
 
 // Units of food consumed per unit population per economic tick.
-const FOOD_CONSUMPTION_PER_HEAD: f64 = 0.01;
+const FOOD_CONSUMPTION_PER_HEAD: f64 = 0.1;
 
 fn food_production_and_consumption(sim: &mut Simulation, arena: &Bump) {
     // Prosperity scales the base food output from villages and towns.
@@ -459,9 +459,9 @@ fn food_production_and_consumption(sim: &mut Simulation, arena: &Bump) {
 
 fn population_from_food(sim: &mut Simulation, arena: &Bump) {
     // Convert food stock into a target population and converge gradually.
-    const POPULATION_CONVERGENCE: f64 = 0.1;
+    const POPULATION_CONVERGENCE: f64 = 0.01;
     // The target is some kind of multiple of the food consumption
-    const TICK_OF_SLACK: f64 = 100.;
+    const TICK_OF_SLACK: f64 = 12.;
     let mut changes = AVec::new_in(arena);
 
     for settlement in sim.agents.iter_set(agents::Set::Settlements) {
