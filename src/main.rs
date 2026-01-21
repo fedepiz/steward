@@ -196,7 +196,7 @@ async fn amain() {
         };
         request.advance_ticks = tick_speed;
 
-        if has_tick && !is_paused && !reload && !sim_actor.has_critical_error() {
+        if !has_tick || is_paused || reload || sim_actor.has_critical_error() {
             request.advance_ticks = 0;
         }
 

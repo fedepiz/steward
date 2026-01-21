@@ -10,6 +10,7 @@ use crate::{
     objects::*,
     parties::{self, *},
     terrain_map::TerrainMap,
+    view::{MapItems, MapTerrain},
 };
 
 type AVec<'a, T> = bumpalo::collections::Vec<'a, T>;
@@ -77,7 +78,7 @@ fn tick(sim: &mut Simulation, mut request: Request, arena: &Bump) -> Response {
             &[(Var::ProsperityBonus, 0.01)],
         );
 
-        agent_tasking(sim, arena);
+        crate::agent_tasking::agent_tasking(sim, arena);
 
         const ECONOMY_TICK_RATE: usize = 200;
         if sim.turn_num % ECONOMY_TICK_RATE == 0 {
@@ -193,7 +194,7 @@ fn tick(sim: &mut Simulation, mut request: Request, arena: &Bump) -> Response {
     }
 
     let mut response = Response::default();
-    view(sim, &request, &mut response);
+    crate::view::view(sim, &request, &mut response);
     response
 }
 
@@ -266,8 +267,23 @@ pub struct Request {
     pub move_to_item: Option<MapItemId>,
     pub highlighted_item: Option<MapItemId>,
     pub extract_terrain: bool,
-    strings: StringPool,
-    view_entities: Vec<ViewEntity>,
+    pub(crate) strings: StringPool,
+    pub(crate) view_entities: Vec<ViewEntity>,
+}
+
+impl Request {
+    pub(crate) fn entity_tag(&self, view: ViewEntity) -> &'_ str {
+        self.strings.get(view.tag)
+    }
+}
+
+#[derive(Default, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub struct MapItemId(pub u64);
+
+#[derive(Clone, Copy)]
+pub(crate) struct ViewEntity {
+    tag: SpanHandle,
+    pub(crate) entity: PartyId,
 }
 
 #[derive(Default)]
@@ -329,189 +345,11 @@ fn detections(detections: &mut Detections, entities: &Parties, spatial_map: &Spa
     }
 }
 
-#[derive(Clone, Copy)]
-struct ViewEntity {
-    tag: SpanHandle,
-    entity: PartyId,
-}
-
-fn view(sim: &Simulation, req: &Request, response: &mut Response) {
-    let _span = tracing::info_span!("View").entered();
-
-    {
-        let _span = tracing::info_span!("Objects").entered();
-        let mut ctx = ObjectsBuilder::default();
-        // Create a default zero object, so that ObjectId::default() is valid but unused
-        ctx.spawn(|_| {});
-        // Create the 'global' object
-        ctx.spawn(|ctx| {
-            ctx.tag("root");
-            ctx.fmt("tick_num", format_args!("Turn number: {}", sim.turn_num));
-        });
-
-        // Create requested objects
-        for view_entity in &req.view_entities {
-            let party = &sim.parties[view_entity.entity];
-            ctx.spawn(|ctx| {
-                let tag = req.strings.get(view_entity.tag);
-                ctx.tag(tag);
-                ctx.display("name", sim.names.resolve(party.name));
-
-                let agent = &sim.agents[party.agent];
-
-                {
-                    // Display food
-                    let stored = agent.get_var(Var::FoodStored);
-                    if agent.in_set(Set::Settlements) {
-                        let capacity = agent.get_var(Var::FoodCapacity);
-                        ctx.display("food", format_args!("{stored}/{capacity}"));
-                    } else {
-                        ctx.display("food", stored);
-                    }
-                }
-
-                if agent.in_set(agents::Set::People) {
-                    ctx.display("renown", agent.get_var(Var::Renown));
-                }
-
-                if agent.in_set(agents::Set::Settlements) {
-                    ctx.display("population", agent.get_var(Var::Population));
-                    ctx.fmt(
-                        "prosperity",
-                        format_args!("{:1.2}%", agent.get_var(Var::Prosperity) * 100.),
-                    );
-                }
-            });
-        }
-
-        response.objects = ctx.build();
-    }
-
-    {
-        let _span = tracing::info_span!("Map Items").entered();
-        let ctx = &mut response.map_items;
-        let highlighted_entity = req
-            .highlighted_item
-            .map(|id| id.as_entity())
-            .unwrap_or_default();
-
-        // Get parties and types, sorted by layer
-        let mut parties: Vec<_> = sim
-            .parties
-            .iter()
-            .map(|party| (party, sim.parties.get_type(party.type_id).layer))
-            .collect();
-
-        parties.sort_by_key(|(_, layer)| *layer);
-
-        for (entity, _) in parties {
-            if !entity.inside_of.is_null() {
-                continue;
-            }
-            // TODO: Filter here for being in view
-            let typ = sim.parties.get_type(entity.type_id);
-
-            let is_highlighted = highlighted_entity == entity.id;
-            let show_name = is_highlighted || typ.always_show_name;
-
-            let name = if show_name {
-                let name = sim.names.resolve(entity.name);
-                ctx.names.push(name)
-            } else {
-                Default::default()
-            };
-
-            ctx.entries.push(MapItemData {
-                id: entity.id.data().as_ffi(),
-                name,
-                image: typ.image,
-                body: entity.body,
-            });
-        }
-    }
-
-    if req.extract_terrain {
-        let _span = tracing::info_span!("Map Terrain").entered();
-        let mut map_terrain = MapTerrain::default();
-        map_terrain.hash = sim.terrain_map.hash();
-        map_terrain.size = sim.terrain_map.size();
-        map_terrain.tiles = sim
-            .terrain_map
-            .iter_terrains()
-            .map(|typ| typ.color)
-            .collect();
-        response.map_terrain = Some(map_terrain);
-    }
-}
-
 #[derive(Default)]
 pub struct Response {
     pub objects: Objects,
     pub map_items: MapItems,
     pub map_terrain: Option<MapTerrain>,
-}
-
-#[derive(Default)]
-pub struct MapItems {
-    names: StringPool,
-    entries: Vec<MapItemData>,
-}
-
-impl MapItems {
-    fn get(&self, data: &MapItemData) -> MapItem<'_> {
-        MapItem {
-            id: MapItemId(data.id),
-            name: self.names.get(data.name),
-            image: data.image,
-            x: data.body.pos.x - data.body.size / 2.,
-            y: data.body.pos.y - data.body.size / 2.,
-            width: data.body.size,
-            height: data.body.size,
-        }
-    }
-
-    pub fn get_by_index(&self, index: usize) -> MapItem<'_> {
-        let data = self.entries.get(index).copied().unwrap_or_default();
-        self.get(&data)
-    }
-
-    pub fn iter(&self) -> impl Iterator<Item = MapItem<'_>> + use<'_> {
-        self.entries.iter().map(|data| self.get(data))
-    }
-}
-
-#[derive(Default, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-pub struct MapItemId(pub u64);
-
-impl MapItemId {
-    pub(crate) fn as_entity(self) -> PartyId {
-        PartyId::from(KeyData::from_ffi(self.0))
-    }
-}
-
-#[derive(Default, Clone, Copy)]
-struct MapItemData {
-    id: u64,
-    name: SpanHandle,
-    image: &'static str,
-    body: Body,
-}
-
-pub struct MapItem<'a> {
-    pub id: MapItemId,
-    pub name: &'a str,
-    pub image: &'static str,
-    pub x: f32,
-    pub y: f32,
-    pub width: f32,
-    pub height: f32,
-}
-
-#[derive(Default)]
-pub struct MapTerrain {
-    pub hash: u64,
-    pub size: (usize, usize),
-    pub tiles: Vec<(u8, u8, u8)>,
 }
 
 fn spawn_worker(
@@ -710,273 +548,6 @@ pub(crate) fn determine_party_movement_target(
             } else {
                 MovementTarget::Immobile
             }
-        }
-    }
-}
-
-// Agent tasking
-
-fn agent_tasking(sim: &mut Simulation, arena: &Bump) {
-    let _span = tracing::info_span!("Agent tasking").entered();
-    // Snapshot tasks so task selection can read and write without aliasing agents.
-    let tasks = AVec::from_iter_in(
-        sim.agents
-            .iter_mut()
-            .map(|agent| std::mem::take(&mut agent.task)),
-        arena,
-    );
-
-    // Determine task, destination, and desired behavior for each agent.
-    let mut results = AVec::with_capacity_in(tasks.len(), arena);
-    for (subject, task) in sim.agents.iter().zip(tasks) {
-        let (task, destination, behavior) = task_for_agent(sim, subject, task);
-        results.push((subject.id, task, destination, behavior));
-    }
-
-    // Resolve task effects once agents are at their destinations.
-    for (subject, task, destination, _) in &mut results {
-        resolve_task_effects(sim, *subject, *destination, task);
-    }
-
-    // Commit task/behavior changes; fixed behavior overrides task-driven behavior.
-    for (agent, (_, task, _, behavior)) in sim.agents.iter_mut().zip(results) {
-        agent.task = task;
-        agent.behavior = agent.fixed_behavior.unwrap_or(behavior);
-    }
-}
-
-const SHORT_WAIT: u32 = 20;
-
-fn farmer_tasking(kind: TaskKind) -> Task {
-    match kind {
-        TaskKind::Init => Task {
-            kind: TaskKind::ReturnHome,
-            destination: TaskDestination::Home,
-            ..Default::default()
-        },
-        TaskKind::ReturnHome => Task {
-            kind: TaskKind::Load,
-            destination: TaskDestination::Home,
-            interaction: TaskInteraction::with(Interaction::LoadFood),
-            arrival_wait: SHORT_WAIT,
-            ..Default::default()
-        },
-        TaskKind::Load => Task {
-            kind: TaskKind::Deliver,
-            destination: TaskDestination::MarketOfHome,
-            // Deliver food to town and load a prosperity bonus for the return trip.
-            interaction: TaskInteraction::new(&[
-                Interaction::UnloadFood,
-                Interaction::LoadProsperityBonus,
-            ]),
-            arrival_wait: SHORT_WAIT,
-            ..Default::default()
-        },
-        TaskKind::Deliver => Task {
-            kind: TaskKind::ReturnHome,
-            destination: TaskDestination::Home,
-            interaction: TaskInteraction::new(&[
-                Interaction::IncreaseProsperity,
-                Interaction::ResetProsperityBonus,
-            ]),
-            ..Default::default()
-        },
-    }
-}
-
-fn miner_tasking(kind: TaskKind) -> Task {
-    match kind {
-        TaskKind::Init => Task {
-            kind: TaskKind::ReturnHome,
-            destination: TaskDestination::Home,
-            ..Default::default()
-        },
-        TaskKind::ReturnHome => Task {
-            kind: TaskKind::Load,
-            destination: TaskDestination::Home,
-            interaction: TaskInteraction::default(),
-            arrival_wait: SHORT_WAIT,
-            ..Default::default()
-        },
-        TaskKind::Load => Task {
-            kind: TaskKind::Deliver,
-            destination: TaskDestination::MarketOfHome,
-            interaction: TaskInteraction::with(Interaction::IncreaseProsperity),
-            arrival_wait: SHORT_WAIT,
-            ..Default::default()
-        },
-        TaskKind::Deliver => Task {
-            kind: TaskKind::ReturnHome,
-            destination: TaskDestination::Home,
-            ..Default::default()
-        },
-    }
-}
-
-#[derive(Default, Clone, Copy)]
-struct Destination {
-    target: AgentId,
-    enter: bool,
-}
-
-fn task_for_agent(
-    sim: &Simulation,
-    subject: &Agent,
-    mut task: Task,
-) -> (Task, Destination, Behavior) {
-    // Retask when initializing or once the current task is complete.
-    let retask = task.kind == TaskKind::Init || task.is_complete;
-    if retask {
-        let is_farmer = subject.flags.get(agents::Flag::IsFarmer);
-        task = if is_farmer {
-            farmer_tasking(task.kind)
-        } else if subject.flags.get(agents::Flag::IsMiner) {
-            miner_tasking(task.kind)
-        } else {
-            Task::default()
-        };
-    }
-
-    // Resolve the concrete target for the task's symbolic destination.
-    let destination = match task.destination {
-        TaskDestination::Nothing => Destination::default(),
-        TaskDestination::Home => {
-            let target = sim.agents.parent_of(Hierarchy::Attachment, subject.id);
-            Destination {
-                target,
-                enter: true,
-            }
-        }
-        TaskDestination::MarketOfHome => {
-            let home = sim.agents.parent_of(Hierarchy::Attachment, subject.id);
-            let target = sim.agents.parent_of(Hierarchy::LocalMarket, home);
-            Destination {
-                target,
-                enter: true,
-            }
-        }
-    };
-
-    // Reset task if destination is not valid
-    let is_valid = !destination.target.is_null();
-    if !is_valid {
-        return (Task::default(), destination, Behavior::Idle);
-    }
-
-    // Behavior is driven by the task destination.
-    let behavior = if destination.target.is_null() {
-        subject.behavior
-    } else {
-        Behavior::GoTo {
-            target: destination.target,
-            enter_on_arrival: destination.enter,
-        }
-    };
-
-    (task, destination, behavior)
-}
-
-fn resolve_task_effects(
-    sim: &mut Simulation,
-    subject: AgentId,
-    destination: Destination,
-    task: &mut Task,
-) {
-    let target = destination.target;
-    let at_destination = !target.is_null() && {
-        let location = sim.agents[subject].location;
-        if destination.enter {
-            location == Location::Inside(target)
-        } else {
-            location.is_at(target)
-        }
-    };
-
-    if !at_destination {
-        return;
-    }
-
-    if task.arrival_wait > 0 {
-        task.arrival_wait = task.arrival_wait.saturating_sub(1);
-        return;
-    }
-
-    for interaction in task.interaction.iter_active() {
-        let is_complete = handle_interaction(sim, interaction, subject, destination.target);
-        if is_complete {
-            task.interaction.set(interaction, false);
-        }
-    }
-
-    task.is_complete = at_destination && !task.interaction.any();
-}
-
-fn handle_interaction(
-    sim: &mut Simulation,
-    interaction: Interaction,
-    subject: AgentId,
-    target: AgentId,
-) -> bool {
-    match interaction {
-        Interaction::UnloadFood => {
-            let on_farmer = sim.agents[subject].get_var(Var::FoodStored) as i64;
-            let on_settlement = sim.agents[target].get_var(Var::FoodStored) as i64;
-            let new_at_settlement = on_farmer + on_settlement;
-
-            sim.agents[subject].vars_mut().with(Var::FoodStored, 0.);
-            sim.agents[target]
-                .vars_mut()
-                .with(Var::FoodStored, new_at_settlement as f64);
-            true
-        }
-        Interaction::LoadFood => {
-            const MIN_CARRIED_FOOD: i64 = 50;
-            const MAX_CARRIED_FOOD: i64 = 500;
-            const MAX_CARRIED_PROP: f64 = 0.5;
-
-            let current_food = sim.agents[subject].get_var(Var::FoodStored) as i64;
-            let mut at_settlement = sim.agents[target].get_var(Var::FoodStored) as i64;
-            let max_exportable = (at_settlement as f64 * MAX_CARRIED_PROP)
-                .min(at_settlement as f64)
-                .round() as i64;
-
-            if current_food + max_exportable >= MIN_CARRIED_FOOD {
-                let mut on_farmer = current_food + max_exportable;
-                let put_down = (on_farmer - MAX_CARRIED_FOOD).max(0);
-                on_farmer -= put_down;
-                at_settlement = at_settlement - max_exportable + put_down;
-
-                sim.agents[subject]
-                    .vars_mut()
-                    .with(Var::FoodStored, on_farmer as f64);
-                sim.agents[target]
-                    .vars_mut()
-                    .with(Var::FoodStored, at_settlement as f64);
-                true
-            } else {
-                false
-            }
-        }
-        Interaction::LoadProsperityBonus => {
-            // Capture town prosperity as a bonus to be applied when returning home.
-            const PROSPERITY_BONUS_SCALE: f64 = 0.025;
-            let prosperity = sim.agents[target].get_var(Var::Prosperity);
-            let bonus = (prosperity * PROSPERITY_BONUS_SCALE).max(0.0);
-            sim.agents[subject]
-                .vars_mut()
-                .with(Var::ProsperityBonus, bonus);
-            true
-        }
-        Interaction::IncreaseProsperity => {
-            let value = sim.agents[subject].get_var(Var::ProsperityBonus);
-            sim.agents[target]
-                .vars_mut()
-                .modify(Var::Prosperity, |x| x + value);
-            true
-        }
-        Interaction::ResetProsperityBonus => {
-            sim.agents[subject].vars_mut().set(Var::ProsperityBonus, 0.);
-            true
         }
     }
 }
