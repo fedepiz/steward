@@ -112,6 +112,20 @@ pub(crate) fn view(sim: &Simulation, req: &Request, response: &mut Response) {
                         format_args!("{:1.2}%", agent.get_var(Var::Prosperity) * 100.),
                     );
                 }
+
+                if agent.in_set(agents::Set::Settlements) {
+                    ctx.display(
+                        "farmer_opportunity",
+                        format_args!("{:1.2}", agent.get_var(Var::FarmerOpportunity)),
+                    );
+                }
+
+                if agent.in_set(agents::Set::Settlements) {
+                    ctx.display(
+                        "miner_opportunity",
+                        format_args!("{:1.2}", agent.get_var(Var::MinerOpportunity)),
+                    );
+                }
             });
         }
 

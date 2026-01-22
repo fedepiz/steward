@@ -361,6 +361,8 @@ fn gui(ctx: &egui::Context, response: &simulation::Response) {
                         ("population", "Population"),
                         ("food", "Food"),
                         ("prosperity", "Prosperity"),
+                        ("farmer_opportunity", "Farmer Opportunity"),
+                        ("miner_opportunity", "Miner Opportunity"),
                     ];
                     for (id, label) in vars {
                         if let Some(value) = objs.try_str(root, id) {

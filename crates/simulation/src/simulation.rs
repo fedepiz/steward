@@ -13,6 +13,16 @@ use crate::{
     view::{MapItems, MapTerrain},
 };
 
+// GAME PARAMETERS
+pub(crate) const FARMER_OPPORTUNITY_CHANGE_PER_TICK: f64 = 1.;
+pub(crate) const FARMER_OPPORTUNITY_MIN: f64 = -10000.0;
+pub(crate) const FARMER_OPPORTUNITY_VISIT_CHANGE: f64 = -2000.;
+pub(crate) const FARMER_OPPORTUNITY_SPAWN_CHANGE: f64 = -2000.;
+
+pub(crate) const MINER_OPPORTUNITY_CHANGE_PER_TICK: f64 = 1.;
+pub(crate) const MINER_OPPORTUNITY_MIN: f64 = -10000.0;
+pub(crate) const MINER_OPPORTUNITY_SPAWN_CHANGE: f64 = MINER_OPPORTUNITY_MIN;
+
 type AVec<'a, T> = bumpalo::collections::Vec<'a, T>;
 
 #[derive(Default)]
@@ -60,23 +70,8 @@ fn tick(sim: &mut Simulation, mut request: Request, arena: &Bump) -> Response {
     for _ in 0..request.advance_ticks {
         sim.turn_num = sim.turn_num.wrapping_add(1);
 
-        spawn_worker(
-            sim,
-            arena,
-            "farmers",
-            agents::Set::Villages,
-            agents::Flag::IsFarmer,
-            &[],
-        );
-
-        spawn_worker(
-            sim,
-            arena,
-            "miners",
-            agents::Set::Mines,
-            agents::Flag::IsMiner,
-            &[(Var::ProsperityBonus, 0.01)],
-        );
+        tick_opportunities(sim);
+        spawn_with_opportunity(sim, arena);
 
         crate::agent_tasking::agent_tasking(sim, arena);
 
@@ -228,8 +223,8 @@ fn location_of_agent(
     scratch.extend(
         detections
             .iter()
-            .filter(|det| !det.location_agent.is_null())
-            .map(|det| (det.location_agent, det.distance)),
+            .filter(|det| det.is_location)
+            .map(|det| (det.agent, det.distance)),
     );
 
     // Get the closest. If none, we are just "far out"
@@ -328,15 +323,10 @@ fn detections(detections: &mut Detections, entities: &Parties, spatial_map: &Spa
             // Distance net of sizes. 0 or lower means collision
             let distance = center_to_center_distance - collision_range;
 
-            let location_agent = if target.is_location {
-                target.agent
-            } else {
-                AgentId::null()
-            };
-
             scratch.push(Detection {
                 target: target.id,
-                location_agent,
+                agent: target.agent,
+                is_location: target.is_location,
                 distance,
             });
         }
@@ -352,40 +342,165 @@ pub struct Response {
     pub map_terrain: Option<MapTerrain>,
 }
 
-fn spawn_worker(
-    sim: &mut Simulation,
-    arena: &Bump,
-    party_type: &str,
-    source_set: agents::Set,
-    worker_flag: agents::Flag,
-    vars: &[(Var, f64)],
-) {
+fn tick_opportunities(sim: &mut Simulation) {
+    struct OpportunityInfo {
+        variable: Var,
+        decay: f64,
+        min: f64,
+        max: f64,
+    }
+
+    let table = [
+        OpportunityInfo {
+            variable: Var::FarmerOpportunity,
+            decay: FARMER_OPPORTUNITY_CHANGE_PER_TICK,
+            min: FARMER_OPPORTUNITY_MIN,
+            max: 0.,
+        },
+        OpportunityInfo {
+            variable: Var::MinerOpportunity,
+            decay: MINER_OPPORTUNITY_CHANGE_PER_TICK,
+            min: MINER_OPPORTUNITY_MIN,
+            max: 0.,
+        },
+    ];
+
+    for agent in sim.agents.iter_mut() {
+        for opportunity in &table {
+            let current = agent.get_var(opportunity.variable);
+            let next = (current + opportunity.decay).clamp(opportunity.min, opportunity.max);
+            agent.vars_mut().with(opportunity.variable, next);
+        }
+    }
+}
+
+fn spawn_with_opportunity(sim: &mut Simulation, arena: &Bump) {
     let mut spawns = AVec::new_in(arena);
-    let party_type = sim.parties.find_type_by_tag(party_type).unwrap().id;
+    let mut updates = AVec::new_in(arena);
 
-    for agent in sim.agents.iter_set(source_set) {
-        // Check for all the dependents
-        let dependents = sim.agents.children_of(Hierarchy::Attachment, agent.id);
-        // Do we have a worker?
-        let has_worker = dependents
-            .into_iter()
-            .any(|child| sim.agents[child].flags.get(worker_flag));
+    #[derive(Clone, Copy)]
+    struct SpawnInfo {
+        party_type: &'static str,
+        flags: Flags,
+    }
 
-        // If we do not have a worker, we will need to spawn one
-        if !has_worker {
-            let spawn = SpawnSubagent {
+    const FARMER_SPAWN_INFO: SpawnInfo = SpawnInfo {
+        party_type: "farmers",
+        flags: Flags::new().with(Flag::IsFarmer),
+    };
+    const MINER_SPAWN_INFO: SpawnInfo = SpawnInfo {
+        party_type: "miners",
+        flags: Flags::new().with(Flag::IsMiner),
+    };
+
+    #[derive(Clone, Copy, PartialEq, PartialOrd)]
+    struct OpportunityInfo {
+        variable: Var,
+        threshold: f64,
+        on_spawn_change: f64,
+        min_value: f64,
+        max_value: f64,
+        workplace_set: Option<Set>,
+    }
+
+    const FARMER_OPPORTUNITY_INFO: OpportunityInfo = OpportunityInfo {
+        variable: Var::FarmerOpportunity,
+        threshold: 0.,
+        on_spawn_change: FARMER_OPPORTUNITY_SPAWN_CHANGE,
+        min_value: FARMER_OPPORTUNITY_MIN,
+        max_value: 0.,
+        workplace_set: None,
+    };
+    const MINER_OPPORTUNITY_INFO: OpportunityInfo = OpportunityInfo {
+        variable: Var::MinerOpportunity,
+        threshold: 0.,
+        on_spawn_change: MINER_OPPORTUNITY_SPAWN_CHANGE,
+        min_value: MINER_OPPORTUNITY_MIN,
+        max_value: 0.,
+        workplace_set: Some(Set::Mines),
+    };
+
+    #[derive(Default)]
+    struct Eligeable<'a> {
+        sets: &'a [Set],
+    }
+
+    let table = [
+        (
+            Eligeable {
+                sets: &[Set::Villages],
+            },
+            FARMER_OPPORTUNITY_INFO,
+            FARMER_SPAWN_INFO,
+        ),
+        (
+            Eligeable {
+                sets: &[Set::Towns],
+            },
+            MINER_OPPORTUNITY_INFO,
+            MINER_SPAWN_INFO,
+        ),
+    ];
+
+    for agent in sim.agents.iter() {
+        for (filter, opportunity, spawn) in &table {
+            // Check if opportunity value is in trigger range (a cheap check)
+            let opportunity_value = agent.get_var(opportunity.variable);
+            if opportunity_value < opportunity.threshold {
+                continue;
+            }
+
+            // Check if filter applis
+            if filter.sets.iter().any(|&set| !agent.in_set(set)) {
+                continue;
+            }
+
+            let mut parents = AVec::new_in(arena);
+
+            // Look for a target workplace in the party detections
+            let workplace = opportunity.workplace_set.and_then(|set| {
+                let detections = sim.parties.detections.get_for(agent.party);
+                detections
+                    .iter()
+                    .find(|entry| sim.agents.in_set(entry.agent, set))
+                    .map(|entry| (Hierarchy::WorkArea, entry.agent))
+            });
+
+            if opportunity.workplace_set.is_some() && workplace.is_none() {
+                continue;
+            }
+
+            parents.extend(workplace);
+
+            // Update opportunity value
+            let next_value = (opportunity_value + opportunity.on_spawn_change)
+                .clamp(opportunity.min_value, opportunity.max_value);
+
+            // Record variable change
+            updates.push((agent.id, opportunity.variable, next_value));
+
+            // Produce spawn
+            let party_type = sim.parties.find_type_by_tag(spawn.party_type).unwrap().id;
+            spawns.push(SpawnSubagent {
                 party_type,
                 parent: agent.id,
-                flags: Flags::default().with(worker_flag),
-                vars,
-            };
-            spawns.push(spawn);
+                flags: spawn.flags,
+                vars: &[],
+                parents: parents.into_bump_slice(),
+            });
         }
     }
 
-    // Spawn the miners as necessary
     for spawn in spawns {
+        let parent = sim.names.resolve(sim.agents[spawn.parent].name);
+        let child = sim.names.resolve(sim.parties[spawn.party_type].name);
+        println!("Spawning {child} at {parent}");
         spawn_subagent(sim, spawn);
+    }
+
+    for (agent_id, variable, value) in updates {
+        let agent = &mut sim.agents[agent_id];
+        agent.vars_mut().set(variable, value);
     }
 }
 
@@ -394,6 +509,7 @@ struct SpawnSubagent<'a> {
     parent: AgentId,
     flags: Flags,
     vars: &'a [(Var, f64)],
+    parents: &'a [(Hierarchy, AgentId)],
 }
 
 fn spawn_subagent(sim: &mut Simulation, spawn: SpawnSubagent) {
@@ -416,16 +532,18 @@ fn spawn_subagent(sim: &mut Simulation, spawn: SpawnSubagent) {
     agent.location = Location::Inside(spawn.parent);
     agent.flags = spawn.flags;
     agent.vars_mut().set_many(spawn.vars);
-
     party.agent = agent.id;
 
     let agent = agent.id;
     sim.agents
         .set_parent(Hierarchy::Attachment, spawn.parent, agent);
+    for &(hierarchy, id) in spawn.parents {
+        sim.agents.set_parent(hierarchy, id, agent);
+    }
 }
 
 // Units of food consumed per unit population per economic tick.
-const FOOD_CONSUMPTION_PER_HEAD: f64 = 0.1;
+const FOOD_CONSUMPTION_PER_HEAD: f64 = 0.01;
 
 fn food_production_and_consumption(sim: &mut Simulation, arena: &Bump) {
     // Prosperity scales the base food output from villages and towns.
@@ -513,16 +631,22 @@ fn determine_party_goal(sim: &Simulation, party: &Party) -> Goal {
         Behavior::GoTo {
             target,
             enter_on_arrival,
-        } => sim
-            .agents
-            .get(target)
-            .and_then(|agent| sim.parties.get(agent.party))
-            .map(|party| Goal::ToParty {
-                target: party.id,
-                distance: std::f32::NEG_INFINITY,
-                enter_on_arrival,
-            })
-            .unwrap_or_default(),
+        } => {
+            let distance = if enter_on_arrival {
+                std::f32::NEG_INFINITY
+            } else {
+                0.
+            };
+            sim.agents
+                .get(target)
+                .and_then(|agent| sim.parties.get(agent.party))
+                .map(|party| Goal::ToParty {
+                    target: party.id,
+                    distance,
+                    enter_on_arrival,
+                })
+                .unwrap_or_default()
+        }
     }
 }
 

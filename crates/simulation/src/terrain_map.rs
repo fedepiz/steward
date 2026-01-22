@@ -102,13 +102,13 @@ fn init_types() -> Vec<TerrainType> {
         },
         TerrainType {
             name: "Forest",
-            movement_speed_multiplier: 0.5,
+            movement_speed_multiplier: 0.75,
             color: (0, 125, 0),
             elevation_range: (15, 30),
         },
         TerrainType {
             name: "Hills",
-            movement_speed_multiplier: 0.5,
+            movement_speed_multiplier: 0.33,
             color: (125, 50, 50),
             elevation_range: (30, 50),
         },

@@ -144,6 +144,19 @@ pub(crate) fn init(sim: &mut Simulation, req: InitRequest) {
             ..Default::default()
         },
         Desc {
+            key: "caer_manuguaid",
+            name: "Caer Manuguaid",
+            pos: (625., 675.),
+            party_typ: "town",
+            vars: &[
+                (Var::Prosperity, SETTLEMENT_PROSPERITY),
+                (Var::Population, TOWN_POPULATION),
+                (Var::FoodCapacity, TOWN_FOOD_CAPACITY),
+            ],
+            sets: &[Set::Settlements, Set::Towns],
+            ..Default::default()
+        },
+        Desc {
             name: "Llan Heledd",
             pos: (580., 520.),
             party_typ: "village",

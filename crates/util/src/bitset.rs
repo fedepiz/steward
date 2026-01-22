@@ -8,7 +8,10 @@ impl<const N: usize> Default for BitSet<N> {
 }
 
 impl<const N: usize> BitSet<N> {
-    pub fn set(&mut self, i: usize, value: bool) {
+    pub const fn new() -> Self {
+        BitSet([0; N])
+    }
+    pub const fn set(&mut self, i: usize, value: bool) {
         if i >= N * 64 {
             return;
         }
@@ -22,7 +25,7 @@ impl<const N: usize> BitSet<N> {
         }
     }
 
-    pub fn get(&self, i: usize) -> bool {
+    pub const fn get(&self, i: usize) -> bool {
         if i >= N * 64 {
             return false;
         }

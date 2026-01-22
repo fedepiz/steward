@@ -44,7 +44,8 @@ impl Detections {
 pub(crate) struct Detection {
     pub target: PartyId,
     pub distance: f32,
-    pub location_agent: AgentId,
+    pub agent: AgentId,
+    pub is_location: bool,
 }
 
 impl Parties {

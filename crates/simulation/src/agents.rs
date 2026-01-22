@@ -7,7 +7,7 @@ use util::bitset::BitSet;
 
 new_key_type! { pub struct AgentId; }
 
-#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, EnumCount, EnumIter)]
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, EnumCount, EnumIter, Debug)]
 pub(crate) enum Var {
     // Person
     Renown,
@@ -18,6 +18,9 @@ pub(crate) enum Var {
     FoodCapacity,
     // Economic action
     ProsperityBonus,
+    // Opportunities
+    FarmerOpportunity,
+    MinerOpportunity,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, EnumCount, EnumIter)]
@@ -42,6 +45,7 @@ pub(crate) enum Hierarchy {
     Attachment,
     FactionMembership,
     LocalMarket,
+    WorkArea,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, EnumCount, EnumIter)]
@@ -144,6 +148,10 @@ impl Agents {
 
     pub fn iter_set(&self, set: Set) -> impl Iterator<Item = &Agent> + use<'_> {
         self.iter_set_ids(set).map(|id| &self.entries[id])
+    }
+
+    pub fn in_set(&self, id: AgentId, set: Set) -> bool {
+        self.entries[id].in_set(set)
     }
 
     pub fn set_parent(&mut self, hierarchy: Hierarchy, parent: AgentId, child: AgentId) {
@@ -256,18 +264,22 @@ pub(crate) struct Agent {
 pub struct Flags(BitSet<FLAG_BITSET_SIZE>);
 
 impl Flags {
+    pub(crate) const fn new() -> Self {
+        Self(BitSet::new())
+    }
+
     #[inline]
-    pub(crate) fn get(&self, flag: Flag) -> bool {
+    pub(crate) const fn get(&self, flag: Flag) -> bool {
         self.0.get(flag as usize)
     }
 
     #[inline]
-    pub(crate) fn set(&mut self, flag: Flag, value: bool) {
+    pub(crate) const fn set(&mut self, flag: Flag, value: bool) {
         self.0.set(flag as usize, value);
     }
 
     #[inline]
-    pub(crate) fn with(mut self, flag: Flag) -> Self {
+    pub(crate) const fn with(mut self, flag: Flag) -> Self {
         self.set(flag, true);
         self
     }
@@ -330,6 +342,7 @@ impl Default for TaskKind {
 pub(crate) enum TaskDestination {
     Nothing,
     Home,
+    WorkArea,
     MarketOfHome,
 }
 
