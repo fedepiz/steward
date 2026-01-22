@@ -21,7 +21,6 @@ pub(crate) const FARMER_OPPORTUNITY_SPAWN_CHANGE: f64 = -2000.;
 
 pub(crate) const MINER_OPPORTUNITY_CHANGE_PER_TICK: f64 = 1.;
 pub(crate) const MINER_OPPORTUNITY_MIN: f64 = -10000.0;
-pub(crate) const MINER_OPPORTUNITY_VISIT_CHANGE: f64 = MINER_OPPORTUNITY_MIN / 2.;
 pub(crate) const MINER_OPPORTUNITY_SPAWN_CHANGE: f64 = MINER_OPPORTUNITY_MIN;
 
 type AVec<'a, T> = bumpalo::collections::Vec<'a, T>;
@@ -78,9 +77,12 @@ fn tick(sim: &mut Simulation, mut request: Request, arena: &Bump) -> Response {
 
         const ECONOMY_TICK_RATE: usize = 200;
         if sim.turn_num % ECONOMY_TICK_RATE == 0 {
+            let _span = tracing::info_span!("Economic tick").entered();
             food_production_and_consumption(sim, arena);
             // Food stock sets the target population; this nudges population toward that target.
             population_from_food(sim, arena);
+            // Consumables are converted into prosperity in small increments.
+            consumables_into_prosperity(sim, arena);
             // Prosperity drifts toward a baseline over time.
             prosperity_towards_equilibrium(sim, arena);
         }
@@ -344,33 +346,55 @@ pub struct Response {
 }
 
 fn tick_opportunities(sim: &mut Simulation) {
-    struct OpportunityInfo {
+    struct Rule<'a> {
         variable: Var,
-        decay: f64,
+        change: f64,
         min: f64,
         max: f64,
+        var_gt: &'a [(Var, f64)],
     }
 
-    let table = [
-        OpportunityInfo {
+    const RULES: &[Rule] = &[
+        Rule {
             variable: Var::FarmerOpportunity,
-            decay: FARMER_OPPORTUNITY_CHANGE_PER_TICK,
+            change: FARMER_OPPORTUNITY_CHANGE_PER_TICK,
             min: FARMER_OPPORTUNITY_MIN,
             max: 0.,
+            var_gt: &[],
         },
-        OpportunityInfo {
+        Rule {
             variable: Var::MinerOpportunity,
-            decay: MINER_OPPORTUNITY_CHANGE_PER_TICK,
+            change: MINER_OPPORTUNITY_CHANGE_PER_TICK,
             min: MINER_OPPORTUNITY_MIN,
             max: 0.,
+            var_gt: &[],
+        },
+        Rule {
+            variable: Var::MinerOpportunity,
+            change: MINER_OPPORTUNITY_CHANGE_PER_TICK * -2.,
+            min: MINER_OPPORTUNITY_MIN,
+            max: 0.,
+            var_gt: &[(Var::Minerals, 10.)],
         },
     ];
 
     for agent in sim.agents.iter_mut() {
-        for opportunity in &table {
-            let current = agent.get_var(opportunity.variable);
-            let next = (current + opportunity.decay).clamp(opportunity.min, opportunity.max);
-            agent.vars_mut().with(opportunity.variable, next);
+        // Only applies to settlements?
+        if !agent.in_set(Set::Settlements) {
+            continue;
+        }
+        for rule in RULES {
+            let passes_thresholds = rule
+                .var_gt
+                .iter()
+                .all(|&(var, threshold)| agent.get_var(var) >= threshold);
+            if !passes_thresholds {
+                continue;
+            }
+
+            let current = agent.get_var(rule.variable);
+            let next = (current + rule.change).clamp(rule.min, rule.max);
+            agent.vars_mut().with(rule.variable, next);
         }
     }
 }
@@ -544,7 +568,7 @@ fn spawn_subagent(sim: &mut Simulation, spawn: SpawnSubagent) {
 }
 
 // Units of food consumed per unit population per economic tick.
-const FOOD_CONSUMPTION_PER_HEAD: f64 = 0.01;
+const FOOD_CONSUMPTION_PER_HEAD: f64 = 0.1;
 
 fn food_production_and_consumption(sim: &mut Simulation, arena: &Bump) {
     // Prosperity scales the base food output from villages and towns.
@@ -594,6 +618,57 @@ fn population_from_food(sim: &mut Simulation, arena: &Bump) {
     for (agent, population) in changes {
         let agent = &mut sim.agents[agent];
         agent.vars_mut().with(Var::Population, population);
+    }
+}
+
+fn consumables_into_prosperity(sim: &mut Simulation, arena: &Bump) {
+    #[derive(Clone, Copy)]
+    struct ConsumptionType {
+        variable: Var,
+        consumption_proportion: f64,
+        prosperity_per_unit: f64,
+    }
+
+    const TABLE: &[ConsumptionType] = &[ConsumptionType {
+        variable: Var::Minerals,
+        consumption_proportion: 0.1,
+        prosperity_per_unit: 0.05 * 0.01, // This is meant as a percent
+    }];
+
+    let mut var_changes = AVec::new_in(arena);
+    let mut prosperity_changes = AVec::new_in(arena);
+
+    for settlement in sim.agents.iter_set(agents::Set::Settlements) {
+        let mut prosperity_delta = 0.0;
+
+        for entry in TABLE {
+            let available = settlement.get_var(entry.variable).max(0.0);
+            if available <= 0.0 {
+                continue;
+            }
+
+            let consumed = (available * entry.consumption_proportion).round();
+            let remaining = (available - consumed).max(0.0);
+            prosperity_delta += consumed * entry.prosperity_per_unit;
+
+            var_changes.push((settlement.id, entry.variable, remaining));
+        }
+
+        if prosperity_delta > 0.0 {
+            let prosperity = settlement.get_var(Var::Prosperity);
+            let next = (prosperity + prosperity_delta).clamp(0.0, 1.0);
+            prosperity_changes.push((settlement.id, next));
+        }
+    }
+
+    for (agent, variable, value) in var_changes {
+        let agent = &mut sim.agents[agent];
+        agent.vars_mut().with(variable, value);
+    }
+
+    for (agent, prosperity) in prosperity_changes {
+        let agent = &mut sim.agents[agent];
+        agent.vars_mut().with(Var::Prosperity, prosperity);
     }
 }
 

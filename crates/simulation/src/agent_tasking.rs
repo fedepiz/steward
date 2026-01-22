@@ -40,6 +40,7 @@ pub(crate) fn agent_tasking(sim: &mut Simulation, arena: &Bump) {
 
 const SHORT_WAIT: u32 = 40;
 const LONG_WAIT: u32 = 10 * SHORT_WAIT;
+const MINERALS_PER_LOAD: f64 = 100.0;
 
 fn farmer_tasking(kind: TaskKind) -> Task {
     match kind {
@@ -80,7 +81,7 @@ fn miner_tasking(kind: TaskKind) -> Task {
         TaskKind::ReturnHome => Task {
             kind: TaskKind::Load,
             destination: TaskDestination::WorkArea,
-            interaction: TaskInteraction::default(),
+            interaction: TaskInteraction::with(Interaction::LoadMinerals),
             arrival_wait: LONG_WAIT,
             ..Default::default()
         },
@@ -271,16 +272,22 @@ fn handle_interaction(
             true
         }
         Interaction::UnloadMinerals => {
-            let value = sim.agents[subject_id].get_var(Var::ProsperityBonus);
-            let opportunity = sim.agents[target_id].get_var(Var::MinerOpportunity);
-            let next_opportuntiy =
-                (opportunity + MINER_OPPORTUNITY_VISIT_CHANGE).clamp(MINER_OPPORTUNITY_MIN, 0.);
+            let on_miner = sim.agents[subject_id].get_var(Var::Minerals);
+            let on_settlement = sim.agents[target_id].get_var(Var::Minerals);
+            let new_at_settlement = on_miner + on_settlement;
 
             sim.agents[target_id]
                 .vars_mut()
-                .with(Var::MinerOpportunity, next_opportuntiy)
-                .modify(Var::Prosperity, |x| x + value);
+                .with(Var::Minerals, new_at_settlement);
 
+            sim.agents[subject_id].vars_mut().with(Var::Minerals, 0.);
+
+            true
+        }
+        Interaction::LoadMinerals => {
+            sim.agents[subject_id]
+                .vars_mut()
+                .modify(Var::Minerals, |x| x + MINERALS_PER_LOAD);
             true
         }
         Interaction::ResetProsperityBonus => {

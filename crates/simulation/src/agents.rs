@@ -16,6 +16,7 @@ pub(crate) enum Var {
     Prosperity,
     FoodStored,
     FoodCapacity,
+    Minerals,
     // Economic action
     ProsperityBonus,
     // Opportunities
@@ -357,6 +358,7 @@ pub(crate) enum Interaction {
     UnloadFood,
     LoadFood,
     LoadProsperityBonus,
+    LoadMinerals,
     UnloadMinerals,
     ResetProsperityBonus,
 }

@@ -111,6 +111,7 @@ pub(crate) fn view(sim: &Simulation, req: &Request, response: &mut Response) {
                         "prosperity",
                         format_args!("{:1.2}%", agent.get_var(Var::Prosperity) * 100.),
                     );
+                    ctx.display("minerals", agent.get_var(Var::Minerals));
                 }
 
                 if agent.in_set(agents::Set::Settlements) {
