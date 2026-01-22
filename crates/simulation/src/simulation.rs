@@ -343,16 +343,6 @@ pub struct Response {
     pub map_terrain: Option<MapTerrain>,
 }
 
-fn spawn_worker(
-    sim: &mut Simulation,
-    arena: &Bump,
-    party_type: &str,
-    source_set: agents::Set,
-    worker_flag: agents::Flag,
-    vars: &[(Var, f64)],
-) {
-}
-
 fn tick_opportunities(sim: &mut Simulation) {
     struct OpportunityInfo {
         variable: Var,
