@@ -133,20 +133,7 @@ pub(crate) fn init(sim: &mut Simulation, req: InitRequest) {
         Desc {
             key: "caer_ligualid",
             name: "Caer Ligualid",
-            pos: (597., 509.),
-            party_typ: "town",
-            vars: &[
-                (Var::Prosperity, SETTLEMENT_PROSPERITY),
-                (Var::Population, TOWN_POPULATION),
-                (Var::FoodCapacity, TOWN_FOOD_CAPACITY),
-            ],
-            sets: &[Set::Settlements, Set::Towns],
-            ..Default::default()
-        },
-        Desc {
-            key: "caer_manuguaid",
-            name: "Caer Manuguaid",
-            pos: (625., 675.),
+            pos: (592., 514.),
             party_typ: "town",
             vars: &[
                 (Var::Prosperity, SETTLEMENT_PROSPERITY),
@@ -158,7 +145,7 @@ pub(crate) fn init(sim: &mut Simulation, req: InitRequest) {
         },
         Desc {
             name: "Llan Heledd",
-            pos: (580., 520.),
+            pos: (570., 540.),
             party_typ: "village",
             vars: &[
                 (Var::Prosperity, SETTLEMENT_PROSPERITY),
@@ -250,6 +237,71 @@ pub(crate) fn init(sim: &mut Simulation, req: InitRequest) {
             party_typ: "mine",
             sets: &[Set::Mines],
             parents: &[(Hierarchy::LocalMarket, "caer_ligualid")],
+            ..Default::default()
+        },
+        Desc {
+            key: "caer_manuguaid",
+            name: "Caer Manuguaid",
+            pos: (630., 665.),
+            party_typ: "town",
+            vars: &[
+                (Var::Prosperity, SETTLEMENT_PROSPERITY),
+                (Var::Population, TOWN_POPULATION),
+                (Var::FoodCapacity, TOWN_FOOD_CAPACITY),
+            ],
+            sets: &[Set::Settlements, Set::Towns],
+            ..Default::default()
+        },
+        Desc {
+            name: "Maes Cogwy",
+            pos: (605., 625.),
+            party_typ: "village",
+            vars: &[
+                (Var::Prosperity, SETTLEMENT_PROSPERITY),
+                (Var::Population, VILLAGE_POPULATION),
+                (Var::FoodCapacity, VILLAGE_FOOD_CAPACITY),
+            ],
+            sets: &[Set::Settlements, Set::Villages],
+            parents: &[(Hierarchy::LocalMarket, "caer_manuguaid")],
+            ..Default::default()
+        },
+        Desc {
+            name: "Ecclesia Hyll",
+            pos: (600., 645.),
+            party_typ: "village",
+            vars: &[
+                (Var::Prosperity, SETTLEMENT_PROSPERITY),
+                (Var::Population, VILLAGE_POPULATION),
+                (Var::FoodCapacity, VILLAGE_FOOD_CAPACITY),
+            ],
+            sets: &[Set::Settlements, Set::Villages],
+            parents: &[(Hierarchy::LocalMarket, "caer_manuguaid")],
+            ..Default::default()
+        },
+        Desc {
+            name: "Ced",
+            pos: (600., 675.),
+            party_typ: "village",
+            vars: &[
+                (Var::Prosperity, SETTLEMENT_PROSPERITY),
+                (Var::Population, VILLAGE_POPULATION),
+                (Var::FoodCapacity, VILLAGE_FOOD_CAPACITY),
+            ],
+            sets: &[Set::Settlements, Set::Villages],
+            parents: &[(Hierarchy::LocalMarket, "caer_manuguaid")],
+            ..Default::default()
+        },
+        Desc {
+            name: "Dwfr",
+            pos: (640., 690.),
+            party_typ: "village",
+            vars: &[
+                (Var::Prosperity, SETTLEMENT_PROSPERITY),
+                (Var::Population, VILLAGE_POPULATION),
+                (Var::FoodCapacity, VILLAGE_FOOD_CAPACITY),
+            ],
+            sets: &[Set::Settlements, Set::Villages],
+            parents: &[(Hierarchy::LocalMarket, "caer_manuguaid")],
             ..Default::default()
         },
     ];
