@@ -357,7 +357,7 @@ pub(crate) enum Interaction {
     UnloadFood,
     LoadFood,
     LoadProsperityBonus,
-    IncreaseProsperity,
+    UnloadMinerals,
     ResetProsperityBonus,
 }
 

@@ -21,6 +21,7 @@ pub(crate) const FARMER_OPPORTUNITY_SPAWN_CHANGE: f64 = -2000.;
 
 pub(crate) const MINER_OPPORTUNITY_CHANGE_PER_TICK: f64 = 1.;
 pub(crate) const MINER_OPPORTUNITY_MIN: f64 = -10000.0;
+pub(crate) const MINER_OPPORTUNITY_VISIT_CHANGE: f64 = MINER_OPPORTUNITY_MIN / 2.;
 pub(crate) const MINER_OPPORTUNITY_SPAWN_CHANGE: f64 = MINER_OPPORTUNITY_MIN;
 
 type AVec<'a, T> = bumpalo::collections::Vec<'a, T>;
@@ -340,6 +341,16 @@ pub struct Response {
     pub objects: Objects,
     pub map_items: MapItems,
     pub map_terrain: Option<MapTerrain>,
+}
+
+fn spawn_worker(
+    sim: &mut Simulation,
+    arena: &Bump,
+    party_type: &str,
+    source_set: agents::Set,
+    worker_flag: agents::Flag,
+    vars: &[(Var, f64)],
+) {
 }
 
 fn tick_opportunities(sim: &mut Simulation) {

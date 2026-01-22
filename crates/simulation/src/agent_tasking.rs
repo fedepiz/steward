@@ -87,7 +87,7 @@ fn miner_tasking(kind: TaskKind) -> Task {
         TaskKind::Load => Task {
             kind: TaskKind::Deliver,
             destination: TaskDestination::Home,
-            interaction: TaskInteraction::with(Interaction::IncreaseProsperity),
+            interaction: TaskInteraction::with(Interaction::UnloadMinerals),
             arrival_wait: SHORT_WAIT,
             ..Default::default()
         },
@@ -270,11 +270,17 @@ fn handle_interaction(
                 .with(Var::ProsperityBonus, bonus);
             true
         }
-        Interaction::IncreaseProsperity => {
+        Interaction::UnloadMinerals => {
             let value = sim.agents[subject_id].get_var(Var::ProsperityBonus);
+            let opportunity = sim.agents[target_id].get_var(Var::MinerOpportunity);
+            let next_opportuntiy =
+                (opportunity + MINER_OPPORTUNITY_VISIT_CHANGE).clamp(MINER_OPPORTUNITY_MIN, 0.);
+
             sim.agents[target_id]
                 .vars_mut()
+                .with(Var::MinerOpportunity, next_opportuntiy)
                 .modify(Var::Prosperity, |x| x + value);
+
             true
         }
         Interaction::ResetProsperityBonus => {
