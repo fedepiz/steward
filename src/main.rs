@@ -361,6 +361,7 @@ fn gui(ctx: &egui::Context, response: &simulation::Response) {
                         ("population", "Population"),
                         ("food", "Food"),
                         ("prosperity", "Prosperity"),
+                        ("goods", "Goods"),
                         ("minerals", "Minerals"),
                         ("farmer_opportunity", "Farmer Opportunity"),
                         ("miner_opportunity", "Miner Opportunity"),

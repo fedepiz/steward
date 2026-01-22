@@ -41,6 +41,7 @@ pub(crate) fn agent_tasking(sim: &mut Simulation, arena: &Bump) {
 const SHORT_WAIT: u32 = 40;
 const LONG_WAIT: u32 = 10 * SHORT_WAIT;
 const MINERALS_PER_LOAD: f64 = 100.0;
+const GOODS_PER_FOOD_DELIVERED: f64 = 0.1;
 
 fn farmer_tasking(kind: TaskKind) -> Task {
     match kind {
@@ -52,7 +53,7 @@ fn farmer_tasking(kind: TaskKind) -> Task {
         TaskKind::ReturnHome => Task {
             kind: TaskKind::Load,
             destination: TaskDestination::Home,
-            interaction: TaskInteraction::with(Interaction::LoadFood),
+            interaction: TaskInteraction::new(&[Interaction::LoadFood, Interaction::UnloadGoods]),
             arrival_wait: SHORT_WAIT,
             ..Default::default()
         },
@@ -213,11 +214,20 @@ fn handle_interaction(
 ) -> bool {
     match interaction {
         Interaction::UnloadFood => {
-            let on_farmer = sim.agents[subject_id].get_var(Var::FoodStored) as i64;
-            let on_settlement = sim.agents[target_id].get_var(Var::FoodStored) as i64;
+            let subject = &sim.agents[subject_id];
+            let target = &sim.agents[target_id];
+            let on_farmer = subject.get_var(Var::FoodStored) as i64;
+            let on_settlement = target.get_var(Var::FoodStored) as i64;
             let new_at_settlement = on_farmer + on_settlement;
+            let prosperity = target.get_var(Var::Prosperity).clamp(0.0, 1.0);
+            let goods_created =
+                ((on_farmer as f64) * prosperity * GOODS_PER_FOOD_DELIVERED).round() as i64;
+            let goods_on_farmer = subject.get_var(Var::Goods) as i64 + goods_created;
 
-            sim.agents[subject_id].vars_mut().with(Var::FoodStored, 0.);
+            sim.agents[subject_id]
+                .vars_mut()
+                .with(Var::FoodStored, 0.)
+                .with(Var::Goods, goods_on_farmer as f64);
             sim.agents[target_id]
                 .vars_mut()
                 .with(Var::FoodStored, new_at_settlement as f64);
@@ -261,24 +271,16 @@ fn handle_interaction(
                 false
             }
         }
-        Interaction::LoadProsperityBonus => {
-            // Capture town prosperity as a bonus to be applied when returning home.
-            const PROSPERITY_BONUS_SCALE: f64 = 0.025;
-            let prosperity = sim.agents[target_id].get_var(Var::Prosperity);
-            let bonus = (prosperity * PROSPERITY_BONUS_SCALE).max(0.0);
-            sim.agents[subject_id]
-                .vars_mut()
-                .with(Var::ProsperityBonus, bonus);
-            true
-        }
         Interaction::UnloadMinerals => {
-            let on_miner = sim.agents[subject_id].get_var(Var::Minerals);
-            let on_settlement = sim.agents[target_id].get_var(Var::Minerals);
+            let subject = &sim.agents[subject_id];
+            let target = &sim.agents[target_id];
+            let on_miner = subject.get_var(Var::Minerals) as i64;
+            let on_settlement = target.get_var(Var::Minerals) as i64;
             let new_at_settlement = on_miner + on_settlement;
 
             sim.agents[target_id]
                 .vars_mut()
-                .with(Var::Minerals, new_at_settlement);
+                .with(Var::Minerals, new_at_settlement as f64);
 
             sim.agents[subject_id].vars_mut().with(Var::Minerals, 0.);
 
@@ -290,10 +292,19 @@ fn handle_interaction(
                 .modify(Var::Minerals, |x| x + MINERALS_PER_LOAD);
             true
         }
-        Interaction::ResetProsperityBonus => {
-            sim.agents[subject_id]
+        Interaction::UnloadGoods => {
+            let subject = &sim.agents[subject_id];
+            let target = &sim.agents[target_id];
+            let on_farmer = subject.get_var(Var::Goods) as i64;
+            let on_settlement = target.get_var(Var::Goods) as i64;
+            let new_at_settlement = on_farmer + on_settlement;
+
+            sim.agents[target_id]
                 .vars_mut()
-                .set(Var::ProsperityBonus, 0.);
+                .with(Var::Goods, new_at_settlement as f64);
+
+            sim.agents[subject_id].vars_mut().with(Var::Goods, 0.);
+
             true
         }
     }

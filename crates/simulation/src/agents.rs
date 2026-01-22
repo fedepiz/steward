@@ -16,9 +16,8 @@ pub(crate) enum Var {
     Prosperity,
     FoodStored,
     FoodCapacity,
+    Goods,
     Minerals,
-    // Economic action
-    ProsperityBonus,
     // Opportunities
     FarmerOpportunity,
     MinerOpportunity,
@@ -357,10 +356,9 @@ impl Default for TaskDestination {
 pub(crate) enum Interaction {
     UnloadFood,
     LoadFood,
-    LoadProsperityBonus,
     LoadMinerals,
     UnloadMinerals,
-    ResetProsperityBonus,
+    UnloadGoods,
 }
 
 const INTERACTION_BITSET_SIZE: usize = (Interaction::COUNT + 63) / 64;

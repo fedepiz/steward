@@ -568,7 +568,7 @@ fn spawn_subagent(sim: &mut Simulation, spawn: SpawnSubagent) {
 }
 
 // Units of food consumed per unit population per economic tick.
-const FOOD_CONSUMPTION_PER_HEAD: f64 = 0.1;
+const FOOD_CONSUMPTION_PER_HEAD: f64 = 0.01;
 
 fn food_production_and_consumption(sim: &mut Simulation, arena: &Bump) {
     // Prosperity scales the base food output from villages and towns.
@@ -629,11 +629,18 @@ fn consumables_into_prosperity(sim: &mut Simulation, arena: &Bump) {
         prosperity_per_unit: f64,
     }
 
-    const TABLE: &[ConsumptionType] = &[ConsumptionType {
-        variable: Var::Minerals,
-        consumption_proportion: 0.1,
-        prosperity_per_unit: 0.05 * 0.01, // This is meant as a percent
-    }];
+    const TABLE: &[ConsumptionType] = &[
+        ConsumptionType {
+            variable: Var::Goods,
+            consumption_proportion: 0.1,
+            prosperity_per_unit: 0.05 * 0.01, // This is meant as a percent
+        },
+        ConsumptionType {
+            variable: Var::Minerals,
+            consumption_proportion: 0.1,
+            prosperity_per_unit: 0.05 * 0.01, // This is meant as a percent
+        },
+    ];
 
     let mut var_changes = AVec::new_in(arena);
     let mut prosperity_changes = AVec::new_in(arena);
