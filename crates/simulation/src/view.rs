@@ -124,6 +124,11 @@ pub(crate) fn view(sim: &Simulation, req: &Request, response: &mut Response) {
                         "miner_opportunity",
                         format_args!("{:1.2}", agent.get_var(Var::MinerOpportunity)),
                     );
+
+                    ctx.display(
+                        "caravan_opportunity",
+                        format_args!("{:1.2}", agent.get_var(Var::CaravanOpportunity)),
+                    );
                 }
             });
         }

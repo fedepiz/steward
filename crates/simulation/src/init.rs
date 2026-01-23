@@ -48,6 +48,16 @@ pub(crate) fn init(sim: &mut Simulation, req: InitRequest) {
 
     {
         let typ = sim.parties.add_type();
+        typ.tag = "caravan";
+        typ.image = "pawns/caravan";
+        typ.name = Name::simple(sim.names.define("Caravan"));
+        typ.size = SIZE_SMALL;
+        typ.layer = 1;
+        typ.speed = WALK_SPEED;
+    }
+
+    {
+        let typ = sim.parties.add_type();
         typ.tag = "mine";
         typ.image = "pawns/mine";
         typ.name = Name::simple(sim.names.define("Mine"));

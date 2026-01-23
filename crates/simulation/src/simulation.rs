@@ -23,6 +23,10 @@ pub(crate) const MINER_OPPORTUNITY_CHANGE_PER_TICK: f64 = 1.;
 pub(crate) const MINER_OPPORTUNITY_MIN: f64 = -10000.0;
 pub(crate) const MINER_OPPORTUNITY_SPAWN_CHANGE: f64 = MINER_OPPORTUNITY_MIN;
 
+pub(crate) const CARAVAN_OPPORTUNITY_MIN: f64 = -10000.0;
+pub(crate) const CARAVAN_OPPORTUNITY_MAX: f64 = 0.0;
+pub(crate) const CARAVAN_OPPORTUNITY_SPAWN_CHANGE: f64 = CARAVAN_OPPORTUNITY_MIN;
+
 type AVec<'a, T> = bumpalo::collections::Vec<'a, T>;
 
 #[derive(Default)]
@@ -417,6 +421,10 @@ fn spawn_with_opportunity(sim: &mut Simulation, arena: &Bump) {
         party_type: "miners",
         flags: Flags::new().with(Flag::IsMiner),
     };
+    const CARAVAN_SPAWN_INFO: SpawnInfo = SpawnInfo {
+        party_type: "caravan",
+        flags: Flags::new().with(Flag::IsCaravan),
+    };
 
     #[derive(Clone, Copy, PartialEq, PartialOrd)]
     struct OpportunityInfo {
@@ -444,6 +452,14 @@ fn spawn_with_opportunity(sim: &mut Simulation, arena: &Bump) {
         max_value: 0.,
         workplace_set: Some(Set::Mines),
     };
+    const CARAVAN_OPPORTUNITY_INFO: OpportunityInfo = OpportunityInfo {
+        variable: Var::CaravanOpportunity,
+        threshold: CARAVAN_OPPORTUNITY_MAX,
+        on_spawn_change: CARAVAN_OPPORTUNITY_SPAWN_CHANGE,
+        min_value: CARAVAN_OPPORTUNITY_MIN,
+        max_value: CARAVAN_OPPORTUNITY_MAX,
+        workplace_set: None,
+    };
 
     #[derive(Default)]
     struct Eligeable<'a> {
@@ -464,6 +480,13 @@ fn spawn_with_opportunity(sim: &mut Simulation, arena: &Bump) {
             },
             MINER_OPPORTUNITY_INFO,
             MINER_SPAWN_INFO,
+        ),
+        (
+            Eligeable {
+                sets: &[Set::Towns],
+            },
+            CARAVAN_OPPORTUNITY_INFO,
+            CARAVAN_SPAWN_INFO,
         ),
     ];
 

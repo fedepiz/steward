@@ -42,6 +42,7 @@ const SHORT_WAIT: u32 = 40;
 const LONG_WAIT: u32 = 10 * SHORT_WAIT;
 const MINERALS_PER_LOAD: f64 = 100.0;
 const GOODS_PER_FOOD_DELIVERED: f64 = 0.1;
+const GOODS_PER_CARAVAN_LOAD: f64 = 100.;
 
 fn farmer_tasking(kind: TaskKind) -> Task {
     match kind {
@@ -60,7 +61,7 @@ fn farmer_tasking(kind: TaskKind) -> Task {
         TaskKind::Load => Task {
             kind: TaskKind::Deliver,
             destination: TaskDestination::MarketOfHome,
-            interaction: TaskInteraction::with(Interaction::UnloadFood),
+            interaction: TaskInteraction::with(Interaction::SellFood),
             arrival_wait: SHORT_WAIT,
             ..Default::default()
         },
@@ -101,6 +102,37 @@ fn miner_tasking(kind: TaskKind) -> Task {
     }
 }
 
+fn caravan_tasking(kind: TaskKind) -> Task {
+    match kind {
+        TaskKind::Init => Task {
+            kind: TaskKind::ReturnHome,
+            destination: TaskDestination::Home,
+            interaction: TaskInteraction::default(),
+            ..Default::default()
+        },
+        TaskKind::ReturnHome => Task {
+            kind: TaskKind::Load,
+            destination: TaskDestination::Home,
+            interaction: TaskInteraction::with(Interaction::CaravanVisit),
+            arrival_wait: SHORT_WAIT,
+            ..Default::default()
+        },
+        TaskKind::Load => Task {
+            kind: TaskKind::Deliver,
+            destination: TaskDestination::TradingDestination,
+            interaction: TaskInteraction::with(Interaction::CaravanVisit),
+            arrival_wait: SHORT_WAIT,
+            ..Default::default()
+        },
+        TaskKind::Deliver => Task {
+            kind: TaskKind::ReturnHome,
+            destination: TaskDestination::Home,
+            interaction: TaskInteraction::default(),
+            ..Default::default()
+        },
+    }
+}
+
 #[derive(Default, Clone, Copy)]
 struct Destination {
     target: AgentId,
@@ -120,6 +152,8 @@ fn task_for_agent(
             farmer_tasking(task.kind)
         } else if subject.flags.get(agents::Flag::IsMiner) {
             miner_tasking(task.kind)
+        } else if subject.flags.get(agents::Flag::IsCaravan) {
+            caravan_tasking(task.kind)
         } else {
             Task::default()
         };
@@ -148,6 +182,20 @@ fn task_for_agent(
             Destination {
                 target,
                 enter: false,
+            }
+        }
+        TaskDestination::TradingDestination => {
+            let home = sim.agents.parent_of(Hierarchy::Attachment, subject.id);
+            let market_of_home = sim.agents.parent_of(Hierarchy::LocalMarket, home);
+            let excluded = [home, market_of_home];
+            let target = sim
+                .agents
+                .iter_set_ids(agents::Set::Towns)
+                .find(|target| !excluded.contains(target))
+                .unwrap_or_default();
+            Destination {
+                target,
+                enter: true,
             }
         }
     };
@@ -213,7 +261,7 @@ fn handle_interaction(
     target_id: AgentId,
 ) -> bool {
     match interaction {
-        Interaction::UnloadFood => {
+        Interaction::SellFood => {
             let subject = &sim.agents[subject_id];
             let target = &sim.agents[target_id];
             let on_farmer = subject.get_var(Var::FoodStored) as i64;
@@ -304,6 +352,25 @@ fn handle_interaction(
                 .with(Var::Goods, new_at_settlement as f64);
 
             sim.agents[subject_id].vars_mut().with(Var::Goods, 0.);
+
+            true
+        }
+        Interaction::CaravanVisit => {
+            let mut on_caravan = sim.agents[subject_id].get_var(Var::Goods);
+            let target = &sim.agents[target_id];
+            let mut in_town = target.get_var(Var::Goods);
+            let prosperity = target.get_var(Var::Prosperity);
+
+            in_town += on_caravan;
+
+            let new_goods = (GOODS_PER_CARAVAN_LOAD * (1.0 + 2. * prosperity)).round();
+            on_caravan = new_goods;
+
+            sim.agents[subject_id]
+                .vars_mut()
+                .set(Var::Goods, on_caravan);
+
+            sim.agents[target_id].vars_mut().set(Var::Goods, in_town);
 
             true
         }

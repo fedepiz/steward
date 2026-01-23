@@ -21,6 +21,7 @@ pub(crate) enum Var {
     // Opportunities
     FarmerOpportunity,
     MinerOpportunity,
+    CaravanOpportunity,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, EnumCount, EnumIter)]
@@ -38,6 +39,7 @@ pub(crate) enum Set {
 pub(crate) enum Flag {
     IsFarmer,
     IsMiner,
+    IsCaravan,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, EnumCount, EnumIter)]
@@ -344,6 +346,7 @@ pub(crate) enum TaskDestination {
     Home,
     WorkArea,
     MarketOfHome,
+    TradingDestination,
 }
 
 impl Default for TaskDestination {
@@ -354,11 +357,12 @@ impl Default for TaskDestination {
 
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, EnumCount, EnumIter)]
 pub(crate) enum Interaction {
-    UnloadFood,
+    SellFood,
     LoadFood,
     LoadMinerals,
     UnloadMinerals,
     UnloadGoods,
+    CaravanVisit,
 }
 
 const INTERACTION_BITSET_SIZE: usize = (Interaction::COUNT + 63) / 64;
