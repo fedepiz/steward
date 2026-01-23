@@ -6,7 +6,7 @@ use crate::{
     agents::{self, *},
     geom::V2,
     movement::{self, SpatialMap},
-    names::Names,
+    names::{Name, NamePart, Names},
     objects::*,
     parties::{self, *},
     terrain_map::TerrainMap,
@@ -411,19 +411,23 @@ fn spawn_with_opportunity(sim: &mut Simulation, arena: &Bump) {
     struct SpawnInfo {
         party_type: &'static str,
         flags: Flags,
+        name_contains_of_parent: bool,
     }
 
     const FARMER_SPAWN_INFO: SpawnInfo = SpawnInfo {
         party_type: "farmers",
         flags: Flags::new().with(Flag::IsFarmer),
+        name_contains_of_parent: false,
     };
     const MINER_SPAWN_INFO: SpawnInfo = SpawnInfo {
         party_type: "miners",
         flags: Flags::new().with(Flag::IsMiner),
+        name_contains_of_parent: false,
     };
     const CARAVAN_SPAWN_INFO: SpawnInfo = SpawnInfo {
         party_type: "caravan",
         flags: Flags::new().with(Flag::IsCaravan),
+        name_contains_of_parent: true,
     };
 
     #[derive(Clone, Copy, PartialEq, PartialOrd)]
@@ -528,10 +532,15 @@ fn spawn_with_opportunity(sim: &mut Simulation, arena: &Bump) {
             updates.push((agent.id, opportunity.variable, next_value));
 
             // Produce spawn
-            let party_type = sim.parties.find_type_by_tag(spawn.party_type).unwrap().id;
+            let party_type = sim.parties.find_type_by_tag(spawn.party_type).unwrap();
+            let mut name = party_type.name;
+            if spawn.name_contains_of_parent {
+                name.set(NamePart::OfX, agent.name.get(NamePart::Main));
+            }
             spawns.push(SpawnSubagent {
-                party_type,
+                party_type: party_type.id,
                 parent: agent.id,
+                name,
                 flags: spawn.flags,
                 vars: &[],
                 parents: parents.into_bump_slice(),
@@ -555,6 +564,7 @@ fn spawn_with_opportunity(sim: &mut Simulation, arena: &Bump) {
 struct SpawnSubagent<'a> {
     party_type: PartyTypeId,
     parent: AgentId,
+    name: Name,
     flags: Flags,
     vars: &'a [(Var, f64)],
     parents: &'a [(Hierarchy, AgentId)],
@@ -571,7 +581,8 @@ fn spawn_subagent(sim: &mut Simulation, spawn: SpawnSubagent) {
     party.inside_of = parent_party;
 
     let agent = sim.agents.spawn();
-    agent.name = party.name;
+    agent.name = spawn.name;
+    party.name = spawn.name;
 
     // Tie agent and party together
     agent.party = party.id;

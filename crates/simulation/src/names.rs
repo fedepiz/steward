@@ -30,6 +30,17 @@ impl Names {
 #[repr(u8)]
 pub(crate) enum NamePart {
     Main,
+    OfX,
+}
+
+impl NamePart {
+    #[inline]
+    const fn prefix(self) -> &'static str {
+        match self {
+            NamePart::Main => "",
+            NamePart::OfX => " of",
+        }
+    }
 }
 
 #[derive(Clone, Copy, Default)]
@@ -45,6 +56,10 @@ impl Name {
     pub fn set(&mut self, part: NamePart, value: WordId) {
         self.0[part as usize] = value.0;
     }
+
+    pub fn get(&self, part: NamePart) -> WordId {
+        WordId(self.0[part as usize])
+    }
 }
 
 #[derive(Clone, Copy, Default)]
@@ -53,8 +68,13 @@ pub(crate) struct ResolvedName<'a>([&'a str; NamePart::COUNT]);
 impl std::fmt::Display for ResolvedName<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let mut space_needed = false;
-        for part in self.0 {
+        for (idx, part) in self.0.iter().enumerate() {
             if !part.is_empty() {
+                let part_type = NamePart::try_from_primitive(idx as u8);
+
+                let prefix = part_type.map(|part| part.prefix()).unwrap_or_default();
+                f.write_str(prefix)?;
+
                 if space_needed {
                     f.write_char(' ')?;
                 }
