@@ -105,18 +105,18 @@ impl Pawn {
 
         // Position at bottom-center of pawn, centered horizontally
         let text_x = self.bounds.x + self.bounds.w / 2.0 - text_dims.width / 2.0;
-        let text_y = self.bounds.y + self.bounds.h + gap + text_dims.height;
+        let text_y = self.bounds.y + self.bounds.h + gap;
 
         Some(DrawLabel {
             background: mq::Rect::new(
                 text_x - padding,
-                text_y - text_dims.height - padding,
+                text_y - padding,
                 text_dims.width + padding * 2.,
                 text_dims.height + padding * 2.,
             ),
             text,
             x: text_x,
-            y: text_y,
+            y: text_y + text_dims.offset_y,
             params: mq::TextParams {
                 font,
                 font_size: self.label.size,
