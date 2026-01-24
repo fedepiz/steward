@@ -1,7 +1,7 @@
 mod assets;
 mod board;
 
-use board::{LabelDesc, PawnDesc, Stroke};
+use board::{LabelDesc, PawnDesc};
 use macroquad::prelude as mq;
 use simulation::{MapItemId, SimulationActor};
 use tracing_subscriber::layer::SubscriberExt;
@@ -94,10 +94,7 @@ fn make_pawns<'a, 'b>(
             image: item.image,
             bounds: mq::Rect::new(item.x, item.y, item.width, item.height),
             fill,
-            stroke: Stroke {
-                color: if is_selected { mq::YELLOW } else { mq::BLACK },
-                thickness: 4.,
-            },
+            stroke: if is_selected { mq::YELLOW } else { mq::BLACK },
             label: LabelDesc {
                 text: item.name,
                 size: text_size,
@@ -268,7 +265,7 @@ async fn amain() {
         }
 
         // Render board to its texture
-        board.draw(&assets, response.map_terrain.as_ref());
+        board.draw(&arena, &assets, response.map_terrain.as_ref());
 
         // Draw board texture to screen
         mq::clear_background(mq::BLACK);

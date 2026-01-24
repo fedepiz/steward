@@ -1,0 +1,9 @@
+[package]
+name = "atlas_packer"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+image = { workspace = true }
+ron = { workspace = true }
+serde = { workspace = true }

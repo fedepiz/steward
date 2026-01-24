@@ -18,7 +18,7 @@ pub(crate) fn init(sim: &mut Simulation, req: InitRequest) {
     {
         let typ = sim.parties.add_type();
         typ.tag = "person";
-        typ.image = "pawns/person";
+        typ.image = "person";
         typ.name = Name::simple(sim.names.define("Person"));
         typ.size = SIZE_SMALL;
         typ.layer = 1;
@@ -28,7 +28,7 @@ pub(crate) fn init(sim: &mut Simulation, req: InitRequest) {
     {
         let typ = sim.parties.add_type();
         typ.tag = "farmers";
-        typ.image = "pawns/farmers";
+        typ.image = "farmers";
         typ.name = Name::simple(sim.names.define("Farmers"));
         typ.size = SIZE_SMALL;
         typ.speed = 1.;
@@ -39,7 +39,7 @@ pub(crate) fn init(sim: &mut Simulation, req: InitRequest) {
     {
         let typ = sim.parties.add_type();
         typ.tag = "miners";
-        typ.image = "pawns/miners";
+        typ.image = "miners";
         typ.name = Name::simple(sim.names.define("Miners"));
         typ.size = SIZE_SMALL;
         typ.layer = 1;
@@ -49,7 +49,7 @@ pub(crate) fn init(sim: &mut Simulation, req: InitRequest) {
     {
         let typ = sim.parties.add_type();
         typ.tag = "caravan";
-        typ.image = "pawns/caravan";
+        typ.image = "caravan";
         typ.name = Name::simple(sim.names.define("Caravan"));
         typ.size = SIZE_SMALL;
         typ.layer = 1;
@@ -59,7 +59,7 @@ pub(crate) fn init(sim: &mut Simulation, req: InitRequest) {
     {
         let typ = sim.parties.add_type();
         typ.tag = "mine";
-        typ.image = "pawns/mine";
+        typ.image = "mine";
         typ.name = Name::simple(sim.names.define("Mine"));
         typ.speed = 0.;
         typ.size = 2.5;
@@ -69,7 +69,7 @@ pub(crate) fn init(sim: &mut Simulation, req: InitRequest) {
     {
         let typ = sim.parties.add_type();
         typ.tag = "village";
-        typ.image = "pawns/village";
+        typ.image = "village";
         typ.name = Name::simple(sim.names.define("Village"));
         typ.size = 3.0;
         typ.always_show_name = true;
@@ -78,7 +78,7 @@ pub(crate) fn init(sim: &mut Simulation, req: InitRequest) {
     {
         let typ = sim.parties.add_type();
         typ.tag = "hillfort";
-        typ.image = "pawns/hillfort";
+        typ.image = "hillfort";
         typ.name = Name::simple(sim.names.define("Hillfort"));
         typ.size = 3.;
         typ.always_show_name = true;
@@ -87,7 +87,7 @@ pub(crate) fn init(sim: &mut Simulation, req: InitRequest) {
     {
         let typ = sim.parties.add_type();
         typ.tag = "town";
-        typ.image = "pawns/town";
+        typ.image = "town";
         typ.name = Name::simple(sim.names.define("Town"));
         typ.size = 4.;
         typ.always_show_name = true;

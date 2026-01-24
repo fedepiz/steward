@@ -1,16 +1,9 @@
+use bumpalo::Bump;
 use macroquad::prelude as mq;
 use simulation::MapTerrain;
 use util::string_pool::{SpanHandle, StringPool};
 
 use crate::assets::Assets;
-
-/// Stroke style for pawn outlines.
-/// Set thickness to 0 to disable stroke.
-#[derive(Clone, Copy, Default)]
-pub struct Stroke {
-    pub color: mq::Color,
-    pub thickness: f32,
-}
 
 /// Label descriptor for creating pawns. Takes text by reference.
 #[derive(Clone, Copy, Default)]
@@ -25,7 +18,7 @@ pub struct LabelDesc<'a> {
 pub struct PawnDesc<'a> {
     pub bounds: mq::Rect,
     pub fill: mq::Color,
-    pub stroke: Stroke,
+    pub stroke: mq::Color,
     pub label: LabelDesc<'a>,
     pub image: &'static str,
 }
@@ -48,54 +41,58 @@ struct Pawn {
     image: &'static str,
     bounds: mq::Rect,
     fill: mq::Color,
-    stroke: Stroke,
+    stroke: mq::Color,
     label: Label,
+}
+
+struct DrawLabel<'a> {
+    background: mq::Rect,
+    text: &'a str,
+    x: f32,
+    y: f32,
+    params: mq::TextParams<'a>,
 }
 
 impl Pawn {
     /// Draws the pawn's shape (fill and stroke) in world space.
     fn draw_shape(&self, assets: &Assets) {
+        let draw_texture = |name, color| {
+            if let Some((texture, source)) = assets.get_atlas_sprite(name) {
+                mq::draw_texture_ex(
+                    texture,
+                    self.bounds.x,
+                    self.bounds.y,
+                    color,
+                    mq::DrawTextureParams {
+                        dest_size: Some(self.bounds.size()),
+                        source: Some(source),
+                        ..Default::default()
+                    },
+                );
+            }
+        };
+
         if self.fill.a > 0.0 {
-            mq::draw_rectangle(
-                self.bounds.x,
-                self.bounds.y,
-                self.bounds.w,
-                self.bounds.h,
-                self.fill,
-            );
+            draw_texture("background", self.fill);
         }
+        draw_texture(self.image, mq::WHITE);
 
-        if let Some(texture) = assets.get_texture(self.image) {
-            mq::draw_texture_ex(
-                texture,
-                self.bounds.x,
-                self.bounds.y,
-                mq::WHITE,
-                mq::DrawTextureParams {
-                    dest_size: Some(self.bounds.size()),
-                    ..Default::default()
-                },
-            );
-        }
-
-        if self.stroke.thickness > 0.0 && self.stroke.color.a > 0.0 {
-            mq::draw_rectangle_lines(
-                self.bounds.x,
-                self.bounds.y,
-                self.bounds.w,
-                self.bounds.h,
-                self.stroke.thickness,
-                self.stroke.color,
-            );
+        if self.stroke.a > 0.0 {
+            draw_texture("border", self.stroke)
         }
     }
 
     /// Draws the pawn's label in world space.
     /// Uses fixed font_size with inverse zoom scaling for constant screen size.
-    fn draw_label(&self, camera: &mq::Camera2D, font: Option<&mq::Font>, strings: &StringPool) {
+    fn draw_label<'a>(
+        &'a self,
+        camera: &mq::Camera2D,
+        font: Option<&'a mq::Font>,
+        strings: &'a StringPool,
+    ) -> Option<DrawLabel<'a>> {
         let text = strings.get(self.label.text_span);
         if text.is_empty() || self.label.size == 0 {
-            return;
+            return None;
         }
 
         // Calculate zoom scale (screen pixels per world unit)
@@ -118,28 +115,24 @@ impl Pawn {
         let text_x = self.bounds.x + self.bounds.w / 2.0 - text_dims.width / 2.0;
         let text_y = self.bounds.y + self.bounds.h + gap + text_dims.height;
 
-        // Draw semi-transparent background
-        mq::draw_rectangle(
-            text_x - padding,
-            text_y - text_dims.height - padding,
-            text_dims.width + padding * 2.0,
-            text_dims.height + padding * 2.0,
-            mq::Color::default().with_alpha(0.6),
-        );
-
-        // Draw the label text
-        mq::draw_text_ex(
+        Some(DrawLabel {
+            background: mq::Rect::new(
+                text_x - padding,
+                text_y - text_dims.height - padding,
+                text_dims.width + padding * 2.,
+                text_dims.height + padding * 2.,
+            ),
             text,
-            text_x,
-            text_y - text_dims.height + text_dims.offset_y,
-            mq::TextParams {
+            x: text_x,
+            y: text_y,
+            params: mq::TextParams {
                 font,
                 font_size: self.label.size,
                 font_scale,
                 color: self.label.color,
                 ..Default::default()
             },
-        );
+        })
     }
 }
 
@@ -306,10 +299,7 @@ impl Board {
         a.x < b_right && a_right > b.x && a.y < b_bottom && a_bottom > b.y
     }
 
-    fn visible_terrain_slice(
-        &self,
-        tex: &mq::Texture2D,
-    ) -> Option<(mq::Vec2, mq::Vec2, mq::Rect)> {
+    fn visible_terrain_slice(&self, tex: &mq::Texture2D) -> Option<(mq::Vec2, mq::Vec2, mq::Rect)> {
         let view = self.visible_world_rect();
         let world_min = mq::vec2(view.x, view.y);
         let world_max = mq::vec2(view.x + view.w, view.y + view.h);
@@ -318,14 +308,8 @@ impl Board {
         let map_w = tex_size.x * self.tile_size;
         let map_h = tex_size.y * self.tile_size;
 
-        let clamped_min = mq::vec2(
-            world_min.x.clamp(0.0, map_w),
-            world_min.y.clamp(0.0, map_h),
-        );
-        let clamped_max = mq::vec2(
-            world_max.x.clamp(0.0, map_w),
-            world_max.y.clamp(0.0, map_h),
-        );
+        let clamped_min = mq::vec2(world_min.x.clamp(0.0, map_w), world_min.y.clamp(0.0, map_h));
+        let clamped_max = mq::vec2(world_max.x.clamp(0.0, map_w), world_max.y.clamp(0.0, map_h));
 
         if clamped_min.x >= clamped_max.x || clamped_min.y >= clamped_max.y {
             return None;
@@ -344,7 +328,7 @@ impl Board {
     }
 
     /// Draws all pawns to the internal render target.
-    pub fn draw(&mut self, assets: &Assets, terrain: Option<&MapTerrain>) {
+    pub fn draw(&mut self, arena: &Bump, assets: &Assets, terrain: Option<&MapTerrain>) {
         self.camera.render_target = Some(self.render_target.clone());
         mq::set_camera(&self.camera);
         mq::clear_background(mq::LIGHTGRAY);
@@ -356,9 +340,7 @@ impl Board {
             }
             let tex = &self.terrain_texture.texture;
             if tex.size() != mq::Vec2::ZERO {
-                if let Some((dest_pos, dest_size, source)) =
-                    self.visible_terrain_slice(tex)
-                {
+                if let Some((dest_pos, dest_size, source)) = self.visible_terrain_slice(tex) {
                     mq::draw_texture_ex(
                         tex,
                         dest_pos.x,
@@ -377,10 +359,27 @@ impl Board {
             }
         }
 
+        let mut draw_labels = bumpalo::collections::Vec::with_capacity_in(self.pawns.len(), arena);
+
         for pawn in &self.pawns {
             if Self::rects_overlap(pawn.bounds, view) {
-                pawn.draw_label(&self.camera, assets.get_font("board"), &self.strings);
+                let draw = pawn.draw_label(&self.camera, assets.get_font("board"), &self.strings);
+                draw_labels.extend(draw);
             }
+        }
+
+        for label in &draw_labels {
+            mq::draw_rectangle(
+                label.background.x,
+                label.background.y,
+                label.background.w,
+                label.background.h,
+                mq::Color::default().with_alpha(0.6),
+            );
+        }
+
+        for label in draw_labels {
+            mq::draw_text_ex(label.text, label.x, label.y, label.params);
         }
 
         for pawn in &self.pawns {

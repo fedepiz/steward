@@ -7,11 +7,14 @@ use std::{
 };
 
 use macroquad::prelude as mq;
+use serde::Deserialize;
 
 #[derive(Clone, Copy)]
 pub(crate) enum AssetKind {
     Texture,
     Font,
+    AtlasImage,
+    AtlasData,
 }
 
 pub(crate) struct Event {
@@ -24,6 +27,8 @@ pub(crate) struct Event {
 pub(crate) struct Assets {
     textures: HashMap<String, mq::Texture2D>,
     fonts: HashMap<String, mq::Font>,
+    atlas_texture: Option<mq::Texture2D>,
+    atlas_sprites: HashMap<String, mq::Rect>,
     rx: Option<Receiver<Event>>,
 }
 
@@ -38,6 +43,13 @@ impl Assets {
 
     pub(crate) fn get_texture(&self, name: &str) -> Option<&mq::Texture2D> {
         self.textures.get(name)
+    }
+
+    pub(crate) fn get_atlas_sprite(&self, name: &str) -> Option<(&mq::Texture2D, mq::Rect)> {
+        let texture = self.atlas_texture.as_ref()?;
+        let rect = *self.atlas_sprites.get(name)?;
+        let out = Some((texture, rect));
+        out
     }
 
     pub(crate) fn get_font(&self, name: &str) -> Option<&mq::Font> {
@@ -55,6 +67,28 @@ impl Assets {
             AssetKind::Font => {
                 if let Ok(font) = mq::load_ttf_font_from_bytes(&event.bytes) {
                     self.fonts.insert(event.name, font);
+                }
+            }
+            AssetKind::AtlasImage => {
+                let texture =
+                    mq::Texture2D::from_file_with_format(&event.bytes, Some(mq::ImageFormat::Png));
+                texture.set_filter(mq::FilterMode::Nearest);
+                self.atlas_texture = Some(texture);
+            }
+            AssetKind::AtlasData => {
+                if let Ok(atlas) = ron::de::from_bytes::<AtlasFile>(&event.bytes) {
+                    self.atlas_sprites.clear();
+                    for (name, rect) in atlas.sprites {
+                        self.atlas_sprites.insert(
+                            name,
+                            mq::Rect::new(
+                                rect.x as f32,
+                                rect.y as f32,
+                                rect.w as f32,
+                                rect.h as f32,
+                            ),
+                        );
+                    }
                 }
             }
         }
@@ -104,10 +138,12 @@ fn load_assets(root: PathBuf, tx: Sender<Event>) {
     let _span = tracing::info_span!("Asset loading");
     let gfx_dir = root.join("gfx");
     let font_dir = root.join("fonts");
+    let atlas_dir = root.join("atlas/out");
 
     // Load bytes off-thread, decode on the main thread.
     load_dir(&gfx_dir, AssetKind::Texture, &tx);
     load_dir(&font_dir, AssetKind::Font, &tx);
+    load_atlas_files(&atlas_dir, &tx);
 }
 
 fn load_dir(base: &Path, kind: AssetKind, tx: &Sender<Event>) {
@@ -168,6 +204,8 @@ fn is_allowed_extension(kind: AssetKind, path: &Path) -> bool {
     match kind {
         AssetKind::Texture => ext == "png",
         AssetKind::Font => ext == "ttf" || ext == "otf",
+        AssetKind::AtlasImage => ext == "png",
+        AssetKind::AtlasData => ext == "ron",
     }
 }
 
@@ -184,4 +222,39 @@ fn asset_key(base: &Path, path: &Path) -> Option<String> {
     }
 
     if key.is_empty() { None } else { Some(key) }
+}
+
+#[derive(Deserialize)]
+struct AtlasFile {
+    image: String,
+    size: [u32; 2],
+    sprites: HashMap<String, AtlasRect>,
+}
+
+#[derive(Deserialize, Clone, Copy)]
+struct AtlasRect {
+    x: u32,
+    y: u32,
+    w: u32,
+    h: u32,
+}
+
+fn load_atlas_files(base: &Path, tx: &Sender<Event>) {
+    load_atlas_file(base.join("atlas.png"), AssetKind::AtlasImage, tx);
+    load_atlas_file(base.join("atlas.ron"), AssetKind::AtlasData, tx);
+}
+
+fn load_atlas_file(path: PathBuf, kind: AssetKind, tx: &Sender<Event>) {
+    let bytes = match fs::read(&path) {
+        Ok(bytes) => bytes,
+        Err(_) => {
+            return;
+        }
+    };
+
+    let _ = tx.send(Event {
+        kind,
+        name: "atlas".to_string(),
+        bytes,
+    });
 }
