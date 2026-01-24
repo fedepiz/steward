@@ -180,7 +180,7 @@ async fn amain() {
 
         let has_tick = {
             next_tick_time += mq::get_frame_time();
-            let has_tick = next_tick_time >= TICK_RATE_SECS;
+            let has_tick = (next_tick_time / TICK_RATE_SECS).floor().max(0.) as u32;
             next_tick_time = next_tick_time % TICK_RATE_SECS;
             has_tick
         };
@@ -195,9 +195,9 @@ async fn amain() {
             }
             speed
         };
-        request.advance_ticks = tick_speed;
+        request.advance_ticks = has_tick * tick_speed;
 
-        if !has_tick || is_paused || reload || sim_actor.has_critical_error() {
+        if is_paused || reload || sim_actor.has_critical_error() {
             request.advance_ticks = 0;
         }
 

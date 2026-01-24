@@ -283,11 +283,72 @@ impl Board {
         mq::pop_camera_state();
     }
 
+    fn visible_world_rect(&self) -> mq::Rect {
+        let view_min = self.camera.screen_to_world(mq::vec2(0.0, 0.0));
+        let view_max = self
+            .camera
+            .screen_to_world(mq::vec2(mq::screen_width(), mq::screen_height()));
+        let world_min = mq::vec2(view_min.x.min(view_max.x), view_min.y.min(view_max.y));
+        let world_max = mq::vec2(view_min.x.max(view_max.x), view_min.y.max(view_max.y));
+        mq::Rect::new(
+            world_min.x,
+            world_min.y,
+            world_max.x - world_min.x,
+            world_max.y - world_min.y,
+        )
+    }
+
+    fn rects_overlap(a: mq::Rect, b: mq::Rect) -> bool {
+        let a_right = a.x + a.w;
+        let a_bottom = a.y + a.h;
+        let b_right = b.x + b.w;
+        let b_bottom = b.y + b.h;
+        a.x < b_right && a_right > b.x && a.y < b_bottom && a_bottom > b.y
+    }
+
+    fn visible_terrain_slice(
+        &self,
+        tex: &mq::Texture2D,
+    ) -> Option<(mq::Vec2, mq::Vec2, mq::Rect)> {
+        let view = self.visible_world_rect();
+        let world_min = mq::vec2(view.x, view.y);
+        let world_max = mq::vec2(view.x + view.w, view.y + view.h);
+
+        let tex_size = tex.size();
+        let map_w = tex_size.x * self.tile_size;
+        let map_h = tex_size.y * self.tile_size;
+
+        let clamped_min = mq::vec2(
+            world_min.x.clamp(0.0, map_w),
+            world_min.y.clamp(0.0, map_h),
+        );
+        let clamped_max = mq::vec2(
+            world_max.x.clamp(0.0, map_w),
+            world_max.y.clamp(0.0, map_h),
+        );
+
+        if clamped_min.x >= clamped_max.x || clamped_min.y >= clamped_max.y {
+            return None;
+        }
+
+        let src_x = clamped_min.x / self.tile_size;
+        let src_y = tex_size.y - (clamped_max.y / self.tile_size);
+        let src_w = (clamped_max.x - clamped_min.x) / self.tile_size;
+        let src_h = (clamped_max.y - clamped_min.y) / self.tile_size;
+
+        Some((
+            clamped_min,
+            clamped_max - clamped_min,
+            mq::Rect::new(src_x, src_y, src_w, src_h),
+        ))
+    }
+
     /// Draws all pawns to the internal render target.
     pub fn draw(&mut self, assets: &Assets, terrain: Option<&MapTerrain>) {
         self.camera.render_target = Some(self.render_target.clone());
         mq::set_camera(&self.camera);
         mq::clear_background(mq::LIGHTGRAY);
+        let view = self.visible_world_rect();
 
         {
             if let Some(terrain) = terrain {
@@ -295,29 +356,37 @@ impl Board {
             }
             let tex = &self.terrain_texture.texture;
             if tex.size() != mq::Vec2::ZERO {
-                mq::draw_texture_ex(
-                    tex,
-                    0.,
-                    0.,
-                    mq::WHITE,
-                    mq::DrawTextureParams {
-                        dest_size: Some(tex.size() * self.tile_size),
-                        source: None,
-                        rotation: 0.,
-                        flip_x: false,
-                        flip_y: true,
-                        pivot: None,
-                    },
-                );
+                if let Some((dest_pos, dest_size, source)) =
+                    self.visible_terrain_slice(tex)
+                {
+                    mq::draw_texture_ex(
+                        tex,
+                        dest_pos.x,
+                        dest_pos.y,
+                        mq::WHITE,
+                        mq::DrawTextureParams {
+                            dest_size: Some(dest_size),
+                            source: Some(source),
+                            rotation: 0.,
+                            flip_x: false,
+                            flip_y: true,
+                            pivot: None,
+                        },
+                    );
+                }
             }
         }
 
         for pawn in &self.pawns {
-            pawn.draw_label(&self.camera, assets.get_font("board"), &self.strings);
+            if Self::rects_overlap(pawn.bounds, view) {
+                pawn.draw_label(&self.camera, assets.get_font("board"), &self.strings);
+            }
         }
 
         for pawn in &self.pawns {
-            pawn.draw_shape(assets);
+            if Self::rects_overlap(pawn.bounds, view) {
+                pawn.draw_shape(assets);
+            }
         }
 
         mq::set_default_camera();
