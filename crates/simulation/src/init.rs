@@ -102,6 +102,7 @@ pub(crate) fn init(sim: &mut Simulation, req: InitRequest) {
         vars: &'a [(Var, f64)],
         sets: &'a [Set],
         parents: &'a [(Hierarchy, &'a str)],
+        faction: &'a str,
         is_player: bool,
     }
 
@@ -151,6 +152,7 @@ pub(crate) fn init(sim: &mut Simulation, req: InitRequest) {
                 (Var::FoodCapacity, TOWN_FOOD_CAPACITY),
             ],
             sets: &[Set::Settlements, Set::Towns],
+            faction: "rheged",
             ..Default::default()
         },
         Desc {
@@ -164,6 +166,7 @@ pub(crate) fn init(sim: &mut Simulation, req: InitRequest) {
             ],
             sets: &[Set::Settlements, Set::Villages],
             parents: &[(Hierarchy::LocalMarket, "caer_ligualid")],
+            faction: "rheged",
             ..Default::default()
         },
         Desc {
@@ -176,6 +179,7 @@ pub(crate) fn init(sim: &mut Simulation, req: InitRequest) {
                 (Var::FoodCapacity, HILLFORT_FOOD_CAPACITY),
             ],
             sets: &[Set::Settlements, Set::Hillforts],
+            faction: "rheged",
             ..Default::default()
         },
         Desc {
@@ -188,6 +192,7 @@ pub(crate) fn init(sim: &mut Simulation, req: InitRequest) {
                 (Var::FoodCapacity, HILLFORT_FOOD_CAPACITY),
             ],
             sets: &[Set::Settlements, Set::Hillforts],
+            faction: "rheged",
             ..Default::default()
         },
         Desc {
@@ -201,6 +206,7 @@ pub(crate) fn init(sim: &mut Simulation, req: InitRequest) {
             ],
             sets: &[Set::Settlements, Set::Villages],
             parents: &[(Hierarchy::LocalMarket, "caer_ligualid")],
+            faction: "rheged",
             ..Default::default()
         },
         Desc {
@@ -214,6 +220,7 @@ pub(crate) fn init(sim: &mut Simulation, req: InitRequest) {
             ],
             sets: &[Set::Settlements, Set::Villages],
             parents: &[(Hierarchy::LocalMarket, "caer_ligualid")],
+            faction: "rheged",
             ..Default::default()
         },
         Desc {
@@ -227,6 +234,7 @@ pub(crate) fn init(sim: &mut Simulation, req: InitRequest) {
             ],
             sets: &[Set::Settlements, Set::Villages],
             parents: &[(Hierarchy::LocalMarket, "caer_ligualid")],
+            faction: "rheged",
             ..Default::default()
         },
         Desc {
@@ -239,6 +247,7 @@ pub(crate) fn init(sim: &mut Simulation, req: InitRequest) {
                 (Var::FoodCapacity, HILLFORT_FOOD_CAPACITY),
             ],
             sets: &[Set::Settlements],
+            faction: "rheged",
             ..Default::default()
         },
         Desc {
@@ -246,12 +255,11 @@ pub(crate) fn init(sim: &mut Simulation, req: InitRequest) {
             pos: (600., 530.),
             party_typ: "mine",
             sets: &[Set::Mines],
-            parents: &[(Hierarchy::LocalMarket, "caer_ligualid")],
             ..Default::default()
         },
         Desc {
-            key: "caer_manuguaid",
-            name: "Caer Manuguaid",
+            key: "caer_maunguid",
+            name: "Caer Maunguid",
             pos: (630., 665.),
             party_typ: "town",
             vars: &[
@@ -260,6 +268,7 @@ pub(crate) fn init(sim: &mut Simulation, req: InitRequest) {
                 (Var::FoodCapacity, TOWN_FOOD_CAPACITY),
             ],
             sets: &[Set::Settlements, Set::Towns],
+            faction: "crafu",
             ..Default::default()
         },
         Desc {
@@ -272,7 +281,8 @@ pub(crate) fn init(sim: &mut Simulation, req: InitRequest) {
                 (Var::FoodCapacity, VILLAGE_FOOD_CAPACITY),
             ],
             sets: &[Set::Settlements, Set::Villages],
-            parents: &[(Hierarchy::LocalMarket, "caer_manuguaid")],
+            parents: &[(Hierarchy::LocalMarket, "caer_maunguid")],
+            faction: "crafu",
             ..Default::default()
         },
         Desc {
@@ -285,7 +295,8 @@ pub(crate) fn init(sim: &mut Simulation, req: InitRequest) {
                 (Var::FoodCapacity, VILLAGE_FOOD_CAPACITY),
             ],
             sets: &[Set::Settlements, Set::Villages],
-            parents: &[(Hierarchy::LocalMarket, "caer_manuguaid")],
+            parents: &[(Hierarchy::LocalMarket, "caer_maunguid")],
+            faction: "crafu",
             ..Default::default()
         },
         Desc {
@@ -298,7 +309,8 @@ pub(crate) fn init(sim: &mut Simulation, req: InitRequest) {
                 (Var::FoodCapacity, VILLAGE_FOOD_CAPACITY),
             ],
             sets: &[Set::Settlements, Set::Villages],
-            parents: &[(Hierarchy::LocalMarket, "caer_manuguaid")],
+            parents: &[(Hierarchy::LocalMarket, "caer_maunguid")],
+            faction: "crafu",
             ..Default::default()
         },
         Desc {
@@ -311,15 +323,46 @@ pub(crate) fn init(sim: &mut Simulation, req: InitRequest) {
                 (Var::FoodCapacity, VILLAGE_FOOD_CAPACITY),
             ],
             sets: &[Set::Settlements, Set::Villages],
-            parents: &[(Hierarchy::LocalMarket, "caer_manuguaid")],
+            parents: &[(Hierarchy::LocalMarket, "caer_maunguid")],
+            faction: "crafu",
             ..Default::default()
         },
     ];
 
     let player_name = Name::simple(sim.names.define("Player"));
 
+    #[derive(Default, Clone, Copy)]
+    struct FactionDesc<'a> {
+        key: &'a str,
+        name: &'a str,
+        color: (u8, u8, u8),
+    }
+
+    let factions = [
+        FactionDesc {
+            key: "rheged",
+            name: "Rheged",
+            color: (200, 40, 40),
+        },
+        FactionDesc {
+            key: "crafu",
+            name: "Crafu",
+            color: (130, 70, 180),
+        },
+    ];
+
     let mut keys = HashMap::new();
+    let mut faction_keys = HashMap::new();
     let mut pass2 = vec![];
+
+    for faction in factions {
+        let agent = sim.agents.spawn();
+        agent.name = Name::simple(sim.names.define(faction.name));
+        let agent = agent.id;
+        sim.agents.add_to_set(Set::Factions, agent);
+        sim.faction_colors.insert(agent, faction.color);
+        faction_keys.insert(faction.key, agent);
+    }
 
     for desc in descs {
         let typ = sim.parties.find_type_by_tag(desc.party_typ).unwrap();
@@ -374,6 +417,11 @@ pub(crate) fn init(sim: &mut Simulation, req: InitRequest) {
         for &(hierarchy, key) in desc.parents {
             let parent = keys.get(key).copied().unwrap();
             sim.agents.set_parent(hierarchy, parent, agent);
+        }
+        if !desc.faction.is_empty() {
+            let parent = faction_keys.get(desc.faction).copied().unwrap();
+            sim.agents
+                .set_parent(Hierarchy::FactionMembership, parent, agent);
         }
     }
 }

@@ -1,5 +1,5 @@
 use bumpalo::Bump;
-use slotmap::{Key, KeyData};
+use slotmap::{Key, KeyData, SecondaryMap};
 use util::string_pool::*;
 
 use crate::{
@@ -28,6 +28,7 @@ pub(crate) const CARAVAN_OPPORTUNITY_MAX: f64 = 0.0;
 pub(crate) const CARAVAN_OPPORTUNITY_SPAWN_CHANGE: f64 = CARAVAN_OPPORTUNITY_MIN;
 
 type AVec<'a, T> = bumpalo::collections::Vec<'a, T>;
+pub(crate) type Color = (u8, u8, u8);
 
 #[derive(Default)]
 pub(crate) struct Simulation {
@@ -37,6 +38,7 @@ pub(crate) struct Simulation {
     pub parties: Parties,
     movement_cache: movement::MovementCache,
     pub agents: Agents,
+    pub faction_colors: SecondaryMap<AgentId, Color>,
     player_party_goal: parties::Goal,
 }
 
@@ -572,13 +574,25 @@ struct SpawnSubagent<'a> {
 
 fn spawn_subagent(sim: &mut Simulation, spawn: SpawnSubagent) {
     // Spawn agent (now ihere, later floated out)
-    let (parent_party, parent_pos) = {
-        let party = &sim.parties[sim.agents[spawn.parent].party];
-        (party.id, party.body.pos)
+    struct ParentData {
+        party: PartyId,
+        pos: V2,
+        faction: AgentId,
+    }
+
+    let parent = {
+        let agent = &sim.agents[spawn.parent];
+        let party = &sim.parties[agent.party];
+        let faction = sim.agents.parent_of(Hierarchy::FactionMembership, agent.id);
+        ParentData {
+            party: party.id,
+            pos: party.body.pos,
+            faction,
+        }
     };
     let party = sim.parties.spawn_with_type(spawn.party_type);
-    party.body.pos = parent_pos;
-    party.inside_of = parent_party;
+    party.body.pos = parent.pos;
+    party.inside_of = parent.party;
 
     let agent = sim.agents.spawn();
     agent.name = spawn.name;
@@ -596,6 +610,9 @@ fn spawn_subagent(sim: &mut Simulation, spawn: SpawnSubagent) {
     let agent = agent.id;
     sim.agents
         .set_parent(Hierarchy::Attachment, spawn.parent, agent);
+    sim.agents
+        .set_parent(Hierarchy::FactionMembership, parent.faction, agent);
+
     for &(hierarchy, id) in spawn.parents {
         sim.agents.set_parent(hierarchy, id, agent);
     }

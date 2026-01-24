@@ -88,11 +88,12 @@ fn make_pawns<'a, 'b>(
     let mut vec = bumpalo::vec![in arena];
     vec.extend(items.iter().map(|item| {
         let is_selected = Some(item.id) == selected;
+        let fill = mq::Color::from_rgba(item.color.0, item.color.1, item.color.2, 255);
 
         PawnDesc {
             image: item.image,
             bounds: mq::Rect::new(item.x, item.y, item.width, item.height),
-            fill: mq::RED,
+            fill,
             stroke: Stroke {
                 color: if is_selected { mq::YELLOW } else { mq::BLACK },
                 thickness: 4.,

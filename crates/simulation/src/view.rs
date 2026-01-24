@@ -23,6 +23,7 @@ impl MapItems {
             y: data.body.pos.y - data.body.size / 2.,
             width: data.body.size,
             height: data.body.size,
+            color: data.color,
         }
     }
 
@@ -48,6 +49,7 @@ struct MapItemData {
     name: SpanHandle,
     image: &'static str,
     body: Body,
+    color: Color,
 }
 
 pub struct MapItem<'a> {
@@ -58,6 +60,7 @@ pub struct MapItem<'a> {
     pub y: f32,
     pub width: f32,
     pub height: f32,
+    pub color: Color,
 }
 
 #[derive(Default)]
@@ -170,11 +173,22 @@ pub(crate) fn view(sim: &Simulation, req: &Request, response: &mut Response) {
                 Default::default()
             };
 
+            let faction = sim
+                .agents
+                .parent_of(Hierarchy::FactionMembership, entity.agent);
+
+            let color = sim
+                .faction_colors
+                .get(faction)
+                .copied()
+                .unwrap_or((200, 200, 200));
+
             ctx.entries.push(MapItemData {
                 id: entity.id.data().as_ffi(),
                 name,
                 image: typ.image,
                 body: entity.body,
+                color,
             });
         }
     }

@@ -33,6 +33,7 @@ pub(crate) enum Set {
     Hillforts,
     Towns,
     Mines,
+    Factions,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, EnumCount, EnumIter)]
