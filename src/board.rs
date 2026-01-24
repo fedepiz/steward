@@ -86,7 +86,7 @@ impl Pawn {
     /// Uses fixed font_size with inverse zoom scaling for constant screen size.
     fn draw_label<'a>(
         &'a self,
-        camera: &mq::Camera2D,
+        inv_scale: f32,
         font: Option<&'a mq::Font>,
         strings: &'a StringPool,
     ) -> Option<DrawLabel<'a>> {
@@ -94,14 +94,6 @@ impl Pawn {
         if text.is_empty() || self.label.size == 0 {
             return None;
         }
-
-        // Calculate zoom scale (screen pixels per world unit)
-        let origin_screen = camera.world_to_screen(mq::vec2(0.0, 0.0));
-        let unit_screen = camera.world_to_screen(mq::vec2(0.0, 1.0));
-        let zoom_scale = (unit_screen.y - origin_screen.y).abs();
-
-        // Inverse scale to maintain constant screen size
-        let inv_scale = 1. / zoom_scale;
 
         // Screen-space constants, scaled to world space
         let padding = 4. * inv_scale;
@@ -333,7 +325,15 @@ impl Board {
         mq::set_camera(&self.camera);
         mq::clear_background(mq::LIGHTGRAY);
         let view = self.visible_world_rect();
+        // Cache inverse zoom scale (world units per screen pixel) for label sizing.
+        let inv_scale = {
+            let origin_screen = self.camera.world_to_screen(mq::vec2(0.0, 0.0));
+            let unit_screen = self.camera.world_to_screen(mq::vec2(0.0, 1.0));
+            let zoom_scale = (unit_screen.y - origin_screen.y).abs();
+            1. / zoom_scale
+        };
 
+        // Prepare (if necessary) and load terrain
         {
             if let Some(terrain) = terrain {
                 self.prepare_terrain_texture(terrain);
@@ -359,11 +359,12 @@ impl Board {
             }
         }
 
+        // Extract all the label data
         let mut draw_labels = bumpalo::collections::Vec::with_capacity_in(self.pawns.len(), arena);
 
         for pawn in &self.pawns {
             if Self::rects_overlap(pawn.bounds, view) {
-                let draw = pawn.draw_label(&self.camera, assets.get_font("board"), &self.strings);
+                let draw = pawn.draw_label(inv_scale, assets.get_font("board"), &self.strings);
                 draw_labels.extend(draw);
             }
         }
