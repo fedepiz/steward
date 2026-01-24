@@ -10,6 +10,7 @@ new_key_type! { pub struct AgentId; }
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, EnumCount, EnumIter, Debug)]
 pub(crate) enum Var {
     // Person
+    Money,
     Renown,
     // Settlement
     Population,
@@ -26,14 +27,17 @@ pub(crate) enum Var {
 
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, EnumCount, EnumIter)]
 pub(crate) enum Set {
+    // Places
     Locations,
-    People,
     Settlements,
     Villages,
     Hillforts,
     Towns,
     Mines,
+    // Factions
     Factions,
+    // People
+    People,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, EnumCount, EnumIter)]
@@ -45,10 +49,18 @@ pub(crate) enum Flag {
 
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, EnumCount, EnumIter)]
 pub(crate) enum Hierarchy {
+    // Economy
     Attachment,
-    FactionMembership,
     LocalMarket,
     WorkArea,
+    // Politics
+    FactionMembership,
+    // The relationship between a lord (or lord-like person) and its various possessions
+    Lordship,
+    // The relationship between the ruling-lord and the ruled faction
+    RulerOf,
+    // The relationship between a person and where they reside
+    HomeOf,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, EnumCount, EnumIter)]
@@ -332,7 +344,7 @@ pub(crate) enum TaskKind {
     Init,
     Deliver,
     Load,
-    ReturnHome,
+    ReturnToBase,
 }
 
 impl Default for TaskKind {
@@ -413,7 +425,6 @@ pub enum Behavior {
         enter_on_arrival: bool,
     },
     Player,
-    Test,
 }
 
 impl Default for Behavior {

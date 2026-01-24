@@ -19,7 +19,6 @@ pub(crate) fn init(sim: &mut Simulation, req: InitRequest) {
         let typ = sim.parties.add_type();
         typ.tag = "person";
         typ.image = "person";
-        typ.name = Name::simple(sim.names.define("Person"));
         typ.size = SIZE_SMALL;
         typ.layer = 1;
         typ.speed = BASE_SPEED;
@@ -94,244 +93,6 @@ pub(crate) fn init(sim: &mut Simulation, req: InitRequest) {
     }
 
     #[derive(Default, Clone, Copy)]
-    struct Desc<'a> {
-        key: &'a str,
-        name: &'a str,
-        pos: (f32, f32),
-        party_typ: &'a str,
-        vars: &'a [(Var, f64)],
-        sets: &'a [Set],
-        parents: &'a [(Hierarchy, &'a str)],
-        faction: &'a str,
-        is_player: bool,
-    }
-
-    const SETTLEMENT_PROSPERITY: f64 = 0.5;
-    const TOWN_POPULATION: f64 = 5000.;
-    const VILLAGE_POPULATION: f64 = 1000.;
-    const HILLFORT_POPULATION: f64 = 1000.;
-    const VILLAGE_FOOD_CAPACITY: f64 = 1000.;
-    const HILLFORT_FOOD_CAPACITY: f64 = 10_000.;
-    const TOWN_FOOD_CAPACITY: f64 = 10_000.;
-    const PERSON_RENOWN: f64 = 10.;
-
-    let descs = [
-        Desc {
-            pos: (590., 520.),
-            party_typ: "person",
-            vars: &[(Var::Renown, PERSON_RENOWN)],
-            is_player: true,
-            ..Default::default()
-        },
-        Desc {
-            pos: (610., 520.),
-            party_typ: "person",
-            vars: &[(Var::Renown, PERSON_RENOWN)],
-            ..Default::default()
-        },
-        Desc {
-            pos: (600., 520.),
-            party_typ: "person",
-            vars: &[(Var::Renown, PERSON_RENOWN)],
-            ..Default::default()
-        },
-        Desc {
-            pos: (600., 500.),
-            party_typ: "person",
-            vars: &[(Var::Renown, PERSON_RENOWN)],
-            ..Default::default()
-        },
-        Desc {
-            key: "caer_ligualid",
-            name: "Caer Ligualid",
-            pos: (592., 514.),
-            party_typ: "town",
-            vars: &[
-                (Var::Prosperity, SETTLEMENT_PROSPERITY),
-                (Var::Population, TOWN_POPULATION),
-                (Var::FoodCapacity, TOWN_FOOD_CAPACITY),
-            ],
-            sets: &[Set::Settlements, Set::Towns],
-            faction: "rheged",
-            ..Default::default()
-        },
-        Desc {
-            name: "Llan Heledd",
-            pos: (570., 540.),
-            party_typ: "village",
-            vars: &[
-                (Var::Prosperity, SETTLEMENT_PROSPERITY),
-                (Var::Population, VILLAGE_POPULATION),
-                (Var::FoodCapacity, VILLAGE_FOOD_CAPACITY),
-            ],
-            sets: &[Set::Settlements, Set::Villages],
-            parents: &[(Hierarchy::LocalMarket, "caer_ligualid")],
-            faction: "rheged",
-            ..Default::default()
-        },
-        Desc {
-            name: "Din Drust",
-            pos: (570., 490.),
-            party_typ: "hillfort",
-            vars: &[
-                (Var::Prosperity, SETTLEMENT_PROSPERITY),
-                (Var::Population, HILLFORT_POPULATION),
-                (Var::FoodCapacity, HILLFORT_FOOD_CAPACITY),
-            ],
-            sets: &[Set::Settlements, Set::Hillforts],
-            faction: "rheged",
-            ..Default::default()
-        },
-        Desc {
-            name: "Din Reghed",
-            pos: (530., 500.),
-            party_typ: "hillfort",
-            vars: &[
-                (Var::Prosperity, SETTLEMENT_PROSPERITY),
-                (Var::Population, HILLFORT_POPULATION),
-                (Var::FoodCapacity, HILLFORT_FOOD_CAPACITY),
-            ],
-            sets: &[Set::Settlements, Set::Hillforts],
-            faction: "rheged",
-            ..Default::default()
-        },
-        Desc {
-            name: "Ad Candidam Casam",
-            pos: (530., 520.),
-            party_typ: "village",
-            vars: &[
-                (Var::Prosperity, SETTLEMENT_PROSPERITY),
-                (Var::Population, VILLAGE_POPULATION),
-                (Var::FoodCapacity, VILLAGE_FOOD_CAPACITY),
-            ],
-            sets: &[Set::Settlements, Set::Villages],
-            parents: &[(Hierarchy::LocalMarket, "caer_ligualid")],
-            faction: "rheged",
-            ..Default::default()
-        },
-        Desc {
-            name: "Isura",
-            pos: (560., 500.),
-            party_typ: "village",
-            vars: &[
-                (Var::Prosperity, SETTLEMENT_PROSPERITY),
-                (Var::Population, VILLAGE_POPULATION),
-                (Var::FoodCapacity, VILLAGE_FOOD_CAPACITY),
-            ],
-            sets: &[Set::Settlements, Set::Villages],
-            parents: &[(Hierarchy::LocalMarket, "caer_ligualid")],
-            faction: "rheged",
-            ..Default::default()
-        },
-        Desc {
-            name: "Anava",
-            pos: (603., 500.),
-            party_typ: "village",
-            vars: &[
-                (Var::Prosperity, SETTLEMENT_PROSPERITY),
-                (Var::Population, VILLAGE_POPULATION),
-                (Var::FoodCapacity, VILLAGE_FOOD_CAPACITY),
-            ],
-            sets: &[Set::Settlements, Set::Villages],
-            parents: &[(Hierarchy::LocalMarket, "caer_ligualid")],
-            faction: "rheged",
-            ..Default::default()
-        },
-        Desc {
-            name: "Caer Wenddoleu",
-            pos: (625., 505.),
-            party_typ: "hillfort",
-            vars: &[
-                (Var::Prosperity, SETTLEMENT_PROSPERITY),
-                (Var::Population, HILLFORT_POPULATION),
-                (Var::FoodCapacity, HILLFORT_FOOD_CAPACITY),
-            ],
-            sets: &[Set::Settlements],
-            faction: "rheged",
-            ..Default::default()
-        },
-        Desc {
-            name: "Lligwy Mine",
-            pos: (600., 530.),
-            party_typ: "mine",
-            sets: &[Set::Mines],
-            ..Default::default()
-        },
-        Desc {
-            key: "caer_maunguid",
-            name: "Caer Maunguid",
-            pos: (630., 665.),
-            party_typ: "town",
-            vars: &[
-                (Var::Prosperity, SETTLEMENT_PROSPERITY),
-                (Var::Population, TOWN_POPULATION),
-                (Var::FoodCapacity, TOWN_FOOD_CAPACITY),
-            ],
-            sets: &[Set::Settlements, Set::Towns],
-            faction: "crafu",
-            ..Default::default()
-        },
-        Desc {
-            name: "Maes Cogwy",
-            pos: (605., 625.),
-            party_typ: "village",
-            vars: &[
-                (Var::Prosperity, SETTLEMENT_PROSPERITY),
-                (Var::Population, VILLAGE_POPULATION),
-                (Var::FoodCapacity, VILLAGE_FOOD_CAPACITY),
-            ],
-            sets: &[Set::Settlements, Set::Villages],
-            parents: &[(Hierarchy::LocalMarket, "caer_maunguid")],
-            faction: "crafu",
-            ..Default::default()
-        },
-        Desc {
-            name: "Ecclesia Hyll",
-            pos: (600., 645.),
-            party_typ: "village",
-            vars: &[
-                (Var::Prosperity, SETTLEMENT_PROSPERITY),
-                (Var::Population, VILLAGE_POPULATION),
-                (Var::FoodCapacity, VILLAGE_FOOD_CAPACITY),
-            ],
-            sets: &[Set::Settlements, Set::Villages],
-            parents: &[(Hierarchy::LocalMarket, "caer_maunguid")],
-            faction: "crafu",
-            ..Default::default()
-        },
-        Desc {
-            name: "Ced",
-            pos: (600., 675.),
-            party_typ: "village",
-            vars: &[
-                (Var::Prosperity, SETTLEMENT_PROSPERITY),
-                (Var::Population, VILLAGE_POPULATION),
-                (Var::FoodCapacity, VILLAGE_FOOD_CAPACITY),
-            ],
-            sets: &[Set::Settlements, Set::Villages],
-            parents: &[(Hierarchy::LocalMarket, "caer_maunguid")],
-            faction: "crafu",
-            ..Default::default()
-        },
-        Desc {
-            name: "Dwfr",
-            pos: (640., 690.),
-            party_typ: "village",
-            vars: &[
-                (Var::Prosperity, SETTLEMENT_PROSPERITY),
-                (Var::Population, VILLAGE_POPULATION),
-                (Var::FoodCapacity, VILLAGE_FOOD_CAPACITY),
-            ],
-            sets: &[Set::Settlements, Set::Villages],
-            parents: &[(Hierarchy::LocalMarket, "caer_maunguid")],
-            faction: "crafu",
-            ..Default::default()
-        },
-    ];
-
-    let player_name = Name::simple(sim.names.define("Player"));
-
-    #[derive(Default, Clone, Copy)]
     struct FactionDesc<'a> {
         key: &'a str,
         name: &'a str,
@@ -351,8 +112,270 @@ pub(crate) fn init(sim: &mut Simulation, req: InitRequest) {
         },
     ];
 
+    #[derive(Default, Clone, Copy)]
+    struct AgentDesc<'a> {
+        key: &'a str,
+        name: &'a str,
+        pos: (f32, f32),
+        party_typ: &'a str,
+        vars: &'a [(Var, f64)],
+        sets: &'a [Set],
+        parents: &'a [(Hierarchy, &'a str)],
+        children: &'a [(Hierarchy, &'a str)],
+        is_player: bool,
+    }
+
+    const SETTLEMENT_PROSPERITY: f64 = 0.5;
+    const TOWN_POPULATION: f64 = 5000.;
+    const VILLAGE_POPULATION: f64 = 1000.;
+    const HILLFORT_POPULATION: f64 = 1000.;
+    const VILLAGE_FOOD_CAPACITY: f64 = 1000.;
+    const HILLFORT_FOOD_CAPACITY: f64 = 10_000.;
+    const TOWN_FOOD_CAPACITY: f64 = 10_000.;
+    const PERSON_RENOWN: f64 = 10.;
+
+    let agents = [
+        AgentDesc {
+            pos: (590., 520.),
+            party_typ: "person",
+            name: "Ambrosius Aurelianus",
+            vars: &[(Var::Renown, PERSON_RENOWN)],
+            is_player: true,
+            parents: &[(Hierarchy::FactionMembership, "rheged")],
+            ..Default::default()
+        },
+        AgentDesc {
+            pos: (610., 520.),
+            party_typ: "person",
+            name: "Rhoedd map Rhun",
+            vars: &[(Var::Renown, PERSON_RENOWN)],
+            parents: &[(Hierarchy::FactionMembership, "rheged")],
+            ..Default::default()
+        },
+        AgentDesc {
+            pos: (600., 520.),
+            party_typ: "person",
+            name: "Gwaith map Elffin",
+            vars: &[(Var::Renown, PERSON_RENOWN)],
+            parents: &[(Hierarchy::FactionMembership, "rheged")],
+            ..Default::default()
+        },
+        AgentDesc {
+            pos: (600., 500.),
+            party_typ: "person",
+            name: "Eadwine map Owain",
+            vars: &[(Var::Renown, PERSON_RENOWN)],
+            parents: &[(Hierarchy::FactionMembership, "rheged")],
+            ..Default::default()
+        },
+        AgentDesc {
+            key: "caer_ligualid",
+            name: "Caer Ligualid",
+            pos: (592., 514.),
+            party_typ: "town",
+            vars: &[
+                (Var::Prosperity, SETTLEMENT_PROSPERITY),
+                (Var::Population, TOWN_POPULATION),
+                (Var::FoodCapacity, TOWN_FOOD_CAPACITY),
+            ],
+            sets: &[Set::Settlements, Set::Towns],
+            parents: &[(Hierarchy::FactionMembership, "rheged")],
+            ..Default::default()
+        },
+        AgentDesc {
+            name: "Llan Heledd",
+            pos: (570., 540.),
+            party_typ: "village",
+            vars: &[
+                (Var::Prosperity, SETTLEMENT_PROSPERITY),
+                (Var::Population, VILLAGE_POPULATION),
+                (Var::FoodCapacity, VILLAGE_FOOD_CAPACITY),
+            ],
+            sets: &[Set::Settlements, Set::Villages],
+            parents: &[
+                (Hierarchy::LocalMarket, "caer_ligualid"),
+                (Hierarchy::FactionMembership, "rheged"),
+            ],
+            ..Default::default()
+        },
+        AgentDesc {
+            name: "Din Drust",
+            pos: (570., 490.),
+            party_typ: "hillfort",
+            vars: &[
+                (Var::Prosperity, SETTLEMENT_PROSPERITY),
+                (Var::Population, HILLFORT_POPULATION),
+                (Var::FoodCapacity, HILLFORT_FOOD_CAPACITY),
+            ],
+            sets: &[Set::Settlements, Set::Hillforts],
+            parents: &[(Hierarchy::FactionMembership, "rheged")],
+            ..Default::default()
+        },
+        AgentDesc {
+            name: "Din Reghed",
+            pos: (530., 500.),
+            party_typ: "hillfort",
+            vars: &[
+                (Var::Prosperity, SETTLEMENT_PROSPERITY),
+                (Var::Population, HILLFORT_POPULATION),
+                (Var::FoodCapacity, HILLFORT_FOOD_CAPACITY),
+            ],
+            sets: &[Set::Settlements, Set::Hillforts],
+            parents: &[(Hierarchy::FactionMembership, "rheged")],
+            ..Default::default()
+        },
+        AgentDesc {
+            name: "Ad Candidam Casam",
+            pos: (530., 520.),
+            party_typ: "village",
+            vars: &[
+                (Var::Prosperity, SETTLEMENT_PROSPERITY),
+                (Var::Population, VILLAGE_POPULATION),
+                (Var::FoodCapacity, VILLAGE_FOOD_CAPACITY),
+            ],
+            sets: &[Set::Settlements, Set::Villages],
+            parents: &[
+                (Hierarchy::LocalMarket, "caer_ligualid"),
+                (Hierarchy::FactionMembership, "rheged"),
+            ],
+            ..Default::default()
+        },
+        AgentDesc {
+            name: "Isura",
+            pos: (560., 500.),
+            party_typ: "village",
+            vars: &[
+                (Var::Prosperity, SETTLEMENT_PROSPERITY),
+                (Var::Population, VILLAGE_POPULATION),
+                (Var::FoodCapacity, VILLAGE_FOOD_CAPACITY),
+            ],
+            sets: &[Set::Settlements, Set::Villages],
+            parents: &[
+                (Hierarchy::LocalMarket, "caer_ligualid"),
+                (Hierarchy::FactionMembership, "rheged"),
+            ],
+            ..Default::default()
+        },
+        AgentDesc {
+            name: "Anava",
+            pos: (603., 500.),
+            party_typ: "village",
+            vars: &[
+                (Var::Prosperity, SETTLEMENT_PROSPERITY),
+                (Var::Population, VILLAGE_POPULATION),
+                (Var::FoodCapacity, VILLAGE_FOOD_CAPACITY),
+            ],
+            sets: &[Set::Settlements, Set::Villages],
+            parents: &[
+                (Hierarchy::LocalMarket, "caer_ligualid"),
+                (Hierarchy::FactionMembership, "rheged"),
+            ],
+            ..Default::default()
+        },
+        AgentDesc {
+            name: "Caer Wenddoleu",
+            pos: (625., 505.),
+            party_typ: "hillfort",
+            vars: &[
+                (Var::Prosperity, SETTLEMENT_PROSPERITY),
+                (Var::Population, HILLFORT_POPULATION),
+                (Var::FoodCapacity, HILLFORT_FOOD_CAPACITY),
+            ],
+            sets: &[Set::Settlements],
+            parents: &[(Hierarchy::FactionMembership, "rheged")],
+            ..Default::default()
+        },
+        AgentDesc {
+            name: "Lligwy Mine",
+            pos: (600., 530.),
+            party_typ: "mine",
+            sets: &[Set::Mines],
+            parents: &[(Hierarchy::FactionMembership, "rheged")],
+            ..Default::default()
+        },
+        AgentDesc {
+            key: "caer_maunguid",
+            name: "Caer Maunguid",
+            pos: (630., 665.),
+            party_typ: "town",
+            vars: &[
+                (Var::Prosperity, SETTLEMENT_PROSPERITY),
+                (Var::Population, TOWN_POPULATION),
+                (Var::FoodCapacity, TOWN_FOOD_CAPACITY),
+            ],
+            sets: &[Set::Settlements, Set::Towns],
+            parents: &[(Hierarchy::FactionMembership, "crafu")],
+            ..Default::default()
+        },
+        AgentDesc {
+            name: "Maes Cogwy",
+            pos: (605., 625.),
+            party_typ: "village",
+            vars: &[
+                (Var::Prosperity, SETTLEMENT_PROSPERITY),
+                (Var::Population, VILLAGE_POPULATION),
+                (Var::FoodCapacity, VILLAGE_FOOD_CAPACITY),
+            ],
+            sets: &[Set::Settlements, Set::Villages],
+            parents: &[
+                (Hierarchy::LocalMarket, "caer_maunguid"),
+                (Hierarchy::FactionMembership, "crafu"),
+            ],
+            ..Default::default()
+        },
+        AgentDesc {
+            name: "Ecclesia Hyll",
+            pos: (600., 645.),
+            party_typ: "village",
+            vars: &[
+                (Var::Prosperity, SETTLEMENT_PROSPERITY),
+                (Var::Population, VILLAGE_POPULATION),
+                (Var::FoodCapacity, VILLAGE_FOOD_CAPACITY),
+            ],
+            sets: &[Set::Settlements, Set::Villages],
+            parents: &[
+                (Hierarchy::LocalMarket, "caer_maunguid"),
+                (Hierarchy::FactionMembership, "crafu"),
+            ],
+            ..Default::default()
+        },
+        AgentDesc {
+            name: "Ced",
+            pos: (600., 675.),
+            party_typ: "village",
+            vars: &[
+                (Var::Prosperity, SETTLEMENT_PROSPERITY),
+                (Var::Population, VILLAGE_POPULATION),
+                (Var::FoodCapacity, VILLAGE_FOOD_CAPACITY),
+            ],
+            sets: &[Set::Settlements, Set::Villages],
+            parents: &[
+                (Hierarchy::LocalMarket, "caer_maunguid"),
+                (Hierarchy::FactionMembership, "crafu"),
+            ],
+            ..Default::default()
+        },
+        AgentDesc {
+            name: "Dwfr",
+            pos: (640., 690.),
+            party_typ: "village",
+            vars: &[
+                (Var::Prosperity, SETTLEMENT_PROSPERITY),
+                (Var::Population, VILLAGE_POPULATION),
+                (Var::FoodCapacity, VILLAGE_FOOD_CAPACITY),
+            ],
+            sets: &[Set::Settlements, Set::Villages],
+            parents: &[
+                (Hierarchy::LocalMarket, "caer_maunguid"),
+                (Hierarchy::FactionMembership, "crafu"),
+            ],
+            ..Default::default()
+        },
+    ];
+
+    let player_name = Name::simple(sim.names.define("Player"));
+
     let mut keys = HashMap::new();
-    let mut faction_keys = HashMap::new();
     let mut pass2 = vec![];
 
     for faction in factions {
@@ -361,10 +384,10 @@ pub(crate) fn init(sim: &mut Simulation, req: InitRequest) {
         let agent = agent.id;
         sim.agents.add_to_set(Set::Factions, agent);
         sim.faction_colors.insert(agent, faction.color);
-        faction_keys.insert(faction.key, agent);
+        keys.insert(faction.key, agent);
     }
 
-    for desc in descs {
+    for desc in agents {
         let typ = sim.parties.find_type_by_tag(desc.party_typ).unwrap();
         let party = sim.parties.spawn_with_type(typ.id);
         let name = if desc.is_player {
@@ -386,7 +409,7 @@ pub(crate) fn init(sim: &mut Simulation, req: InitRequest) {
         agent.fixed_behavior = Some(if desc.is_player {
             Behavior::Player
         } else {
-            Behavior::Test
+            Behavior::Idle
         });
         agent.party = party.id;
         party.agent = agent.id;
@@ -418,10 +441,11 @@ pub(crate) fn init(sim: &mut Simulation, req: InitRequest) {
             let parent = keys.get(key).copied().unwrap();
             sim.agents.set_parent(hierarchy, parent, agent);
         }
-        if !desc.faction.is_empty() {
-            let parent = faction_keys.get(desc.faction).copied().unwrap();
-            sim.agents
-                .set_parent(Hierarchy::FactionMembership, parent, agent);
+
+        for &(hierarchy, key) in desc.children {
+            let child = keys.get(key).copied().unwrap();
+            sim.agents.set_parent(hierarchy, agent, child);
         }
+
     }
 }

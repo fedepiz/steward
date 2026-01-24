@@ -761,7 +761,6 @@ fn determine_party_goal(sim: &Simulation, party: &Party) -> Goal {
     match agent.behavior {
         Behavior::Idle => Goal::Idle,
         Behavior::Player => sim.player_party_goal,
-        Behavior::Test => Goal::MoveTo(V2::splat(500.)),
         Behavior::GoTo {
             target,
             enter_on_arrival,

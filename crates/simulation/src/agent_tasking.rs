@@ -47,11 +47,11 @@ const GOODS_PER_CARAVAN_LOAD: f64 = 100.;
 fn farmer_tasking(kind: TaskKind) -> Task {
     match kind {
         TaskKind::Init => Task {
-            kind: TaskKind::ReturnHome,
+            kind: TaskKind::ReturnToBase,
             destination: TaskDestination::Home,
             ..Default::default()
         },
-        TaskKind::ReturnHome => Task {
+        TaskKind::ReturnToBase => Task {
             kind: TaskKind::Load,
             destination: TaskDestination::Home,
             interaction: TaskInteraction::new(&[Interaction::LoadFood, Interaction::UnloadGoods]),
@@ -66,7 +66,7 @@ fn farmer_tasking(kind: TaskKind) -> Task {
             ..Default::default()
         },
         TaskKind::Deliver => Task {
-            kind: TaskKind::ReturnHome,
+            kind: TaskKind::ReturnToBase,
             destination: TaskDestination::Home,
             ..Default::default()
         },
@@ -76,11 +76,11 @@ fn farmer_tasking(kind: TaskKind) -> Task {
 fn miner_tasking(kind: TaskKind) -> Task {
     match kind {
         TaskKind::Init => Task {
-            kind: TaskKind::ReturnHome,
+            kind: TaskKind::ReturnToBase,
             destination: TaskDestination::Home,
             ..Default::default()
         },
-        TaskKind::ReturnHome => Task {
+        TaskKind::ReturnToBase => Task {
             kind: TaskKind::Load,
             destination: TaskDestination::WorkArea,
             interaction: TaskInteraction::with(Interaction::LoadMinerals),
@@ -95,7 +95,7 @@ fn miner_tasking(kind: TaskKind) -> Task {
             ..Default::default()
         },
         TaskKind::Deliver => Task {
-            kind: TaskKind::ReturnHome,
+            kind: TaskKind::ReturnToBase,
             destination: TaskDestination::Home,
             ..Default::default()
         },
@@ -105,12 +105,12 @@ fn miner_tasking(kind: TaskKind) -> Task {
 fn caravan_tasking(kind: TaskKind) -> Task {
     match kind {
         TaskKind::Init => Task {
-            kind: TaskKind::ReturnHome,
+            kind: TaskKind::ReturnToBase,
             destination: TaskDestination::Home,
             interaction: TaskInteraction::default(),
             ..Default::default()
         },
-        TaskKind::ReturnHome => Task {
+        TaskKind::ReturnToBase => Task {
             kind: TaskKind::Load,
             destination: TaskDestination::Home,
             interaction: TaskInteraction::with(Interaction::CaravanVisit),
@@ -125,7 +125,7 @@ fn caravan_tasking(kind: TaskKind) -> Task {
             ..Default::default()
         },
         TaskKind::Deliver => Task {
-            kind: TaskKind::ReturnHome,
+            kind: TaskKind::ReturnToBase,
             destination: TaskDestination::Home,
             interaction: TaskInteraction::default(),
             ..Default::default()
