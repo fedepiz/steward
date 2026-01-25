@@ -10,6 +10,7 @@ use crate::{
     names::{Name, NamePart, Names},
     objects::*,
     parties::{self, *},
+    simulation::detection::{Detection, Detections},
     terrain_map::TerrainMap,
     view::{MapItems, MapTerrain},
 };
@@ -41,6 +42,7 @@ pub(crate) struct Simulation {
     pub agents: Agents,
     pub faction_colors: SecondaryMap<AgentId, Color>,
     player_party_goal: parties::Goal,
+    detections: Detections,
 }
 
 impl Simulation {
@@ -128,7 +130,7 @@ fn tick(sim: &mut Simulation, mut request: Request, arena: &Bump) -> Response {
         for party in sim.parties.iter() {
             let (goal, avoid_area) = determine_party_goal_and_avoidance(sim, party);
 
-            let detection = sim.parties.detections.get_for(party.id);
+            let detection = sim.detections.get_for(party.id);
 
             let movement_target = determine_party_movement_target(party, detection, goal);
 
@@ -203,9 +205,9 @@ fn tick(sim: &mut Simulation, mut request: Request, arena: &Bump) -> Response {
         let spatial_map = &movement_result.spatial_map;
         {
             let _span = tracing::info_span!("Detections").entered();
-            let mut detections = std::mem::take(&mut sim.parties.detections);
-            self::detections(&mut detections, sim, spatial_map, &diplo_map);
-            sim.parties.detections = detections;
+            let mut detections = std::mem::take(&mut sim.detections);
+            self::detection::calculate(&mut detections, sim, spatial_map, &diplo_map);
+            sim.detections = detections;
         }
 
         // Iterate writeback
@@ -291,7 +293,7 @@ fn location_of_agent(
     }
 
     // Otherwise, look at the detections, collecting into scratch space
-    let detections = sim.parties.detections.get_for(party.id);
+    let detections = sim.detections.get_for(party.id);
 
     scratch.clear();
 
@@ -378,61 +380,6 @@ impl Request {
         let key = self.strings.push_str(key);
         self.view_entities.push(ViewEntity { tag: key, entity });
     }
-}
-
-fn detections(
-    detections: &mut Detections,
-    sim: &Simulation,
-    spatial_map: &SpatialMap,
-    diplo_map: &DiploMap,
-) {
-    detections.clear();
-
-    let mut scratch = Vec::with_capacity(100);
-    for party in sim.parties.iter() {
-        const DETECTION_RANGE: f32 = 20.;
-        let neighbours = spatial_map.search(party.body.pos, DETECTION_RANGE);
-
-        for target in neighbours {
-            // Do not look at yourself
-            if target == party.id {
-                continue;
-            }
-            let target = &sim.parties[target];
-            if target.agent.is_null() {
-                continue;
-            }
-            let target_agent = &sim.agents[target.agent];
-            // Distance net of sizes. 0 or lower means collision
-            let distance = body_distance(party.body, target.body);
-
-            let is_location = target_agent.in_set(Set::Locations);
-
-            let threat = if diplo_map.is_hostile(target.agent, party.agent) {
-                calculate_power(target_agent)
-            } else {
-                0.
-            };
-
-            scratch.push(Detection {
-                target: target.id,
-                agent: target.agent,
-                is_location,
-                distance,
-                threat,
-            });
-        }
-        detections.set(party.id, &scratch);
-        scratch.clear();
-    }
-}
-
-fn body_distance(b1: Body, b2: Body) -> f32 {
-    let center_to_center_distance = V2::distance(b1.pos, b2.pos);
-    let collision_range = (b1.size + b2.size) / 2.;
-
-    // Distance net of sizes. 0 or lower means collision
-    center_to_center_distance - collision_range
 }
 
 #[derive(Default)]
@@ -604,7 +551,7 @@ fn spawn_with_opportunity(sim: &mut Simulation, arena: &Bump) {
 
             // Look for a target workplace in the party detections
             let workplace = opportunity.workplace_set.and_then(|set| {
-                let detections = sim.parties.detections.get_for(agent.party);
+                let detections = sim.detections.get_for(agent.party);
                 detections
                     .iter()
                     .find(|entry| sim.agents.in_set(entry.agent, set))
@@ -887,7 +834,7 @@ fn determine_party_goal_and_avoidance(sim: &Simulation, party: &Party) -> (Goal,
     const OUTER_AVOID_RANGE: f32 = INNER_AVOID_RANGE * 1.2;
 
     // Do we detect a threat?
-    let detections = sim.parties.detections.get_for(party.id);
+    let detections = sim.detections.get_for(party.id);
     let primary_threat = detections
         .iter()
         .filter(|det| det.threat > 0. && det.distance <= OUTER_AVOID_RANGE)
@@ -963,7 +910,6 @@ fn resolve_activity_starts<'a>(
         };
 
         let collides = sim
-            .parties
             .detections
             .get_for(subject)
             .iter()
@@ -1128,5 +1074,99 @@ impl<'a> DiploMap<'a> {
 
         // All failed: we are not hostile
         false
+    }
+}
+
+mod detection {
+    use super::*;
+
+    #[derive(Default)]
+    pub(crate) struct Detections {
+        data: Vec<Detection>,
+        spans: SecondaryMap<PartyId, Span>,
+    }
+
+    impl Detections {
+        pub(crate) fn clear(&mut self) {
+            self.data.clear();
+            self.spans.clear();
+        }
+
+        pub(crate) fn set(&mut self, id: PartyId, detections: &[Detection]) {
+            let detections = detections.iter().copied();
+            let span = Span::of_extension(&mut self.data, detections);
+            self.spans.insert(id, span);
+        }
+
+        pub(crate) fn get_for(&self, id: PartyId) -> &[Detection] {
+            self.spans
+                .get(id)
+                .map(|span| span.view(&self.data))
+                .unwrap_or_default()
+        }
+    }
+
+    #[derive(Clone, Copy)]
+    pub(crate) struct Detection {
+        pub target: PartyId,
+        pub distance: f32,
+        pub agent: AgentId,
+        pub is_location: bool,
+        pub threat: f32,
+    }
+
+    pub(crate) fn calculate(
+        detections: &mut Detections,
+        sim: &Simulation,
+        spatial_map: &SpatialMap,
+        diplo_map: &DiploMap,
+    ) {
+        detections.clear();
+
+        let mut scratch = Vec::with_capacity(100);
+        for party in sim.parties.iter() {
+            const DETECTION_RANGE: f32 = 20.;
+            let neighbours = spatial_map.search(party.body.pos, DETECTION_RANGE);
+
+            for target in neighbours {
+                // Do not look at yourself
+                if target == party.id {
+                    continue;
+                }
+                let target = &sim.parties[target];
+                if target.agent.is_null() {
+                    continue;
+                }
+                let target_agent = &sim.agents[target.agent];
+                // Distance net of sizes. 0 or lower means collision
+                let distance = body_distance(party.body, target.body);
+
+                let is_location = target_agent.in_set(Set::Locations);
+
+                let threat = if diplo_map.is_hostile(target.agent, party.agent) {
+                    calculate_power(target_agent)
+                } else {
+                    0.
+                };
+
+                scratch.push(Detection {
+                    target: target.id,
+                    agent: target.agent,
+                    is_location,
+                    distance,
+                    threat,
+                });
+            }
+            detections.set(party.id, &scratch);
+            scratch.clear();
+        }
+    }
+
+    fn body_distance(b1: Body, b2: Body) -> f32 {
+        let center_to_center_distance = V2::distance(b1.pos, b2.pos);
+        let collision_range = (b1.size + b2.size) / 2.;
+
+        // Distance net of sizes. 0 or lower means collision
+        center_to_center_distance - collision_range
     }
 }

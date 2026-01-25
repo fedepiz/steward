@@ -4,7 +4,6 @@ use crate::{
     names::Name,
     parties::{OnArrival, PartyId},
 };
-use pathfinding::undirected::prim::prim;
 use slotmap::*;
 use strum::*;
 use util::bitset::BitSet;
@@ -48,15 +47,20 @@ pub(crate) enum Set {
 
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, EnumCount, EnumIter)]
 pub(crate) enum Flag {
+    // Type flags
     IsFarmer,
     IsMiner,
     IsCaravan,
+    // Status flag
+    IsInside,
     IsActivityPartecipant,
+    // Diplo flags
     IsGenerallyHostile,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, EnumCount, EnumIter)]
 pub(crate) enum Hierarchy {
+    Container,
     // Economy
     Attachment,
     LocalMarket,
@@ -492,6 +496,10 @@ impl Agent {
 
     pub(crate) fn get_var(&self, var: Var) -> f64 {
         self.vars[var as usize]
+    }
+
+    pub(crate) fn get_flag(&self, flag: Flag) -> bool {
+        self.flags.get(flag)
     }
 }
 

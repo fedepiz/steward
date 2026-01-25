@@ -1,7 +1,5 @@
 use slotmap::{Key, SecondaryMap, SlotMap, new_key_type};
 
-use util::span::Span;
-
 use crate::{agents::AgentId, geom::V2, names::Name};
 
 new_key_type! { pub(crate) struct PartyId; }
@@ -11,42 +9,6 @@ new_key_type! { pub(crate) struct PartyTypeId; }
 pub(crate) struct Parties {
     types: SlotMap<PartyTypeId, PartyType>,
     entities: SlotMap<PartyId, Party>,
-    pub(crate) detections: Detections,
-}
-
-#[derive(Default)]
-pub(crate) struct Detections {
-    data: Vec<Detection>,
-    spans: SecondaryMap<PartyId, Span>,
-}
-
-impl Detections {
-    pub(crate) fn clear(&mut self) {
-        self.data.clear();
-        self.spans.clear();
-    }
-
-    pub(crate) fn set(&mut self, id: PartyId, detections: &[Detection]) {
-        let detections = detections.iter().copied();
-        let span = Span::of_extension(&mut self.data, detections);
-        self.spans.insert(id, span);
-    }
-
-    pub(crate) fn get_for(&self, id: PartyId) -> &[Detection] {
-        self.spans
-            .get(id)
-            .map(|span| span.view(&self.data))
-            .unwrap_or_default()
-    }
-}
-
-#[derive(Clone, Copy)]
-pub(crate) struct Detection {
-    pub target: PartyId,
-    pub distance: f32,
-    pub agent: AgentId,
-    pub is_location: bool,
-    pub threat: f32,
 }
 
 impl Parties {
