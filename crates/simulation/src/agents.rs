@@ -41,6 +41,8 @@ pub(crate) enum Set {
     Factions,
     // People
     People,
+    // Activities
+    Battle,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, EnumCount, EnumIter)]
@@ -48,6 +50,7 @@ pub(crate) enum Flag {
     IsFarmer,
     IsMiner,
     IsCaravan,
+    IsActivityPartecipant,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, EnumCount, EnumIter)]
@@ -64,6 +67,9 @@ pub(crate) enum Hierarchy {
     RulerOf,
     // The relationship between a location and the people that reside there
     HomeOf,
+    // Battles
+    ActivitySubject,
+    ActivityTarget,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, EnumCount, EnumIter)]
@@ -92,11 +98,11 @@ impl Agents {
         entry
     }
 
-    pub(crate) fn despawn(&mut self, id: AgentId) {
+    pub(crate) fn despawn(&mut self, id: AgentId) -> Option<Agent> {
         let entity = match self.entries.remove(id) {
             Some(entity) => entity,
             None => {
-                return;
+                return None;
             }
         };
 
@@ -111,6 +117,8 @@ impl Agents {
         for relationship in &mut self.relationships {
             relationship.remove_agent(id);
         }
+
+        Some(entity)
     }
 
     pub(crate) fn iter(&self) -> impl Iterator<Item = &Agent> + ExactSizeIterator {

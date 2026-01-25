@@ -156,18 +156,18 @@ pub(crate) fn view(sim: &Simulation, req: &Request, response: &mut Response) {
 
         parties.sort_by_key(|(_, layer)| *layer);
 
-        for (entity, _) in parties {
-            if !entity.inside_of.is_null() {
+        for (party, _) in parties {
+            if !party.inside_of.is_null() {
                 continue;
             }
             // TODO: Filter here for being in view
-            let typ = sim.parties.get_type(entity.type_id);
+            let typ = sim.parties.get_type(party.type_id);
 
-            let is_highlighted = highlighted_entity == entity.id;
+            let is_highlighted = highlighted_entity == party.id;
             let show_name = is_highlighted || typ.always_show_name;
 
             let name = if show_name {
-                let name = sim.names.resolve(entity.name);
+                let name = sim.names.resolve(party.name);
                 ctx.names.push(name)
             } else {
                 Default::default()
@@ -175,7 +175,7 @@ pub(crate) fn view(sim: &Simulation, req: &Request, response: &mut Response) {
 
             let faction = sim
                 .agents
-                .parent_of(Hierarchy::FactionMembership, entity.agent);
+                .parent_of(Hierarchy::FactionMembership, party.agent);
 
             let color = sim
                 .faction_colors
@@ -184,10 +184,10 @@ pub(crate) fn view(sim: &Simulation, req: &Request, response: &mut Response) {
                 .unwrap_or((200, 200, 200));
 
             ctx.entries.push(MapItemData {
-                id: entity.id.data().as_ffi(),
+                id: party.id.data().as_ffi(),
                 name,
                 image: typ.image,
-                body: entity.body,
+                body: party.body,
                 color,
             });
         }

@@ -1,4 +1,5 @@
 use bumpalo::Bump;
+use rand::{Rng, SeedableRng, rngs::SmallRng};
 use slotmap::{Key, KeyData, SecondaryMap};
 use util::{span::Span, string_pool::*};
 
@@ -32,7 +33,7 @@ pub(crate) type Color = (u8, u8, u8);
 
 #[derive(Default)]
 pub(crate) struct Simulation {
-    pub turn_num: usize,
+    pub turn_num: u64,
     pub terrain_map: TerrainMap,
     pub names: Names,
     pub parties: Parties,
@@ -68,7 +69,7 @@ fn tick(sim: &mut Simulation, mut request: Request, arena: &Bump) -> Response {
             sim.player_party_goal = Goal::ToParty {
                 target,
                 distance: 0.,
-                on_arrival: OnArrival::Nothing,
+                on_arrival: OnArrival::Attack,
             };
         }
     }
@@ -81,7 +82,7 @@ fn tick(sim: &mut Simulation, mut request: Request, arena: &Bump) -> Response {
 
         crate::agent_tasking::agent_tasking(sim, arena);
 
-        const ECONOMY_TICK_RATE: usize = 200;
+        const ECONOMY_TICK_RATE: u64 = 200;
         if sim.turn_num % ECONOMY_TICK_RATE == 0 {
             let _span = tracing::info_span!("Economic tick").entered();
             food_production_and_consumption(sim, arena);
@@ -93,8 +94,18 @@ fn tick(sim: &mut Simulation, mut request: Request, arena: &Bump) -> Response {
             prosperity_towards_equilibrium(sim, arena);
         }
 
+        const ACTIVITY_TICK_RATE: u64 = 100;
+        if sim.turn_num % ACTIVITY_TICK_RATE == 0 {
+            let _span = tracing::info_span!("Activity tick").entered();
+            tick_activities(arena, sim);
+        }
+
         let mut movement_elements = AVec::with_capacity_in(sim.parties.len(), arena);
-        let mut desired_change_of_container = AVec::with_capacity_in(sim.parties.len(), arena);
+
+        let mut desire_exit = AVec::with_capacity_in(sim.parties.len(), arena);
+        let mut desire_entry = AVec::with_capacity_in(sim.parties.len(), arena);
+
+        let mut activity_start_intent = AVec::with_capacity_in(sim.parties.len(), arena);
 
         // Collect agent facts
         let facts = &self::collect_facts(arena, &sim.agents);
@@ -107,16 +118,39 @@ fn tick(sim: &mut Simulation, mut request: Request, arena: &Bump) -> Response {
 
             let movement_target = determine_party_movement_target(party, detection, goal);
 
-            let desired_container = match goal {
-                Goal::ToParty {
-                    target,
-                    on_arrival: OnArrival::Enter,
-                    ..
-                } => target,
-                _ => PartyId::null(),
-            };
-            if desired_container != party.inside_of {
-                desired_change_of_container.push((party.id, desired_container))
+            {
+                // Enqueue desire to enter a container
+                let target = match goal {
+                    Goal::Idle => party.inside_of,
+                    Goal::ToParty {
+                        target,
+                        on_arrival: OnArrival::Enter,
+                        ..
+                    } => target,
+                    _ => PartyId::null(),
+                };
+
+                if target != party.inside_of {
+                    if target.is_null() {
+                        desire_exit.push(party.id);
+                    } else {
+                        desire_entry.push((party.id, target, true));
+                    }
+                }
+            }
+
+            {
+                // Enqueue desire to begin a battle
+                match goal {
+                    Goal::ToParty {
+                        target,
+                        on_arrival: OnArrival::Attack,
+                        ..
+                    } => {
+                        activity_start_intent.push((ActivityType::Battle, party.id, target));
+                    }
+                    _ => {}
+                }
             }
 
             // Resolve movement target
@@ -126,10 +160,17 @@ fn tick(sim: &mut Simulation, mut request: Request, arena: &Bump) -> Response {
                 MovementTarget::Party(id) => (sim.parties[id].body.pos, false),
             };
 
+            // If the party is inside another party, their speed is 0
+            let speed = if party.inside_of.is_null() {
+                party.speed
+            } else {
+                0.
+            };
+
             // Actual movement element
             movement_elements.push(movement::Element {
                 id: party.id,
-                speed: party.speed,
+                speed,
                 pos: party.body.pos,
                 destination,
                 direct,
@@ -145,7 +186,6 @@ fn tick(sim: &mut Simulation, mut request: Request, arena: &Bump) -> Response {
 
         // Party detection check
         let spatial_map = &movement_result.spatial_map;
-
         {
             let _span = tracing::info_span!("Detections").entered();
             let mut detections = std::mem::take(&mut sim.parties.detections);
@@ -155,6 +195,7 @@ fn tick(sim: &mut Simulation, mut request: Request, arena: &Bump) -> Response {
 
         // Iterate writeback
         {
+            let _span = tracing::info_span!("Update positions").entered();
             let mut positions = movement_result.positions.into_iter();
 
             for party in sim.parties.iter_mut() {
@@ -164,18 +205,24 @@ fn tick(sim: &mut Simulation, mut request: Request, arena: &Bump) -> Response {
             }
         }
 
-        // Resolve desired changes of party container
-        for (party, container) in desired_change_of_container {
-            if container.is_null() {
+        // Resolve desired beging of battle
+        {
+            let _span = tracing::info_span!("Post Move State Changes").entered();
+            resolve_activity_starts(sim, &activity_start_intent);
+
+            // Resolve desired changes of party container
+            for party in desire_exit {
                 sim.parties[party].inside_of = PartyId::null();
-            } else {
-                let pos = sim.parties[container].body.pos;
-                let party = &mut sim.parties[party];
-                party.inside_of = if party.body.pos == pos {
-                    container
-                } else {
-                    PartyId::null()
+            }
+
+            for (party, target, check) in desire_entry {
+                let allowed = {
+                    let party = &sim.parties[party];
+                    let target = &sim.parties[target];
+                    !check || party.body.pos == target.body.pos
                 };
+
+                sim.parties[party].inside_of = if allowed { target } else { PartyId::null() };
             }
         }
 
@@ -198,6 +245,8 @@ fn tick(sim: &mut Simulation, mut request: Request, arena: &Bump) -> Response {
                 sim.agents[id].location = location;
             }
         }
+
+        sim.parties.garbage_collect();
     }
 
     let mut response = Response::default();
@@ -339,11 +388,8 @@ fn detections(
                 continue;
             }
             let target = &parties[target];
-            let center_to_center_distance = V2::distance(party.body.pos, target.body.pos);
-            let collision_range = (party.body.size + target.body.size) / 2.;
-
             // Distance net of sizes. 0 or lower means collision
-            let distance = center_to_center_distance - collision_range;
+            let distance = body_distance(party.body, target.body);
 
             let facts = facts.get_for(party.agent);
             let is_location = facts.any_with_kind(FactKind::IsLocation);
@@ -358,6 +404,14 @@ fn detections(
         detections.set(party.id, &scratch);
         scratch.clear();
     }
+}
+
+fn body_distance(b1: Body, b2: Body) -> f32 {
+    let center_to_center_distance = V2::distance(b1.pos, b2.pos);
+    let collision_range = (b1.size + b2.size) / 2.;
+
+    // Distance net of sizes. 0 or lower means collision
+    center_to_center_distance - collision_range
 }
 
 #[derive(Default)]
@@ -774,6 +828,10 @@ fn determine_party_goal(sim: &Simulation, party: &Party) -> Goal {
         None => return Goal::Idle,
     };
 
+    if agent.flags.get(Flag::IsActivityPartecipant) {
+        return Goal::Idle;
+    }
+
     match agent.behavior {
         Behavior::Idle => Goal::Idle,
         Behavior::Player => sim.player_party_goal,
@@ -892,6 +950,7 @@ impl Default for FactKind {
 }
 
 fn collect_facts<'a>(arena: &'a Bump, agents: &Agents) -> Facts<'a> {
+    let _span = tracing::info_span!("Collect Facts").entered();
     let mut out = Facts::new(arena, agents.capacity());
     let mut scratch = AVec::new_in(arena);
     for agent in agents.iter() {
@@ -902,4 +961,123 @@ fn collect_facts<'a>(arena: &'a Bump, agents: &Agents) -> Facts<'a> {
         out.insert(agent.id, scratch.drain(..));
     }
     out
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+enum ActivityType {
+    Battle,
+}
+
+fn resolve_activity_starts<'a>(
+    sim: &mut Simulation,
+    incipits: &[(ActivityType, PartyId, PartyId)],
+) {
+    for &(activity_type, subject, target) in incipits {
+        let (
+            activity_party_type,
+            activity_set,
+            participant_flag,
+            subject_hierarchy,
+            target_hierarchy,
+        ) = match activity_type {
+            ActivityType::Battle => (
+                "battle",
+                Set::Battle,
+                Flag::IsActivityPartecipant,
+                Hierarchy::ActivitySubject,
+                Hierarchy::ActivityTarget,
+            ),
+        };
+
+        let collides = sim
+            .parties
+            .detections
+            .get_for(subject)
+            .iter()
+            .any(|entry| entry.target == target && entry.distance <= 0.0);
+
+        if !collides {
+            continue;
+        }
+
+        // Get information necessary to spawn the battle
+        let pos = {
+            let subject = &sim.parties[subject];
+            let target = &sim.parties[target];
+            // An activitity start only works if both subject and target are not in an activity
+            let already_in_activity = [subject.agent, target.agent]
+                .iter()
+                .any(|&id| sim.agents[id].flags.get(Flag::IsActivityPartecipant));
+            if already_in_activity {
+                continue;
+            }
+            (subject.body.pos + target.body.pos) / 2.
+        };
+
+        // Spawn the battle
+        let activity_agent = {
+            let party_type = sim.parties.find_type_by_tag(activity_party_type).unwrap();
+            let agent = sim.agents.spawn();
+            let party = sim.parties.spawn_with_type(party_type.id);
+            agent.name = party.name;
+            party.agent = agent.id;
+            party.body.pos = pos;
+            agent.party = party.id;
+            let agent = agent.id;
+            sim.agents.add_to_set(activity_set, agent);
+            agent
+        };
+
+        for (id, hierarchy) in [(subject, subject_hierarchy), (target, target_hierarchy)] {
+            let agent = sim.parties[id].agent;
+            sim.agents.set_parent(hierarchy, activity_agent, agent);
+            sim.agents[agent].flags.set(participant_flag, true);
+        }
+    }
+}
+
+fn tick_activities(arena: &Bump, sim: &mut Simulation) {
+    let activities = AVec::from_iter_in(sim.agents.iter_set_ids(Set::Battle), arena);
+    let mut partecipants = AVec::new_in(arena);
+    for activity_id in activities {
+        // Get the members out
+        for hierarchy in [Hierarchy::ActivitySubject, Hierarchy::ActivityTarget] {
+            partecipants.extend(
+                sim.agents
+                    .children_of(hierarchy, activity_id)
+                    .map(|id| (id, hierarchy)),
+            );
+        }
+
+        // Make decisions
+        let rng = &mut rng_from_multi_seed(&[sim.turn_num, activity_id.data().as_ffi()]);
+        let is_attacker_victory = rng.gen_bool(0.5);
+        let winning_role = if is_attacker_victory {
+            Hierarchy::ActivitySubject
+        } else {
+            Hierarchy::ActivityTarget
+        };
+
+        // Despawn the activity
+        let activity = sim.agents.despawn(activity_id).unwrap();
+        // Set the party to have no agent
+        sim.parties[activity.party].agent = AgentId::null();
+
+        // Process partecipants
+        for (agent, role) in partecipants.drain(..) {
+            let agent = &mut sim.agents[agent];
+            agent.flags.set(Flag::IsActivityPartecipant, false);
+            if role == winning_role {
+                println!("{} is a winner", sim.names.resolve(agent.name));
+            }
+        }
+    }
+}
+
+fn rng_from_multi_seed(seeds: &[u64]) -> SmallRng {
+    let mut seed = 0u64;
+    for &i in seeds {
+        seed = seed.wrapping_mul(13).wrapping_add(i).wrapping_mul(17);
+    }
+    SmallRng::seed_from_u64(seed)
 }

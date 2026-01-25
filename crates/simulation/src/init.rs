@@ -13,7 +13,16 @@ pub(crate) fn init(sim: &mut Simulation, req: InitRequest) {
 
     const LOCATION_SETS: &[Set] = &[Set::Settlements, Set::Mines];
 
+    const SIZE_TINY: f32 = 1.;
     const SIZE_SMALL: f32 = 2.;
+
+    {
+        let typ = sim.parties.add_type();
+        typ.tag = "battle";
+        typ.image = "battle";
+        typ.size = SIZE_TINY;
+        typ.layer = 2;
+    }
 
     {
         let typ = sim.parties.add_type();

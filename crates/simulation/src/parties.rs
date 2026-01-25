@@ -1,4 +1,4 @@
-use slotmap::{SecondaryMap, SlotMap, new_key_type};
+use slotmap::{Key, SecondaryMap, SlotMap, new_key_type};
 
 use util::span::Span;
 
@@ -99,6 +99,10 @@ impl Parties {
 
     pub(crate) fn len(&self) -> usize {
         self.entities.len()
+    }
+
+    pub(crate) fn garbage_collect(&mut self) {
+        self.entities.retain(|_, v| !v.agent.is_null());
     }
 }
 

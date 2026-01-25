@@ -72,3 +72,10 @@ impl std::ops::Mul<f32> for V2 {
         V2::new(self.x * rhs, self.y * rhs)
     }
 }
+impl std::ops::Div<f32> for V2 {
+    type Output = V2;
+
+    fn div(self, rhs: f32) -> Self::Output {
+        V2::new(self.x / rhs, self.y / rhs)
+    }
+}
