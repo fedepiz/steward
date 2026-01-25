@@ -100,6 +100,11 @@ fn tick(sim: &mut Simulation, mut request: Request, arena: &Bump) -> Response {
             tick_activities(arena, sim);
         }
 
+        sim.parties.garbage_collect();
+        // NOTE: NO MORE PARTY REMOVALS AFTER HERE!
+        // DO ALL YOUR LOGIC DESPAWNING STUFF BEFORE
+        // FROM HERE ON WE HAVE THE VERY "MECHANICAL" TICK PART
+
         let mut movement_elements = AVec::with_capacity_in(sim.parties.len(), arena);
 
         let mut desire_exit = AVec::with_capacity_in(sim.parties.len(), arena);
@@ -107,21 +112,11 @@ fn tick(sim: &mut Simulation, mut request: Request, arena: &Bump) -> Response {
 
         let mut activity_start_intent = AVec::with_capacity_in(sim.parties.len(), arena);
 
-        let mut facts = Facts::new(arena, sim.agents.capacity());
         let mut diplo_map = DiploMap::new(arena, sim.agents.capacity());
         {
             let _span = tracing::info_span!("Collect Facts").entered();
 
-            let mut facts_scratch = AVec::new_in(arena);
             for agent in sim.agents.iter() {
-                if agent.in_set(Set::Locations) {
-                    facts_scratch.push(Fact::from(FactKind::IsLocation));
-                }
-                if agent.is_player {
-                    facts_scratch.push(Fact::from(FactKind::IsPlayer));
-                }
-                facts.insert(agent.id, facts_scratch.drain(..));
-
                 let generally_hostile = agent.flags.get(Flag::IsGenerallyHostile);
                 if agent.in_set(Set::Factions) {
                     let related = sim.agents.relationships_from(Relationship::Diplo, agent.id);
@@ -214,7 +209,7 @@ fn tick(sim: &mut Simulation, mut request: Request, arena: &Bump) -> Response {
         {
             let _span = tracing::info_span!("Detections").entered();
             let mut detections = std::mem::take(&mut sim.parties.detections);
-            self::detections(&mut detections, sim, spatial_map, &facts, &diplo_map);
+            self::detections(&mut detections, sim, spatial_map, &diplo_map);
             sim.parties.detections = detections;
         }
 
@@ -260,7 +255,7 @@ fn tick(sim: &mut Simulation, mut request: Request, arena: &Bump) -> Response {
                 .agents
                 .iter()
                 .map(|agent| {
-                    let location = location_of_agent(sim, agent, &facts, &mut scratch);
+                    let location = location_of_agent(sim, agent, &mut scratch);
                     (agent.id, location)
                 })
                 .collect();
@@ -270,8 +265,6 @@ fn tick(sim: &mut Simulation, mut request: Request, arena: &Bump) -> Response {
                 sim.agents[id].location = location;
             }
         }
-
-        sim.parties.garbage_collect();
     }
 
     let mut response = Response::default();
@@ -282,7 +275,6 @@ fn tick(sim: &mut Simulation, mut request: Request, arena: &Bump) -> Response {
 fn location_of_agent(
     sim: &Simulation,
     agent: &Agent,
-    facts: &Facts,
     scratch: &mut Vec<(AgentId, f32)>,
 ) -> Location {
     // Disembodied agent has no location
@@ -290,12 +282,8 @@ fn location_of_agent(
         return Location::Nowhere;
     }
 
-    let facts = facts.get_for(agent.id);
-
-    // If the agent is a settlement, then it's at a settlement!
-    let is_location = facts.any_with_kind(FactKind::IsLocation);
-
-    if is_location {
+    // If the agent is a location, then it's at a settlement!
+    if agent.in_set(Set::Locations) {
         return Location::Proximate(agent.id);
     }
 
@@ -399,7 +387,6 @@ fn detections(
     detections: &mut Detections,
     sim: &Simulation,
     spatial_map: &SpatialMap,
-    facts: &Facts,
     diplo_map: &DiploMap,
 ) {
     detections.clear();
@@ -415,14 +402,14 @@ fn detections(
                 continue;
             }
             let target = &sim.parties[target];
+            let target_agent = &sim.agents[target.agent];
             // Distance net of sizes. 0 or lower means collision
             let distance = body_distance(party.body, target.body);
 
-            let facts = facts.get_for(target.agent);
-            let is_location = facts.any_with_kind(FactKind::IsLocation);
+            let is_location = target_agent.in_set(Set::Locations);
 
             let threat = if diplo_map.is_hostile(target.agent, party.agent) {
-                calculate_power(&facts)
+                calculate_power(target_agent)
             } else {
                 0.
             };
@@ -945,83 +932,8 @@ pub(crate) fn determine_party_movement_target(
     }
 }
 
-pub(crate) struct Facts<'a> {
-    buffer: AVec<'a, Fact>,
-    by_agent: SecondaryMap<AgentId, Span>,
-}
-
-impl<'a> Facts<'a> {
-    fn new(arena: &'a Bump, capacity: usize) -> Self {
-        Self {
-            buffer: AVec::new_in(arena),
-            by_agent: SecondaryMap::with_capacity(capacity),
-        }
-    }
-
-    fn insert(&mut self, id: AgentId, facts: impl IntoIterator<Item = Fact>) {
-        let start = self.buffer.len();
-        self.buffer.extend(facts);
-        let end = self.buffer.len();
-        let span = Span::between(start, end);
-        self.by_agent.insert(id, span);
-    }
-
-    fn get_for(&self, id: AgentId) -> AgentFacts<'_> {
-        let span = self.by_agent.get(id).copied().unwrap_or_default();
-        AgentFacts(span.view(&self.buffer))
-    }
-}
-
-#[derive(Clone, Copy)]
-struct AgentFacts<'a>(&'a [Fact]);
-
-impl AgentFacts<'_> {
-    fn any_with_kind(&self, kind: FactKind) -> bool {
-        self.0.iter().any(|fact| fact.kind == kind)
-    }
-
-    fn accumulate_with_kind(&self, kinds: &[(FactKind, f32)]) -> f32 {
-        let mut sum = 0.;
-        for fact in self.0 {
-            for &(tgt, accum) in kinds {
-                if fact.kind == tgt {
-                    sum += accum;
-                }
-            }
-        }
-        sum
-    }
-}
-
-#[derive(Clone, Copy, Default)]
-struct Fact {
-    kind: FactKind,
-}
-
-impl From<FactKind> for Fact {
-    fn from(kind: FactKind) -> Self {
-        Self {
-            kind,
-            ..Default::default()
-        }
-    }
-}
-
-#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-enum FactKind {
-    Unknown,
-    IsLocation,
-    IsPlayer,
-}
-
-impl Default for FactKind {
-    fn default() -> Self {
-        Self::Unknown
-    }
-}
-
-fn calculate_power(facts: &AgentFacts) -> f32 {
-    facts.accumulate_with_kind(&[(FactKind::IsPlayer, 10.)])
+fn calculate_power(agent: &Agent) -> f32 {
+    if agent.is_player { 10. } else { 0. }
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
