@@ -5,7 +5,7 @@ use crate::agents::{
     self, Agent, AgentId, Behavior, Flag, Hierarchy, Interaction, Location, Set, Task,
     TaskDestination, TaskInteraction, TaskKind, Var,
 };
-use crate::{parties, simulation::*};
+use crate::simulation::*;
 
 type AVec<'a, T> = bumpalo::collections::Vec<'a, T>;
 
@@ -233,9 +233,9 @@ fn task_for_agent(
         Behavior::GoTo {
             target: destination.target,
             on_arrival: if destination.enter {
-                parties::OnArrival::Enter
+                OnArrival::Enter
             } else {
-                parties::OnArrival::Nothing
+                OnArrival::Nothing
             },
         }
     };

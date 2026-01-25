@@ -17,7 +17,7 @@ pub(crate) fn init(sim: &mut Simulation, req: InitRequest) {
     const SIZE_SMALL: f32 = 2.;
 
     {
-        let typ = sim.parties.add_type();
+        let typ = sim.agents.add_type();
         typ.tag = "battle";
         typ.image = "battle";
         typ.size = SIZE_TINY;
@@ -25,7 +25,7 @@ pub(crate) fn init(sim: &mut Simulation, req: InitRequest) {
     }
 
     {
-        let typ = sim.parties.add_type();
+        let typ = sim.agents.add_type();
         typ.tag = "person";
         typ.image = "person";
         typ.size = SIZE_SMALL;
@@ -34,7 +34,7 @@ pub(crate) fn init(sim: &mut Simulation, req: InitRequest) {
     }
 
     {
-        let typ = sim.parties.add_type();
+        let typ = sim.agents.add_type();
         typ.tag = "farmers";
         typ.image = "farmers";
         typ.name = Name::simple(sim.names.define("Farmers"));
@@ -45,7 +45,7 @@ pub(crate) fn init(sim: &mut Simulation, req: InitRequest) {
     }
 
     {
-        let typ = sim.parties.add_type();
+        let typ = sim.agents.add_type();
         typ.tag = "miners";
         typ.image = "miners";
         typ.name = Name::simple(sim.names.define("Miners"));
@@ -55,7 +55,7 @@ pub(crate) fn init(sim: &mut Simulation, req: InitRequest) {
     }
 
     {
-        let typ = sim.parties.add_type();
+        let typ = sim.agents.add_type();
         typ.tag = "caravan";
         typ.image = "caravan";
         typ.name = Name::simple(sim.names.define("Caravan"));
@@ -65,7 +65,7 @@ pub(crate) fn init(sim: &mut Simulation, req: InitRequest) {
     }
 
     {
-        let typ = sim.parties.add_type();
+        let typ = sim.agents.add_type();
         typ.tag = "mine";
         typ.image = "mine";
         typ.name = Name::simple(sim.names.define("Mine"));
@@ -75,7 +75,7 @@ pub(crate) fn init(sim: &mut Simulation, req: InitRequest) {
     }
 
     {
-        let typ = sim.parties.add_type();
+        let typ = sim.agents.add_type();
         typ.tag = "village";
         typ.image = "village";
         typ.name = Name::simple(sim.names.define("Village"));
@@ -84,7 +84,7 @@ pub(crate) fn init(sim: &mut Simulation, req: InitRequest) {
     }
 
     {
-        let typ = sim.parties.add_type();
+        let typ = sim.agents.add_type();
         typ.tag = "hillfort";
         typ.image = "hillfort";
         typ.name = Name::simple(sim.names.define("Hillfort"));
@@ -93,12 +93,18 @@ pub(crate) fn init(sim: &mut Simulation, req: InitRequest) {
     }
 
     {
-        let typ = sim.parties.add_type();
+        let typ = sim.agents.add_type();
         typ.tag = "town";
         typ.image = "town";
         typ.name = Name::simple(sim.names.define("Town"));
         typ.size = 4.;
         typ.always_show_name = true;
+    }
+
+    {
+        let typ = sim.agents.add_type();
+        typ.tag = "faction";
+        typ.is_disembodied = true;
     }
 
     #[derive(Default, Clone, Copy)]
@@ -409,7 +415,8 @@ pub(crate) fn init(sim: &mut Simulation, req: InitRequest) {
     let mut pass2 = vec![];
 
     for faction in factions {
-        let agent = sim.agents.spawn();
+        let archetype = sim.agents.find_type_by_tag("faction").unwrap().id;
+        let agent = sim.agents.spawn_with_type(archetype);
         agent.name = Name::simple(sim.names.define(faction.name));
         let agent = agent.id;
         sim.agents.add_to_set(Set::Factions, agent);
@@ -418,8 +425,12 @@ pub(crate) fn init(sim: &mut Simulation, req: InitRequest) {
     }
 
     for desc in agents {
-        let typ = sim.parties.find_type_by_tag(desc.party_typ).unwrap();
-        let party = sim.parties.spawn_with_type(typ.id);
+        let typ = sim
+            .agents
+            .find_type_by_tag(desc.party_typ)
+            .copied()
+            .unwrap();
+        let agent = sim.agents.spawn_with_type(typ.id);
         let name = if desc.is_player {
             player_name
         } else if desc.name.is_empty() {
@@ -427,13 +438,12 @@ pub(crate) fn init(sim: &mut Simulation, req: InitRequest) {
         } else {
             Name::simple(sim.names.define(desc.name))
         };
-        party.name = name;
+        agent.name = name;
         if desc.is_player {
-            party.speed = 5.;
+            agent.speed = 5.;
         }
-        party.body.pos = V2::new(desc.pos.0, desc.pos.1);
+        agent.body.pos = V2::new(desc.pos.0, desc.pos.1);
 
-        let agent = sim.agents.spawn();
         agent.name = name;
         agent.is_player = desc.is_player;
         agent.fixed_behavior = if desc.is_player {
@@ -441,8 +451,6 @@ pub(crate) fn init(sim: &mut Simulation, req: InitRequest) {
         } else {
             None
         };
-        agent.party = party.id;
-        party.agent = agent.id;
 
         agent.vars_mut().set_many(desc.vars);
         for &flag in desc.flags {
@@ -459,8 +467,6 @@ pub(crate) fn init(sim: &mut Simulation, req: InitRequest) {
         if is_location {
             sim.agents.add_to_set(Set::Locations, agent);
         }
-
-        party.agent = agent;
 
         if !desc.key.is_empty() {
             keys.insert(desc.key, agent);

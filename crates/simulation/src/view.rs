@@ -4,7 +4,6 @@ use util::string_pool::{SpanHandle, StringPool};
 
 use crate::agents::{self, *};
 use crate::objects::*;
-use crate::parties::*;
 use crate::simulation::*;
 
 #[derive(Default)]
@@ -38,8 +37,8 @@ impl MapItems {
 }
 
 impl MapItemId {
-    pub(crate) fn as_entity(self) -> PartyId {
-        PartyId::from(KeyData::from_ffi(self.0))
+    pub(crate) fn as_entity(self) -> AgentId {
+        AgentId::from(KeyData::from_ffi(self.0))
     }
 }
 
@@ -85,7 +84,7 @@ pub(crate) fn view(sim: &Simulation, req: &Request, response: &mut Response) {
 
         // Create requested objects
         for &view_entity in &req.view_entities {
-            let party = match sim.parties.get(view_entity.entity) {
+            let agent = match sim.agents.get(view_entity.entity) {
                 Some(x) => x,
                 None => {
                     continue;
@@ -94,9 +93,7 @@ pub(crate) fn view(sim: &Simulation, req: &Request, response: &mut Response) {
             ctx.spawn(|ctx| {
                 let tag = req.entity_tag(view_entity);
                 ctx.tag(tag);
-                ctx.display("name", sim.names.resolve(party.name));
-
-                let agent = &sim.agents[party.agent];
+                ctx.display("name", sim.names.resolve(agent.name));
 
                 {
                     // Display food
@@ -153,34 +150,29 @@ pub(crate) fn view(sim: &Simulation, req: &Request, response: &mut Response) {
             .unwrap_or_default();
 
         // Get parties and types, sorted by layer
-        let mut parties: Vec<_> = sim
-            .parties
+        let mut agents: Vec<_> = sim
+            .agents
             .iter()
-            .map(|party| (party, sim.parties.get_type(party.type_id).layer))
+            .filter(|agent| !agent.get_flag(Flag::IsDisembodied) && !agent.get_flag(Flag::IsInside))
+            .map(|agent| (agent, sim.agents.get_type(agent.type_id)))
             .collect();
 
-        parties.sort_by_key(|(_, layer)| *layer);
+        agents.sort_by_key(|(_, typ)| typ.layer);
 
-        for (party, _) in parties {
-            if !party.inside_of.is_null() {
-                continue;
-            }
+        for (agent, typ) in agents {
             // TODO: Filter here for being in view
-            let typ = sim.parties.get_type(party.type_id);
 
-            let is_highlighted = highlighted_entity == party.id;
+            let is_highlighted = highlighted_entity == agent.id;
             let show_name = is_highlighted || typ.always_show_name;
 
             let name = if show_name {
-                let name = sim.names.resolve(party.name);
+                let name = sim.names.resolve(agent.name);
                 ctx.names.push(name)
             } else {
                 Default::default()
             };
 
-            let faction = sim
-                .agents
-                .parent_of(Hierarchy::FactionMembership, party.agent);
+            let faction = sim.agents.parent_of(Hierarchy::FactionMembership, agent.id);
 
             let color = sim
                 .faction_colors
@@ -189,10 +181,10 @@ pub(crate) fn view(sim: &Simulation, req: &Request, response: &mut Response) {
                 .unwrap_or((200, 200, 200));
 
             ctx.entries.push(MapItemData {
-                id: party.id.data().as_ffi(),
+                id: agent.id.data().as_ffi(),
                 name,
                 image: typ.image,
-                body: party.body,
+                body: agent.body,
                 color,
             });
         }

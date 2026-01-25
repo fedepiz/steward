@@ -6,7 +6,6 @@ mod init;
 mod movement;
 mod names;
 pub mod objects;
-mod parties;
 mod simulation;
 mod terrain_map;
 mod view;

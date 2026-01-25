@@ -1,14 +1,25 @@
 use std::collections::{BTreeMap, BTreeSet};
 
-use crate::{
-    names::Name,
-    parties::{OnArrival, PartyId},
-};
+use crate::{OnArrival, geom::V2, names::Name};
 use slotmap::*;
 use strum::*;
 use util::bitset::BitSet;
 
 new_key_type! { pub struct AgentId; }
+new_key_type! { pub struct AgentTypeId; }
+
+#[derive(Default, Clone, Copy)]
+pub(crate) struct AgentType {
+    pub id: AgentTypeId,
+    pub tag: &'static str,
+    pub image: &'static str,
+    pub name: Name,
+    pub size: f32,
+    pub speed: f32,
+    pub always_show_name: bool,
+    pub layer: usize,
+    pub is_disembodied: bool,
+}
 
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, EnumCount, EnumIter, Debug)]
 pub(crate) enum Var {
@@ -52,6 +63,7 @@ pub(crate) enum Flag {
     IsMiner,
     IsCaravan,
     // Status flag
+    IsDisembodied,
     IsInside,
     IsActivityPartecipant,
     // Diplo flags
@@ -88,6 +100,7 @@ pub(crate) enum Relationship {
 #[derive(Default)]
 pub(crate) struct Agents {
     null_dummy: Agent,
+    types: SlotMap<AgentTypeId, AgentType>,
     entries: SlotMap<AgentId, Agent>,
     hierarchies: [HierarchyData; Hierarchy::COUNT],
     relationships: [RelationshipData; Relationship::COUNT],
@@ -136,6 +149,36 @@ impl Agents {
         for id in self.despawn_queue.drain(..) {
             self.entries.remove(id);
         }
+    }
+
+    pub(crate) fn spawn_with_type(&mut self, type_id: AgentTypeId) -> &mut Agent {
+        let typ = self.types.get(type_id).copied().unwrap();
+        let entity = self.spawn();
+        Self::set_type(entity, &typ);
+        entity
+    }
+
+    fn set_type(entity: &mut Agent, typ: &AgentType) {
+        entity.type_id = typ.id;
+        entity.name = typ.name;
+        entity.body.size = typ.size;
+        entity.speed = typ.speed;
+        entity.flags.set(Flag::IsDisembodied, typ.is_disembodied);
+    }
+
+    pub(crate) fn add_type(&mut self) -> &mut AgentType {
+        let id = self.types.insert(AgentType::default());
+        let data = &mut self.types[id];
+        data.id = id;
+        data
+    }
+
+    pub(crate) fn find_type_by_tag(&self, tag: &str) -> Option<&AgentType> {
+        self.types.values().find(|typ| typ.tag == tag)
+    }
+
+    pub(crate) fn get_type(&self, id: AgentTypeId) -> AgentType {
+        self.types.get(id).copied().unwrap_or_default()
     }
 
     pub(crate) fn iter(&self) -> impl Iterator<Item = &Agent> + ExactSizeIterator {
@@ -307,6 +350,20 @@ impl std::ops::IndexMut<AgentId> for Agents {
     }
 }
 
+impl std::ops::Index<AgentTypeId> for Agents {
+    type Output = AgentType;
+
+    fn index(&self, index: AgentTypeId) -> &Self::Output {
+        &self.types[index]
+    }
+}
+
+impl std::ops::IndexMut<AgentTypeId> for Agents {
+    fn index_mut(&mut self, index: AgentTypeId) -> &mut Self::Output {
+        &mut self.types[index]
+    }
+}
+
 const SET_BITSET_SIZE: usize = (Set::COUNT + 63) / 64;
 const FLAG_BITSET_SIZE: usize = (Flag::COUNT + 63) / 64;
 
@@ -314,7 +371,6 @@ const FLAG_BITSET_SIZE: usize = (Flag::COUNT + 63) / 64;
 pub(crate) struct Agent {
     pub id: AgentId,
     pub name: Name,
-    pub party: PartyId,
     pub is_player: bool,
     pub behavior: Behavior,
     pub fixed_behavior: Option<Behavior>,
@@ -323,6 +379,16 @@ pub(crate) struct Agent {
     vars: [f64; Var::COUNT],
     sets: BitSet<SET_BITSET_SIZE>,
     pub flags: Flags,
+    // Party-like
+    pub type_id: AgentTypeId,
+    pub body: Body,
+    pub speed: f32,
+}
+
+#[derive(Clone, Copy, Default)]
+pub(crate) struct Body {
+    pub pos: V2,
+    pub size: f32,
 }
 
 #[derive(Default, Clone, Copy)]
