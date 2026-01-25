@@ -139,6 +139,7 @@ pub(crate) fn init(sim: &mut Simulation, req: InitRequest) {
             pos: (590., 520.),
             party_typ: "person",
             name: "Ambrosius Aurelianus",
+            sets: &[Set::People],
             vars: &[(Var::Renown, PERSON_RENOWN)],
             is_player: true,
             parents: &[(Hierarchy::FactionMembership, "rheged")],
@@ -148,22 +149,38 @@ pub(crate) fn init(sim: &mut Simulation, req: InitRequest) {
             pos: (610., 520.),
             party_typ: "person",
             name: "Rhoedd map Rhun",
+            sets: &[Set::People],
             vars: &[(Var::Renown, PERSON_RENOWN)],
-            parents: &[(Hierarchy::FactionMembership, "rheged")],
+            parents: &[
+                (Hierarchy::FactionMembership, "rheged"),
+                // TODO: Make this deduced, not given as init
+                (Hierarchy::HomeOf, "caer_ligualid"),
+            ],
+            children: &[
+                (Hierarchy::RulerOf, "rheged"),
+                (Hierarchy::Lordship, "caer_ligualid"),
+                (Hierarchy::Lordship, "llan_heledd"),
+            ],
             ..Default::default()
         },
         AgentDesc {
             pos: (600., 520.),
             party_typ: "person",
             name: "Gwaith map Elffin",
+            sets: &[Set::People],
             vars: &[(Var::Renown, PERSON_RENOWN)],
             parents: &[(Hierarchy::FactionMembership, "rheged")],
+            children: &[
+                (Hierarchy::Lordship, "caer_wenddoleu"),
+                (Hierarchy::Lordship, "anava"),
+            ],
             ..Default::default()
         },
         AgentDesc {
             pos: (600., 500.),
             party_typ: "person",
             name: "Eadwine map Owain",
+            sets: &[Set::People],
             vars: &[(Var::Renown, PERSON_RENOWN)],
             parents: &[(Hierarchy::FactionMembership, "rheged")],
             ..Default::default()
@@ -183,6 +200,7 @@ pub(crate) fn init(sim: &mut Simulation, req: InitRequest) {
             ..Default::default()
         },
         AgentDesc {
+            key: "llan_heledd",
             name: "Llan Heledd",
             pos: (570., 540.),
             party_typ: "village",
@@ -257,6 +275,7 @@ pub(crate) fn init(sim: &mut Simulation, req: InitRequest) {
             ..Default::default()
         },
         AgentDesc {
+            key: "anava",
             name: "Anava",
             pos: (603., 500.),
             party_typ: "village",
@@ -273,6 +292,7 @@ pub(crate) fn init(sim: &mut Simulation, req: InitRequest) {
             ..Default::default()
         },
         AgentDesc {
+            key: "caer_wenddoleu",
             name: "Caer Wenddoleu",
             pos: (625., 505.),
             party_typ: "hillfort",
@@ -290,7 +310,6 @@ pub(crate) fn init(sim: &mut Simulation, req: InitRequest) {
             pos: (600., 530.),
             party_typ: "mine",
             sets: &[Set::Mines],
-            parents: &[(Hierarchy::FactionMembership, "rheged")],
             ..Default::default()
         },
         AgentDesc {
@@ -406,11 +425,11 @@ pub(crate) fn init(sim: &mut Simulation, req: InitRequest) {
         let agent = sim.agents.spawn();
         agent.name = name;
         agent.is_player = desc.is_player;
-        agent.fixed_behavior = Some(if desc.is_player {
-            Behavior::Player
+        agent.fixed_behavior = if desc.is_player {
+            Some(Behavior::Player)
         } else {
-            Behavior::Idle
-        });
+            None
+        };
         agent.party = party.id;
         party.agent = agent.id;
 
@@ -446,6 +465,5 @@ pub(crate) fn init(sim: &mut Simulation, req: InitRequest) {
             let child = keys.get(key).copied().unwrap();
             sim.agents.set_parent(hierarchy, agent, child);
         }
-
     }
 }

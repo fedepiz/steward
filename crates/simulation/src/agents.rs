@@ -59,7 +59,7 @@ pub(crate) enum Hierarchy {
     Lordship,
     // The relationship between the ruling-lord and the ruled faction
     RulerOf,
-    // The relationship between a person and where they reside
+    // The relationship between a location and the people that reside there
     HomeOf,
 }
 
@@ -342,6 +342,7 @@ pub(crate) struct Task {
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug)]
 pub(crate) enum TaskKind {
     Init,
+    Generic,
     Deliver,
     Load,
     ReturnToBase,
@@ -357,6 +358,7 @@ impl Default for TaskKind {
 pub(crate) enum TaskDestination {
     Nothing,
     Home,
+    Base,
     WorkArea,
     MarketOfHome,
     TradingDestination,

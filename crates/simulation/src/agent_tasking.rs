@@ -2,8 +2,8 @@ use bumpalo::Bump;
 use slotmap::Key;
 
 use crate::agents::{
-    self, Agent, AgentId, Behavior, Hierarchy, Interaction, Location, Task, TaskDestination,
-    TaskInteraction, TaskKind, Var,
+    self, Agent, AgentId, Behavior, Flag, Hierarchy, Interaction, Location, Set, Task,
+    TaskDestination, TaskInteraction, TaskKind, Var,
 };
 use crate::simulation::*;
 
@@ -48,12 +48,12 @@ fn farmer_tasking(kind: TaskKind) -> Task {
     match kind {
         TaskKind::Init => Task {
             kind: TaskKind::ReturnToBase,
-            destination: TaskDestination::Home,
+            destination: TaskDestination::Base,
             ..Default::default()
         },
         TaskKind::ReturnToBase => Task {
             kind: TaskKind::Load,
-            destination: TaskDestination::Home,
+            destination: TaskDestination::Base,
             interaction: TaskInteraction::new(&[Interaction::LoadFood, Interaction::UnloadGoods]),
             arrival_wait: SHORT_WAIT,
             ..Default::default()
@@ -67,9 +67,10 @@ fn farmer_tasking(kind: TaskKind) -> Task {
         },
         TaskKind::Deliver => Task {
             kind: TaskKind::ReturnToBase,
-            destination: TaskDestination::Home,
+            destination: TaskDestination::Base,
             ..Default::default()
         },
+        _ => Default::default(),
     }
 }
 
@@ -77,7 +78,7 @@ fn miner_tasking(kind: TaskKind) -> Task {
     match kind {
         TaskKind::Init => Task {
             kind: TaskKind::ReturnToBase,
-            destination: TaskDestination::Home,
+            destination: TaskDestination::Base,
             ..Default::default()
         },
         TaskKind::ReturnToBase => Task {
@@ -89,16 +90,17 @@ fn miner_tasking(kind: TaskKind) -> Task {
         },
         TaskKind::Load => Task {
             kind: TaskKind::Deliver,
-            destination: TaskDestination::Home,
+            destination: TaskDestination::Base,
             interaction: TaskInteraction::with(Interaction::UnloadMinerals),
             arrival_wait: SHORT_WAIT,
             ..Default::default()
         },
         TaskKind::Deliver => Task {
             kind: TaskKind::ReturnToBase,
-            destination: TaskDestination::Home,
+            destination: TaskDestination::Base,
             ..Default::default()
         },
+        _ => Default::default(),
     }
 }
 
@@ -106,13 +108,13 @@ fn caravan_tasking(kind: TaskKind) -> Task {
     match kind {
         TaskKind::Init => Task {
             kind: TaskKind::ReturnToBase,
-            destination: TaskDestination::Home,
+            destination: TaskDestination::Base,
             interaction: TaskInteraction::default(),
             ..Default::default()
         },
         TaskKind::ReturnToBase => Task {
             kind: TaskKind::Load,
-            destination: TaskDestination::Home,
+            destination: TaskDestination::Base,
             interaction: TaskInteraction::with(Interaction::CaravanVisit),
             arrival_wait: SHORT_WAIT,
             ..Default::default()
@@ -126,10 +128,20 @@ fn caravan_tasking(kind: TaskKind) -> Task {
         },
         TaskKind::Deliver => Task {
             kind: TaskKind::ReturnToBase,
-            destination: TaskDestination::Home,
+            destination: TaskDestination::Base,
             interaction: TaskInteraction::default(),
             ..Default::default()
         },
+        _ => Default::default(),
+    }
+}
+
+fn person_tasking() -> Task {
+    Task {
+        kind: TaskKind::Generic,
+        destination: TaskDestination::Home,
+        arrival_wait: LONG_WAIT,
+        ..Default::default()
     }
 }
 
@@ -147,12 +159,13 @@ fn task_for_agent(
     // Retask when initializing or once the current task is complete.
     let retask = task.kind == TaskKind::Init || task.is_complete;
     if retask {
-        let is_farmer = subject.flags.get(agents::Flag::IsFarmer);
-        task = if is_farmer {
+        task = if subject.in_set(Set::People) {
+            person_tasking()
+        } else if subject.flags.get(Flag::IsFarmer) {
             farmer_tasking(task.kind)
-        } else if subject.flags.get(agents::Flag::IsMiner) {
+        } else if subject.flags.get(Flag::IsMiner) {
             miner_tasking(task.kind)
-        } else if subject.flags.get(agents::Flag::IsCaravan) {
+        } else if subject.flags.get(Flag::IsCaravan) {
             caravan_tasking(task.kind)
         } else {
             Task::default()
@@ -162,8 +175,15 @@ fn task_for_agent(
     // Resolve the concrete target for the task's symbolic destination.
     let destination = match task.destination {
         TaskDestination::Nothing => Destination::default(),
-        TaskDestination::Home => {
+        TaskDestination::Base => {
             let target = sim.agents.parent_of(Hierarchy::Attachment, subject.id);
+            Destination {
+                target,
+                enter: true,
+            }
+        }
+        TaskDestination::Home => {
+            let target = sim.agents.parent_of(Hierarchy::HomeOf, subject.id);
             Destination {
                 target,
                 enter: true,
