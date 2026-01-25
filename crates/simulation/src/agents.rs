@@ -51,6 +51,7 @@ pub(crate) enum Flag {
     IsMiner,
     IsCaravan,
     IsActivityPartecipant,
+    IsGenerallyHostile,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, EnumCount, EnumIter)]
@@ -74,6 +75,7 @@ pub(crate) enum Hierarchy {
 
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, EnumCount, EnumIter)]
 pub(crate) enum Relationship {
+    Diplo,
     Placeholder1,
     Placeholder2,
 }

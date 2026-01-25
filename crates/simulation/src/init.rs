@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use crate::agents::{Behavior, Hierarchy, Set, Var};
+use crate::agents::{Behavior, Flag, Hierarchy, Set, Var};
 use crate::names::Name;
 use crate::simulation::*;
 use crate::{geom::*, terrain_map};
@@ -128,6 +128,7 @@ pub(crate) fn init(sim: &mut Simulation, req: InitRequest) {
         pos: (f32, f32),
         party_typ: &'a str,
         vars: &'a [(Var, f64)],
+        flags: &'a [Flag],
         sets: &'a [Set],
         parents: &'a [(Hierarchy, &'a str)],
         children: &'a [(Hierarchy, &'a str)],
@@ -150,8 +151,9 @@ pub(crate) fn init(sim: &mut Simulation, req: InitRequest) {
             name: "Ambrosius Aurelianus",
             sets: &[Set::People],
             vars: &[(Var::Renown, PERSON_RENOWN)],
+            flags: &[Flag::IsGenerallyHostile],
             is_player: true,
-            parents: &[(Hierarchy::FactionMembership, "rheged")],
+            // parents: &[(Hierarchy::FactionMembership, "rheged")],
             ..Default::default()
         },
         AgentDesc {
@@ -442,11 +444,12 @@ pub(crate) fn init(sim: &mut Simulation, req: InitRequest) {
         agent.party = party.id;
         party.agent = agent.id;
 
-        // Settlements are locations
+        agent.vars_mut().set_many(desc.vars);
+        for &flag in desc.flags {
+            agent.flags.set(flag, true);
+        }
 
         let agent = agent.id;
-
-        sim.agents.vars_mut(agent).set_many(desc.vars);
 
         for &set in desc.sets {
             sim.agents.add_to_set(set, agent);

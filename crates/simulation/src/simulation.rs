@@ -107,8 +107,32 @@ fn tick(sim: &mut Simulation, mut request: Request, arena: &Bump) -> Response {
 
         let mut activity_start_intent = AVec::with_capacity_in(sim.parties.len(), arena);
 
-        // Collect agent facts
-        let facts = &self::collect_facts(arena, &sim.agents);
+        let mut facts = Facts::new(arena, sim.agents.capacity());
+        let mut diplo_map = DiploMap::new(arena, sim.agents.capacity());
+        {
+            let _span = tracing::info_span!("Collect Facts").entered();
+
+            let mut facts_scratch = AVec::new_in(arena);
+            for agent in sim.agents.iter() {
+                if agent.in_set(Set::Locations) {
+                    facts_scratch.push(Fact::from(FactKind::IsLocation));
+                }
+                if agent.is_player {
+                    facts_scratch.push(Fact::from(FactKind::IsPlayer));
+                }
+                facts.insert(agent.id, facts_scratch.drain(..));
+
+                let generally_hostile = agent.flags.get(Flag::IsGenerallyHostile);
+                if agent.in_set(Set::Factions) {
+                    let related = sim.agents.relationships_from(Relationship::Diplo, agent.id);
+                    let hostile = related.filter(|&(_, x)| x < 0.).map(|(id, _)| id);
+                    diplo_map.insert(agent.id, AgentId::null(), hostile, generally_hostile);
+                } else {
+                    let faction = sim.agents.parent_of(Hierarchy::FactionMembership, agent.id);
+                    diplo_map.insert(agent.id, faction, std::iter::empty(), generally_hostile);
+                }
+            }
+        }
 
         // Parties logical update
         for party in sim.parties.iter() {
@@ -190,7 +214,7 @@ fn tick(sim: &mut Simulation, mut request: Request, arena: &Bump) -> Response {
         {
             let _span = tracing::info_span!("Detections").entered();
             let mut detections = std::mem::take(&mut sim.parties.detections);
-            self::detections(&mut detections, &sim.parties, spatial_map, facts);
+            self::detections(&mut detections, sim, spatial_map, &facts, &diplo_map);
             sim.parties.detections = detections;
         }
 
@@ -236,7 +260,7 @@ fn tick(sim: &mut Simulation, mut request: Request, arena: &Bump) -> Response {
                 .agents
                 .iter()
                 .map(|agent| {
-                    let location = location_of_agent(sim, agent, facts, &mut scratch);
+                    let location = location_of_agent(sim, agent, &facts, &mut scratch);
                     (agent.id, location)
                 })
                 .collect();
@@ -373,28 +397,35 @@ impl Request {
 
 fn detections(
     detections: &mut Detections,
-    parties: &Parties,
+    sim: &Simulation,
     spatial_map: &SpatialMap,
     facts: &Facts,
+    diplo_map: &DiploMap,
 ) {
     detections.clear();
 
     let mut scratch = Vec::with_capacity(100);
-    for party in parties.iter() {
+    for party in sim.parties.iter() {
         const DETECTION_RANGE: f32 = 20.;
         let neighbours = spatial_map.search(party.body.pos, DETECTION_RANGE);
+
         for target in neighbours {
             // Do not look at yourself
             if target == party.id {
                 continue;
             }
-            let target = &parties[target];
+            let target = &sim.parties[target];
             // Distance net of sizes. 0 or lower means collision
             let distance = body_distance(party.body, target.body);
 
             let facts = facts.get_for(target.agent);
             let is_location = facts.any_with_kind(FactKind::IsLocation);
-            let threat = calculate_power(&facts);
+
+            let threat = if diplo_map.is_hostile(target.agent, party.agent) {
+                calculate_power(&facts)
+            } else {
+                0.
+            };
 
             scratch.push(Detection {
                 target: target.id,
@@ -989,23 +1020,6 @@ impl Default for FactKind {
     }
 }
 
-fn collect_facts<'a>(arena: &'a Bump, agents: &Agents) -> Facts<'a> {
-    let _span = tracing::info_span!("Collect Facts").entered();
-    let mut out = Facts::new(arena, agents.capacity());
-    let mut scratch = AVec::new_in(arena);
-    for agent in agents.iter() {
-        if agent.in_set(Set::Locations) {
-            scratch.push(Fact::from(FactKind::IsLocation));
-        }
-        if agent.is_player {
-            scratch.push(Fact::from(FactKind::IsPlayer));
-        }
-
-        out.insert(agent.id, scratch.drain(..));
-    }
-    out
-}
-
 fn calculate_power(facts: &AgentFacts) -> f32 {
     facts.accumulate_with_kind(&[(FactKind::IsPlayer, 10.)])
 }
@@ -1127,4 +1141,80 @@ fn rng_from_multi_seed(seeds: &[u64]) -> SmallRng {
         seed = seed.wrapping_mul(13).wrapping_add(i).wrapping_mul(17);
     }
     SmallRng::seed_from_u64(seed)
+}
+
+struct DiploMap<'a> {
+    alloc: AVec<'a, AgentId>,
+    entries: SecondaryMap<AgentId, DiploEntry>,
+}
+
+#[derive(Clone, Copy, Default)]
+struct DiploEntry {
+    parent: AgentId,
+    hostile_entities: Span,
+    generally_hostile: bool,
+}
+
+impl<'a> DiploMap<'a> {
+    pub fn new(arena: &'a Bump, capacity: usize) -> Self {
+        Self {
+            alloc: AVec::with_capacity_in(capacity, arena),
+            entries: SecondaryMap::with_capacity(capacity),
+        }
+    }
+
+    pub fn insert(
+        &mut self,
+        id: AgentId,
+        parent: AgentId,
+        hostile: impl Iterator<Item = AgentId>,
+        generally_hostile: bool,
+    ) {
+        let hostile_entities = {
+            let start = self.alloc.len();
+            self.alloc.extend(hostile);
+            let end = self.alloc.len();
+            Span::between(start, end)
+        };
+        self.entries.insert(
+            id,
+            DiploEntry {
+                parent,
+                hostile_entities,
+                generally_hostile,
+            },
+        );
+    }
+
+    pub fn is_hostile(&self, id: AgentId, target: AgentId) -> bool {
+        // If id is target, or if either is null, then there is no hostility.
+        if id == target || id.is_null() || target.is_null() {
+            return false;
+        }
+
+        // Extract entries
+        let my_entry = self.entries.get(id).copied().unwrap_or_default();
+        let target_entry = self.entries.get(target).copied().unwrap_or_default();
+
+        // An entity that is "generally hostile", will be hostile unless parents match
+        if my_entry.generally_hostile {
+            return my_entry.parent.is_null() || my_entry.parent != target_entry.parent;
+        }
+        // Otherwise, first we check if the target is directly hostile to me
+        let directly_hostile = my_entry
+            .hostile_entities
+            .view(&self.alloc)
+            .contains(&target);
+        if directly_hostile {
+            return true;
+        }
+
+        // Otherwise, if we have a parent, we could still be hostile because of the parent
+        if !my_entry.parent.is_null() {
+            return self.is_hostile(my_entry.parent, target_entry.parent);
+        }
+
+        // All failed: we are not hostile
+        false
+    }
 }
