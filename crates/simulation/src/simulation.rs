@@ -4,7 +4,7 @@ use slotmap::{Key, KeyData, SecondaryMap};
 use util::{span::Span, string_pool::*};
 
 use crate::{
-    agents::{self, *},
+    entities::{self, *},
     geom::V2,
     movement::{self, SpatialMap},
     names::{Name, NamePart, Names},
@@ -37,8 +37,8 @@ pub(crate) struct Simulation {
     pub terrain_map: TerrainMap,
     pub names: Names,
     movement_cache: movement::MovementCache,
-    pub agents: Agents,
-    pub faction_colors: SecondaryMap<AgentId, Color>,
+    pub entities: Entities,
+    pub faction_colors: SecondaryMap<EntityId, Color>,
     player_goal: Goal,
     detections: Detections,
 }
@@ -65,8 +65,8 @@ fn tick(sim: &mut Simulation, mut request: Request, arena: &Bump) -> Response {
 
         // From move to target
         if let Some(item_id) = request.move_to_item.take() {
-            let target = AgentId::from(KeyData::from_ffi(item_id.0));
-            sim.player_goal = Goal::ToAgent {
+            let target = EntityId::from(KeyData::from_ffi(item_id.0));
+            sim.player_goal = Goal::ToEntity {
                 target,
                 distance: 0.,
                 on_arrival: OnArrival::Attack,
@@ -80,7 +80,7 @@ fn tick(sim: &mut Simulation, mut request: Request, arena: &Bump) -> Response {
         tick_opportunities(sim);
         spawn_with_opportunity(sim, arena);
 
-        crate::agent_tasking::agent_tasking(sim, arena);
+        crate::tasking::entity_tasking(sim, arena);
 
         const ECONOMY_TICK_RATE: u64 = 200;
         if sim.turn_num % ECONOMY_TICK_RATE == 0 {
@@ -100,32 +100,36 @@ fn tick(sim: &mut Simulation, mut request: Request, arena: &Bump) -> Response {
             tick_activities(arena, sim);
         }
 
-        let mut movement_elements = AVec::with_capacity_in(sim.agents.len(), arena);
+        let mut movement_elements = AVec::with_capacity_in(sim.entities.len(), arena);
 
-        let mut desire_exit = AVec::with_capacity_in(sim.agents.len(), arena);
-        let mut desire_entry = AVec::with_capacity_in(sim.agents.len(), arena);
+        let mut desire_exit = AVec::with_capacity_in(sim.entities.len(), arena);
+        let mut desire_entry = AVec::with_capacity_in(sim.entities.len(), arena);
 
-        let mut activity_start_intent = AVec::with_capacity_in(sim.agents.len(), arena);
+        let mut activity_start_intent = AVec::with_capacity_in(sim.entities.len(), arena);
 
-        let mut diplo_map = DiploMap::new(arena, sim.agents.capacity());
+        let mut diplo_map = DiploMap::new(arena, sim.entities.capacity());
         {
             let _span = tracing::info_span!("Collect Facts").entered();
 
-            for agent in sim.agents.iter() {
-                let generally_hostile = agent.flags.get(Flag::IsGenerallyHostile);
-                if agent.in_set(Set::Factions) {
-                    let related = sim.agents.relationships_from(Relationship::Diplo, agent.id);
+            for entity in sim.entities.iter() {
+                let generally_hostile = entity.flags.get(Flag::IsGenerallyHostile);
+                if entity.in_set(Set::Factions) {
+                    let related = sim
+                        .entities
+                        .relationships_from(Relationship::Diplo, entity.id);
                     let hostile = related.filter(|&(_, x)| x < 0.).map(|(id, _)| id);
-                    diplo_map.insert(agent.id, AgentId::null(), hostile, generally_hostile);
+                    diplo_map.insert(entity.id, EntityId::null(), hostile, generally_hostile);
                 } else {
-                    let faction = sim.agents.parent_of(Hierarchy::FactionMembership, agent.id);
-                    diplo_map.insert(agent.id, faction, std::iter::empty(), generally_hostile);
+                    let faction = sim
+                        .entities
+                        .parent_of(Hierarchy::FactionMembership, entity.id);
+                    diplo_map.insert(entity.id, faction, std::iter::empty(), generally_hostile);
                 }
             }
         }
 
         // Parties logical update
-        for subject in sim.agents.iter() {
+        for subject in sim.entities.iter() {
             let (goal, avoid_area) = determine_party_goal_and_avoidance(sim, subject);
 
             let detection = sim.detections.get_for(subject.id);
@@ -133,16 +137,16 @@ fn tick(sim: &mut Simulation, mut request: Request, arena: &Bump) -> Response {
             let movement_target = determine_party_movement_target(detection, goal);
 
             {
-                let container = sim.agents.parent_of(Hierarchy::Container, subject.id);
+                let container = sim.entities.parent_of(Hierarchy::Container, subject.id);
                 // Enqueue desire to enter a container
                 let target = match goal {
                     Goal::Idle => container,
-                    Goal::ToAgent {
+                    Goal::ToEntity {
                         target,
                         on_arrival: OnArrival::Enter,
                         ..
                     } => target,
-                    _ => AgentId::null(),
+                    _ => EntityId::null(),
                 };
 
                 if target != container {
@@ -157,7 +161,7 @@ fn tick(sim: &mut Simulation, mut request: Request, arena: &Bump) -> Response {
             {
                 // Enqueue desire to begin a battle
                 match goal {
-                    Goal::ToAgent {
+                    Goal::ToEntity {
                         target,
                         on_arrival: OnArrival::Attack,
                         ..
@@ -172,7 +176,7 @@ fn tick(sim: &mut Simulation, mut request: Request, arena: &Bump) -> Response {
             let (destination, direct) = match movement_target {
                 MovementTarget::Immobile => (subject.body.pos, false),
                 MovementTarget::FixedPos { pos, direct } => (pos, direct),
-                MovementTarget::Agent(id) => (sim.agents[id].body.pos, false),
+                MovementTarget::Entity(id) => (sim.entities[id].body.pos, false),
             };
 
             // If the party is inside another party, their speed is 0
@@ -215,7 +219,7 @@ fn tick(sim: &mut Simulation, mut request: Request, arena: &Bump) -> Response {
             let positions = movement_result.positions.into_iter();
 
             for (id, pos) in positions {
-                sim.agents[id].body.pos = pos;
+                sim.entities[id].body.pos = pos;
             }
         }
 
@@ -226,76 +230,76 @@ fn tick(sim: &mut Simulation, mut request: Request, arena: &Bump) -> Response {
 
             // Resolve desired changes of party container
             for subject in desire_exit {
-                sim.agents.remove_parent(Hierarchy::Container, subject);
-                sim.agents[subject].flags.set(Flag::IsInside, false);
+                sim.entities.remove_parent(Hierarchy::Container, subject);
+                sim.entities[subject].flags.set(Flag::IsInside, false);
             }
 
             for (subject, target, check) in desire_entry {
                 let allowed = {
-                    let subject = &sim.agents[subject];
-                    let target = &sim.agents[target];
+                    let subject = &sim.entities[subject];
+                    let target = &sim.entities[target];
                     !check || subject.body.pos == target.body.pos
                 };
 
-                let container = if allowed { target } else { AgentId::null() };
+                let container = if allowed { target } else { EntityId::null() };
 
-                sim.agents
+                sim.entities
                     .set_parent(Hierarchy::Container, container, subject);
-                sim.agents[subject].flags.set(Flag::IsInside, allowed);
+                sim.entities[subject].flags.set(Flag::IsInside, allowed);
             }
         }
 
-        // Determine agent location
+        // Determine entity location
         {
-            let _span = tracing::info_span!("Agent Locations").entered();
+            let _span = tracing::info_span!("Entity Locations").entered();
             let mut scratch = vec![];
 
             let output: Vec<_> = sim
-                .agents
+                .entities
                 .iter()
-                .map(|agent| {
-                    let location = location_of_agent(sim, agent, &mut scratch);
-                    (agent.id, location)
+                .map(|entity| {
+                    let location = location_of_entity(sim, entity, &mut scratch);
+                    (entity.id, location)
                 })
                 .collect();
 
             // Writeback
             for (id, location) in output {
-                sim.agents[id].location = location;
+                sim.entities[id].location = location;
             }
         }
 
-        sim.agents.garbage_collect();
+        sim.entities.garbage_collect();
     }
     let mut response = Response::default();
     crate::view::view(sim, &request, &mut response);
     response
 }
 
-fn location_of_agent(
+fn location_of_entity(
     sim: &Simulation,
-    agent: &Agent,
-    scratch: &mut Vec<(AgentId, f32)>,
+    entity: &Entity,
+    scratch: &mut Vec<(EntityId, f32)>,
 ) -> Location {
-    // Disembodied agent has no location
-    if agent.get_flag(Flag::IsDisembodied) {
+    // Disembodied entity has no location
+    if entity.get_flag(Flag::IsDisembodied) {
         return Location::Nowhere;
     }
 
-    // If the agent is a location, then it's at a settlement!
-    if agent.in_set(Set::Locations) {
-        return Location::Proximate(agent.id);
+    // If the entity is a location, then it's at a settlement!
+    if entity.in_set(Set::Locations) {
+        return Location::Proximate(entity.id);
     }
 
-    // If an agent's party is inside another party, that the agent party is at the location
-    if agent.get_flag(Flag::IsInside) {
-        let container = sim.agents.parent_of(Hierarchy::Container, agent.id);
+    // If an entity's party is inside another party, that the entity party is at the location
+    if entity.get_flag(Flag::IsInside) {
+        let container = sim.entities.parent_of(Hierarchy::Container, entity.id);
         assert!(!container.is_null());
         return Location::Inside(container);
     }
 
     // Otherwise, look at the detections, collecting into scratch space
-    let detections = sim.detections.get_for(agent.id);
+    let detections = sim.detections.get_for(entity.id);
 
     scratch.clear();
 
@@ -358,7 +362,7 @@ pub struct MapItemId(pub u64);
 #[derive(Clone, Copy)]
 pub(crate) struct ViewEntity {
     tag: SpanHandle,
-    pub(crate) entity: AgentId,
+    pub(crate) entity: EntityId,
 }
 
 #[derive(Default)]
@@ -374,11 +378,11 @@ impl Request {
     }
 
     pub fn view_map_item(&mut self, key: &str, id: MapItemId) {
-        let entity = AgentId::from(KeyData::from_ffi(id.0));
+        let entity = EntityId::from(KeyData::from_ffi(id.0));
         self.view_entity(key, entity);
     }
 
-    fn view_entity(&mut self, key: &str, entity: AgentId) {
+    fn view_entity(&mut self, key: &str, entity: EntityId) {
         let key = self.strings.push_str(key);
         self.view_entities.push(ViewEntity { tag: key, entity });
     }
@@ -424,23 +428,23 @@ fn tick_opportunities(sim: &mut Simulation) {
         },
     ];
 
-    for agent in sim.agents.iter_mut() {
+    for entity in sim.entities.iter_mut() {
         // Only applies to settlements?
-        if !agent.in_set(Set::Settlements) {
+        if !entity.in_set(Set::Settlements) {
             continue;
         }
         for rule in RULES {
             let passes_thresholds = rule
                 .var_gt
                 .iter()
-                .all(|&(var, threshold)| agent.get_var(var) >= threshold);
+                .all(|&(var, threshold)| entity.get_var(var) >= threshold);
             if !passes_thresholds {
                 continue;
             }
 
-            let current = agent.get_var(rule.variable);
+            let current = entity.get_var(rule.variable);
             let next = (current + rule.change).clamp(rule.min, rule.max);
-            agent.vars_mut().with(rule.variable, next);
+            entity.vars_mut().with(rule.variable, next);
         }
     }
 }
@@ -536,16 +540,16 @@ fn spawn_with_opportunity(sim: &mut Simulation, arena: &Bump) {
         ),
     ];
 
-    for agent in sim.agents.iter() {
+    for entity in sim.entities.iter() {
         for (filter, opportunity, spawn) in &table {
             // Check if opportunity value is in trigger range (a cheap check)
-            let opportunity_value = agent.get_var(opportunity.variable);
+            let opportunity_value = entity.get_var(opportunity.variable);
             if opportunity_value < opportunity.threshold {
                 continue;
             }
 
             // Check if filter applis
-            if filter.sets.iter().any(|&set| !agent.in_set(set)) {
+            if filter.sets.iter().any(|&set| !entity.in_set(set)) {
                 continue;
             }
 
@@ -553,10 +557,10 @@ fn spawn_with_opportunity(sim: &mut Simulation, arena: &Bump) {
 
             // Look for a target workplace in the party detections
             let workplace = opportunity.workplace_set.and_then(|set| {
-                let detections = sim.detections.get_for(agent.id);
+                let detections = sim.detections.get_for(entity.id);
                 detections
                     .iter()
-                    .find(|entry| sim.agents.in_set(entry.id, set))
+                    .find(|entry| sim.entities.in_set(entry.id, set))
                     .map(|entry| (Hierarchy::WorkArea, entry.id))
             });
 
@@ -571,17 +575,17 @@ fn spawn_with_opportunity(sim: &mut Simulation, arena: &Bump) {
                 .clamp(opportunity.min_value, opportunity.max_value);
 
             // Record variable change
-            updates.push((agent.id, opportunity.variable, next_value));
+            updates.push((entity.id, opportunity.variable, next_value));
 
             // Produce spawn
-            let party_type = sim.agents.find_type_by_tag(spawn.party_type).unwrap();
+            let party_type = sim.entities.find_type_by_tag(spawn.party_type).unwrap();
             let mut name = party_type.name;
             if spawn.name_contains_of_parent {
-                name.set(NamePart::OfX, agent.name.get(NamePart::Main));
+                name.set(NamePart::OfX, entity.name.get(NamePart::Main));
             }
-            spawns.push(SpawnSubagent {
+            spawns.push(SpawnSubentity {
                 typ: party_type.id,
-                parent: agent.id,
+                parent: entity.id,
                 name,
                 flags: spawn.flags,
                 vars: &[],
@@ -591,43 +595,45 @@ fn spawn_with_opportunity(sim: &mut Simulation, arena: &Bump) {
     }
 
     for spawn in spawns {
-        let parent = sim.names.resolve(sim.agents[spawn.parent].name);
-        let child = sim.names.resolve(sim.agents[spawn.typ].name);
+        let parent = sim.names.resolve(sim.entities[spawn.parent].name);
+        let child = sim.names.resolve(sim.entities[spawn.typ].name);
         println!("Spawning {child} at {parent}");
-        spawn_subagent(sim, spawn);
+        spawn_subentity(sim, spawn);
     }
 
-    for (agent_id, variable, value) in updates {
-        let agent = &mut sim.agents[agent_id];
-        agent.vars_mut().set(variable, value);
+    for (entity_id, variable, value) in updates {
+        let entity = &mut sim.entities[entity_id];
+        entity.vars_mut().set(variable, value);
     }
 }
 
-struct SpawnSubagent<'a> {
-    typ: AgentTypeId,
-    parent: AgentId,
+struct SpawnSubentity<'a> {
+    typ: ArchetypeId,
+    parent: EntityId,
     name: Name,
     flags: Flags,
     vars: &'a [(Var, f64)],
-    parents: &'a [(Hierarchy, AgentId)],
+    parents: &'a [(Hierarchy, EntityId)],
 }
 
-fn spawn_subagent(sim: &mut Simulation, spawn: SpawnSubagent) {
-    // Spawn agent (now ihere, later floated out)
+fn spawn_subentity(sim: &mut Simulation, spawn: SpawnSubentity) {
+    // Spawn entity (now ihere, later floated out)
     struct ParentData {
         pos: V2,
-        faction: AgentId,
+        faction: EntityId,
     }
 
     let parent = {
-        let agent = &sim.agents[spawn.parent];
-        let faction = sim.agents.parent_of(Hierarchy::FactionMembership, agent.id);
+        let entity = &sim.entities[spawn.parent];
+        let faction = sim
+            .entities
+            .parent_of(Hierarchy::FactionMembership, entity.id);
         ParentData {
-            pos: agent.body.pos,
+            pos: entity.body.pos,
             faction,
         }
     };
-    let child = sim.agents.spawn_with_type(spawn.typ);
+    let child = sim.entities.spawn_with_type(spawn.typ);
     child.name = spawn.name;
 
     child.body.pos = parent.pos;
@@ -639,15 +645,15 @@ fn spawn_subagent(sim: &mut Simulation, spawn: SpawnSubagent) {
     child.vars_mut().set_many(spawn.vars);
 
     let child = child.id;
-    sim.agents
+    sim.entities
         .set_parent(Hierarchy::Attachment, spawn.parent, child);
-    sim.agents
+    sim.entities
         .set_parent(Hierarchy::FactionMembership, parent.faction, child);
-    sim.agents
+    sim.entities
         .set_parent(Hierarchy::Container, spawn.parent, child);
 
     for &(hierarchy, id) in spawn.parents {
-        sim.agents.set_parent(hierarchy, id, child);
+        sim.entities.set_parent(hierarchy, id, child);
     }
 }
 
@@ -659,7 +665,7 @@ fn food_production_and_consumption(sim: &mut Simulation, arena: &Bump) {
     const BASE_FOOD_PRODUCTION: f64 = 100.0;
     const PROSPERITY_IMPACT_ON_FOOD_PRODUCTION: f64 = 0.1;
     let mut changes = AVec::new_in(arena);
-    for settlement in sim.agents.iter_set(agents::Set::Settlements) {
+    for settlement in sim.entities.iter_set(entities::Set::Settlements) {
         let mut food = settlement.get_var(Var::FoodStored) as i64;
         let population = settlement.get_var(Var::Population);
         let prosperity = settlement.get_var(Var::Prosperity).clamp(0.0, 1.0);
@@ -678,9 +684,9 @@ fn food_production_and_consumption(sim: &mut Simulation, arena: &Bump) {
         changes.push((settlement.id, food as f64));
     }
 
-    for (agent, food) in changes {
-        let agent = &mut sim.agents[agent];
-        agent.vars_mut().with(Var::FoodStored, food);
+    for (entity, food) in changes {
+        let entity = &mut sim.entities[entity];
+        entity.vars_mut().with(Var::FoodStored, food);
     }
 }
 
@@ -691,7 +697,7 @@ fn population_from_food(sim: &mut Simulation, arena: &Bump) {
     const TICK_OF_SLACK: f64 = 12.;
     let mut changes = AVec::new_in(arena);
 
-    for settlement in sim.agents.iter_set(agents::Set::Settlements) {
+    for settlement in sim.entities.iter_set(entities::Set::Settlements) {
         let food = settlement.get_var(Var::FoodStored);
         let population = settlement.get_var(Var::Population);
         let target = (food / (FOOD_CONSUMPTION_PER_HEAD * TICK_OF_SLACK)).max(0.0);
@@ -699,9 +705,9 @@ fn population_from_food(sim: &mut Simulation, arena: &Bump) {
         changes.push((settlement.id, next.max(0.0).round()));
     }
 
-    for (agent, population) in changes {
-        let agent = &mut sim.agents[agent];
-        agent.vars_mut().with(Var::Population, population);
+    for (entity, population) in changes {
+        let entity = &mut sim.entities[entity];
+        entity.vars_mut().with(Var::Population, population);
     }
 }
 
@@ -729,7 +735,7 @@ fn consumables_into_prosperity(sim: &mut Simulation, arena: &Bump) {
     let mut var_changes = AVec::new_in(arena);
     let mut prosperity_changes = AVec::new_in(arena);
 
-    for settlement in sim.agents.iter_set(agents::Set::Settlements) {
+    for settlement in sim.entities.iter_set(entities::Set::Settlements) {
         let mut prosperity_delta = 0.0;
 
         for entry in TABLE {
@@ -752,14 +758,14 @@ fn consumables_into_prosperity(sim: &mut Simulation, arena: &Bump) {
         }
     }
 
-    for (agent, variable, value) in var_changes {
-        let agent = &mut sim.agents[agent];
-        agent.vars_mut().with(variable, value);
+    for (entity, variable, value) in var_changes {
+        let entity = &mut sim.entities[entity];
+        entity.vars_mut().with(variable, value);
     }
 
-    for (agent, prosperity) in prosperity_changes {
-        let agent = &mut sim.agents[agent];
-        agent.vars_mut().with(Var::Prosperity, prosperity);
+    for (entity, prosperity) in prosperity_changes {
+        let entity = &mut sim.entities[entity];
+        entity.vars_mut().with(Var::Prosperity, prosperity);
     }
 }
 
@@ -769,28 +775,28 @@ fn prosperity_towards_equilibrium(sim: &mut Simulation, arena: &Bump) {
     const PROSPERITY_CONVERGENCE: f64 = 0.05;
     let mut changes = AVec::new_in(arena);
 
-    for settlement in sim.agents.iter_set(agents::Set::Settlements) {
+    for settlement in sim.entities.iter_set(entities::Set::Settlements) {
         let prosperity = settlement.get_var(Var::Prosperity);
         let next = prosperity + (PROSPERITY_EQUILIBRIUM - prosperity) * PROSPERITY_CONVERGENCE;
         changes.push((settlement.id, next.clamp(0.0, 1.0)));
     }
 
-    for (agent, prosperity) in changes {
-        let agent = &mut sim.agents[agent];
-        agent.vars_mut().with(Var::Prosperity, prosperity);
+    for (entity, prosperity) in changes {
+        let entity = &mut sim.entities[entity];
+        entity.vars_mut().with(Var::Prosperity, prosperity);
     }
 }
 
-fn determine_party_goal_and_avoidance(sim: &Simulation, agent: &Agent) -> (Goal, movement::Area) {
-    if agent.speed == 0.0 {
+fn determine_party_goal_and_avoidance(sim: &Simulation, entity: &Entity) -> (Goal, movement::Area) {
+    if entity.speed == 0.0 {
         return Default::default();
     }
 
-    if agent.flags.get(Flag::IsActivityPartecipant) {
+    if entity.flags.get(Flag::IsActivityPartecipant) {
         return Default::default();
     }
 
-    let goal = match agent.behavior {
+    let goal = match entity.behavior {
         Behavior::Idle => Goal::Idle,
         Behavior::Player => sim.player_goal,
         Behavior::GoTo { target, on_arrival } => {
@@ -806,9 +812,9 @@ fn determine_party_goal_and_avoidance(sim: &Simulation, agent: &Agent) -> (Goal,
                 0.
             };
 
-            sim.agents
+            sim.entities
                 .get(target)
-                .map(|target| Goal::ToAgent {
+                .map(|target| Goal::ToEntity {
                     target: target.id,
                     distance,
                     on_arrival,
@@ -823,7 +829,7 @@ fn determine_party_goal_and_avoidance(sim: &Simulation, agent: &Agent) -> (Goal,
     const OUTER_AVOID_RANGE: f32 = INNER_AVOID_RANGE * 1.2;
 
     // Do we detect a threat?
-    let detections = sim.detections.get_for(agent.id);
+    let detections = sim.detections.get_for(entity.id);
     let primary_threat = detections
         .iter()
         .filter(|det| det.threat > 0. && det.distance <= OUTER_AVOID_RANGE)
@@ -831,7 +837,7 @@ fn determine_party_goal_and_avoidance(sim: &Simulation, agent: &Agent) -> (Goal,
 
     let avoidance = primary_threat
         .map(|det| {
-            let pos = sim.agents[det.id].body.pos;
+            let pos = sim.entities[det.id].body.pos;
             movement::Area {
                 pos,
                 range: INNER_AVOID_RANGE,
@@ -849,7 +855,7 @@ pub(crate) fn determine_party_movement_target(
     match goal {
         Goal::Idle => MovementTarget::Immobile,
         Goal::MoveTo(pos) => MovementTarget::FixedPos { pos, direct: false },
-        Goal::ToAgent {
+        Goal::ToEntity {
             target, distance, ..
         } => {
             let close_to_target = detections
@@ -859,7 +865,7 @@ pub(crate) fn determine_party_movement_target(
                 .unwrap_or(false);
 
             if !close_to_target {
-                MovementTarget::Agent(target)
+                MovementTarget::Entity(target)
             } else {
                 MovementTarget::Immobile
             }
@@ -867,8 +873,8 @@ pub(crate) fn determine_party_movement_target(
     }
 }
 
-fn calculate_power(agent: &Agent) -> f32 {
-    if agent.is_player { 10. } else { 0. }
+fn calculate_power(entity: &Entity) -> f32 {
+    if entity.is_player { 10. } else { 0. }
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -878,7 +884,7 @@ enum ActivityType {
 
 fn resolve_activity_starts<'a>(
     sim: &mut Simulation,
-    incipits: &[(ActivityType, AgentId, AgentId)],
+    incipits: &[(ActivityType, EntityId, EntityId)],
 ) {
     for &(activity_type, subject, target) in incipits {
         let (
@@ -909,12 +915,12 @@ fn resolve_activity_starts<'a>(
 
         // Get information necessary to spawn the battle
         let pos = {
-            let subject = &sim.agents[subject];
-            let target = &sim.agents[target];
+            let subject = &sim.entities[subject];
+            let target = &sim.entities[target];
             // An activitity start only works if both subject and target are not in an activity
             let already_in_activity = [subject, target]
                 .iter()
-                .any(|agent| agent.flags.get(Flag::IsActivityPartecipant));
+                .any(|entity| entity.flags.get(Flag::IsActivityPartecipant));
             if already_in_activity {
                 continue;
             }
@@ -922,30 +928,30 @@ fn resolve_activity_starts<'a>(
         };
 
         // Spawn the battle
-        let activity_agent = {
-            let agent_type = sim.agents.find_type_by_tag(activity_party_type).unwrap();
-            let agent = sim.agents.spawn_with_type(agent_type.id);
-            agent.body.pos = pos;
-            let agent = agent.id;
-            sim.agents.add_to_set(activity_set, agent);
-            agent
+        let activity_entity = {
+            let archetype = sim.entities.find_type_by_tag(activity_party_type).unwrap();
+            let entity = sim.entities.spawn_with_type(archetype.id);
+            entity.body.pos = pos;
+            let entity = entity.id;
+            sim.entities.add_to_set(activity_set, entity);
+            entity
         };
 
-        for (agent, hierarchy) in [(subject, subject_hierarchy), (target, target_hierarchy)] {
-            sim.agents.set_parent(hierarchy, activity_agent, agent);
-            sim.agents[agent].flags.set(participant_flag, true);
+        for (entity, hierarchy) in [(subject, subject_hierarchy), (target, target_hierarchy)] {
+            sim.entities.set_parent(hierarchy, activity_entity, entity);
+            sim.entities[entity].flags.set(participant_flag, true);
         }
     }
 }
 
 fn tick_activities(arena: &Bump, sim: &mut Simulation) {
-    let activities = AVec::from_iter_in(sim.agents.iter_set_ids(Set::Battle), arena);
+    let activities = AVec::from_iter_in(sim.entities.iter_set_ids(Set::Battle), arena);
     let mut partecipants = AVec::new_in(arena);
     for activity_id in activities {
         // Get the members out
         for hierarchy in [Hierarchy::ActivitySubject, Hierarchy::ActivityTarget] {
             partecipants.extend(
-                sim.agents
+                sim.entities
                     .children_of(hierarchy, activity_id)
                     .map(|id| (id, hierarchy)),
             );
@@ -961,14 +967,14 @@ fn tick_activities(arena: &Bump, sim: &mut Simulation) {
         };
 
         // Despawn the activity
-        sim.agents.despawn(activity_id).unwrap();
+        sim.entities.despawn(activity_id).unwrap();
 
         // Process partecipants
-        for (agent, role) in partecipants.drain(..) {
-            let agent = &mut sim.agents[agent];
-            agent.flags.set(Flag::IsActivityPartecipant, false);
+        for (entity, role) in partecipants.drain(..) {
+            let entity = &mut sim.entities[entity];
+            entity.flags.set(Flag::IsActivityPartecipant, false);
             if role == winning_role {
-                println!("{} is a winner", sim.names.resolve(agent.name));
+                println!("{} is a winner", sim.names.resolve(entity.name));
             }
         }
     }
@@ -983,13 +989,13 @@ fn rng_from_multi_seed(seeds: &[u64]) -> SmallRng {
 }
 
 struct DiploMap<'a> {
-    alloc: AVec<'a, AgentId>,
-    entries: SecondaryMap<AgentId, DiploEntry>,
+    alloc: AVec<'a, EntityId>,
+    entries: SecondaryMap<EntityId, DiploEntry>,
 }
 
 #[derive(Clone, Copy, Default)]
 struct DiploEntry {
-    parent: AgentId,
+    parent: EntityId,
     hostile_entities: Span,
     generally_hostile: bool,
 }
@@ -1004,9 +1010,9 @@ impl<'a> DiploMap<'a> {
 
     pub fn insert(
         &mut self,
-        id: AgentId,
-        parent: AgentId,
-        hostile: impl Iterator<Item = AgentId>,
+        id: EntityId,
+        parent: EntityId,
+        hostile: impl Iterator<Item = EntityId>,
         generally_hostile: bool,
     ) {
         let hostile_entities = {
@@ -1025,7 +1031,7 @@ impl<'a> DiploMap<'a> {
         );
     }
 
-    pub fn is_hostile(&self, id: AgentId, target: AgentId) -> bool {
+    pub fn is_hostile(&self, id: EntityId, target: EntityId) -> bool {
         // If id is target, or if either is null, then there is no hostility.
         if id == target || id.is_null() || target.is_null() {
             return false;
@@ -1064,7 +1070,7 @@ mod detection {
     #[derive(Default)]
     pub(crate) struct Detections {
         data: Vec<Detection>,
-        spans: SecondaryMap<AgentId, Span>,
+        spans: SecondaryMap<EntityId, Span>,
     }
 
     impl Detections {
@@ -1073,13 +1079,13 @@ mod detection {
             self.spans.clear();
         }
 
-        pub(crate) fn set(&mut self, id: AgentId, detections: &[Detection]) {
+        pub(crate) fn set(&mut self, id: EntityId, detections: &[Detection]) {
             let detections = detections.iter().copied();
             let span = Span::of_extension(&mut self.data, detections);
             self.spans.insert(id, span);
         }
 
-        pub(crate) fn get_for(&self, id: AgentId) -> &[Detection] {
+        pub(crate) fn get_for(&self, id: EntityId) -> &[Detection] {
             self.spans
                 .get(id)
                 .map(|span| span.view(&self.data))
@@ -1089,7 +1095,7 @@ mod detection {
 
     #[derive(Clone, Copy)]
     pub(crate) struct Detection {
-        pub id: AgentId,
+        pub id: EntityId,
         pub distance: f32,
         pub is_location: bool,
         pub threat: f32,
@@ -1104,7 +1110,7 @@ mod detection {
         detections.clear();
 
         let mut scratch = Vec::with_capacity(100);
-        for subject in sim.agents.iter() {
+        for subject in sim.entities.iter() {
             if subject.get_flag(Flag::IsDisembodied) {
                 continue;
             }
@@ -1117,7 +1123,7 @@ mod detection {
                 if target == subject.id {
                     continue;
                 }
-                let target = &sim.agents[target];
+                let target = &sim.entities[target];
                 // Distance net of sizes. 0 or lower means collision
                 let distance = body_distance(subject.body, target.body);
 
@@ -1154,8 +1160,8 @@ mod detection {
 pub(crate) enum Goal {
     Idle,
     MoveTo(V2),
-    ToAgent {
-        target: AgentId,
+    ToEntity {
+        target: EntityId,
         distance: f32,
         on_arrival: OnArrival,
     },
@@ -1184,7 +1190,7 @@ impl Default for OnArrival {
 pub(crate) enum MovementTarget {
     Immobile,
     FixedPos { pos: V2, direct: bool },
-    Agent(AgentId),
+    Entity(EntityId),
 }
 
 impl Default for MovementTarget {

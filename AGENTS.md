@@ -72,4 +72,4 @@ To build and run the project, use the following standard Cargo commands:
 
 *   **Surgical Changes:** When implementing a feature or fix, only change the code that is directly necessary. Avoid refactoring or moving unrelated code. Changes should be focused and minimal.
 
-*   **Commenting:** When agents write their code, they should add comments, explaining the PURPOSE of groups of statements and expressions when it would not be immediately clear
+*   **Commenting:** When entities write their code, they should add comments, explaining the PURPOSE of groups of statements and expressions when it would not be immediately clear

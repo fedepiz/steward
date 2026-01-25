@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use crate::agents::{Behavior, Flag, Hierarchy, Set, Var};
+use crate::entities::{Behavior, Flag, Hierarchy, Set, Var};
 use crate::names::Name;
 use crate::simulation::*;
 use crate::{geom::*, terrain_map};
@@ -17,7 +17,7 @@ pub(crate) fn init(sim: &mut Simulation, req: InitRequest) {
     const SIZE_SMALL: f32 = 2.;
 
     {
-        let typ = sim.agents.add_type();
+        let typ = sim.entities.add_type();
         typ.tag = "battle";
         typ.image = "battle";
         typ.size = SIZE_TINY;
@@ -25,7 +25,7 @@ pub(crate) fn init(sim: &mut Simulation, req: InitRequest) {
     }
 
     {
-        let typ = sim.agents.add_type();
+        let typ = sim.entities.add_type();
         typ.tag = "person";
         typ.image = "person";
         typ.size = SIZE_SMALL;
@@ -34,7 +34,7 @@ pub(crate) fn init(sim: &mut Simulation, req: InitRequest) {
     }
 
     {
-        let typ = sim.agents.add_type();
+        let typ = sim.entities.add_type();
         typ.tag = "farmers";
         typ.image = "farmers";
         typ.name = Name::simple(sim.names.define("Farmers"));
@@ -45,7 +45,7 @@ pub(crate) fn init(sim: &mut Simulation, req: InitRequest) {
     }
 
     {
-        let typ = sim.agents.add_type();
+        let typ = sim.entities.add_type();
         typ.tag = "miners";
         typ.image = "miners";
         typ.name = Name::simple(sim.names.define("Miners"));
@@ -55,7 +55,7 @@ pub(crate) fn init(sim: &mut Simulation, req: InitRequest) {
     }
 
     {
-        let typ = sim.agents.add_type();
+        let typ = sim.entities.add_type();
         typ.tag = "caravan";
         typ.image = "caravan";
         typ.name = Name::simple(sim.names.define("Caravan"));
@@ -65,7 +65,7 @@ pub(crate) fn init(sim: &mut Simulation, req: InitRequest) {
     }
 
     {
-        let typ = sim.agents.add_type();
+        let typ = sim.entities.add_type();
         typ.tag = "mine";
         typ.image = "mine";
         typ.name = Name::simple(sim.names.define("Mine"));
@@ -75,7 +75,7 @@ pub(crate) fn init(sim: &mut Simulation, req: InitRequest) {
     }
 
     {
-        let typ = sim.agents.add_type();
+        let typ = sim.entities.add_type();
         typ.tag = "village";
         typ.image = "village";
         typ.name = Name::simple(sim.names.define("Village"));
@@ -84,7 +84,7 @@ pub(crate) fn init(sim: &mut Simulation, req: InitRequest) {
     }
 
     {
-        let typ = sim.agents.add_type();
+        let typ = sim.entities.add_type();
         typ.tag = "hillfort";
         typ.image = "hillfort";
         typ.name = Name::simple(sim.names.define("Hillfort"));
@@ -93,7 +93,7 @@ pub(crate) fn init(sim: &mut Simulation, req: InitRequest) {
     }
 
     {
-        let typ = sim.agents.add_type();
+        let typ = sim.entities.add_type();
         typ.tag = "town";
         typ.image = "town";
         typ.name = Name::simple(sim.names.define("Town"));
@@ -102,7 +102,7 @@ pub(crate) fn init(sim: &mut Simulation, req: InitRequest) {
     }
 
     {
-        let typ = sim.agents.add_type();
+        let typ = sim.entities.add_type();
         typ.tag = "faction";
         typ.is_disembodied = true;
     }
@@ -128,7 +128,7 @@ pub(crate) fn init(sim: &mut Simulation, req: InitRequest) {
     ];
 
     #[derive(Default, Clone, Copy)]
-    struct AgentDesc<'a> {
+    struct EntityDesc<'a> {
         key: &'a str,
         name: &'a str,
         pos: (f32, f32),
@@ -150,8 +150,8 @@ pub(crate) fn init(sim: &mut Simulation, req: InitRequest) {
     const TOWN_FOOD_CAPACITY: f64 = 10_000.;
     const PERSON_RENOWN: f64 = 10.;
 
-    let agents = [
-        AgentDesc {
+    let entities = [
+        EntityDesc {
             pos: (590., 520.),
             party_typ: "person",
             name: "Ambrosius Aurelianus",
@@ -162,7 +162,7 @@ pub(crate) fn init(sim: &mut Simulation, req: InitRequest) {
             // parents: &[(Hierarchy::FactionMembership, "rheged")],
             ..Default::default()
         },
-        AgentDesc {
+        EntityDesc {
             pos: (610., 520.),
             party_typ: "person",
             name: "Rhoedd map Rhun",
@@ -180,7 +180,7 @@ pub(crate) fn init(sim: &mut Simulation, req: InitRequest) {
             ],
             ..Default::default()
         },
-        AgentDesc {
+        EntityDesc {
             pos: (600., 520.),
             party_typ: "person",
             name: "Gwaith map Elffin",
@@ -193,7 +193,7 @@ pub(crate) fn init(sim: &mut Simulation, req: InitRequest) {
             ],
             ..Default::default()
         },
-        AgentDesc {
+        EntityDesc {
             pos: (600., 500.),
             party_typ: "person",
             name: "Eadwine map Owain",
@@ -202,7 +202,7 @@ pub(crate) fn init(sim: &mut Simulation, req: InitRequest) {
             parents: &[(Hierarchy::FactionMembership, "rheged")],
             ..Default::default()
         },
-        AgentDesc {
+        EntityDesc {
             key: "caer_ligualid",
             name: "Caer Ligualid",
             pos: (592., 514.),
@@ -216,7 +216,7 @@ pub(crate) fn init(sim: &mut Simulation, req: InitRequest) {
             parents: &[(Hierarchy::FactionMembership, "rheged")],
             ..Default::default()
         },
-        AgentDesc {
+        EntityDesc {
             key: "llan_heledd",
             name: "Llan Heledd",
             pos: (570., 540.),
@@ -233,7 +233,7 @@ pub(crate) fn init(sim: &mut Simulation, req: InitRequest) {
             ],
             ..Default::default()
         },
-        AgentDesc {
+        EntityDesc {
             name: "Din Drust",
             pos: (570., 490.),
             party_typ: "hillfort",
@@ -246,7 +246,7 @@ pub(crate) fn init(sim: &mut Simulation, req: InitRequest) {
             parents: &[(Hierarchy::FactionMembership, "rheged")],
             ..Default::default()
         },
-        AgentDesc {
+        EntityDesc {
             name: "Din Reghed",
             pos: (530., 500.),
             party_typ: "hillfort",
@@ -259,7 +259,7 @@ pub(crate) fn init(sim: &mut Simulation, req: InitRequest) {
             parents: &[(Hierarchy::FactionMembership, "rheged")],
             ..Default::default()
         },
-        AgentDesc {
+        EntityDesc {
             name: "Ad Candidam Casam",
             pos: (530., 520.),
             party_typ: "village",
@@ -275,7 +275,7 @@ pub(crate) fn init(sim: &mut Simulation, req: InitRequest) {
             ],
             ..Default::default()
         },
-        AgentDesc {
+        EntityDesc {
             name: "Isura",
             pos: (560., 500.),
             party_typ: "village",
@@ -291,7 +291,7 @@ pub(crate) fn init(sim: &mut Simulation, req: InitRequest) {
             ],
             ..Default::default()
         },
-        AgentDesc {
+        EntityDesc {
             key: "anava",
             name: "Anava",
             pos: (603., 500.),
@@ -308,7 +308,7 @@ pub(crate) fn init(sim: &mut Simulation, req: InitRequest) {
             ],
             ..Default::default()
         },
-        AgentDesc {
+        EntityDesc {
             key: "caer_wenddoleu",
             name: "Caer Wenddoleu",
             pos: (625., 505.),
@@ -322,14 +322,14 @@ pub(crate) fn init(sim: &mut Simulation, req: InitRequest) {
             parents: &[(Hierarchy::FactionMembership, "rheged")],
             ..Default::default()
         },
-        AgentDesc {
+        EntityDesc {
             name: "Lligwy Mine",
             pos: (600., 530.),
             party_typ: "mine",
             sets: &[Set::Mines],
             ..Default::default()
         },
-        AgentDesc {
+        EntityDesc {
             key: "caer_maunguid",
             name: "Caer Maunguid",
             pos: (630., 665.),
@@ -343,7 +343,7 @@ pub(crate) fn init(sim: &mut Simulation, req: InitRequest) {
             parents: &[(Hierarchy::FactionMembership, "crafu")],
             ..Default::default()
         },
-        AgentDesc {
+        EntityDesc {
             name: "Maes Cogwy",
             pos: (605., 625.),
             party_typ: "village",
@@ -359,7 +359,7 @@ pub(crate) fn init(sim: &mut Simulation, req: InitRequest) {
             ],
             ..Default::default()
         },
-        AgentDesc {
+        EntityDesc {
             name: "Ecclesia Hyll",
             pos: (600., 645.),
             party_typ: "village",
@@ -375,7 +375,7 @@ pub(crate) fn init(sim: &mut Simulation, req: InitRequest) {
             ],
             ..Default::default()
         },
-        AgentDesc {
+        EntityDesc {
             name: "Ced",
             pos: (600., 675.),
             party_typ: "village",
@@ -391,7 +391,7 @@ pub(crate) fn init(sim: &mut Simulation, req: InitRequest) {
             ],
             ..Default::default()
         },
-        AgentDesc {
+        EntityDesc {
             name: "Dwfr",
             pos: (640., 690.),
             party_typ: "village",
@@ -415,22 +415,22 @@ pub(crate) fn init(sim: &mut Simulation, req: InitRequest) {
     let mut pass2 = vec![];
 
     for faction in factions {
-        let archetype = sim.agents.find_type_by_tag("faction").unwrap().id;
-        let agent = sim.agents.spawn_with_type(archetype);
-        agent.name = Name::simple(sim.names.define(faction.name));
-        let agent = agent.id;
-        sim.agents.add_to_set(Set::Factions, agent);
-        sim.faction_colors.insert(agent, faction.color);
-        keys.insert(faction.key, agent);
+        let archetype = sim.entities.find_type_by_tag("faction").unwrap().id;
+        let entity = sim.entities.spawn_with_type(archetype);
+        entity.name = Name::simple(sim.names.define(faction.name));
+        let entity = entity.id;
+        sim.entities.add_to_set(Set::Factions, entity);
+        sim.faction_colors.insert(entity, faction.color);
+        keys.insert(faction.key, entity);
     }
 
-    for desc in agents {
+    for desc in entities {
         let typ = sim
-            .agents
+            .entities
             .find_type_by_tag(desc.party_typ)
             .copied()
             .unwrap();
-        let agent = sim.agents.spawn_with_type(typ.id);
+        let entity = sim.entities.spawn_with_type(typ.id);
         let name = if desc.is_player {
             player_name
         } else if desc.name.is_empty() {
@@ -438,51 +438,51 @@ pub(crate) fn init(sim: &mut Simulation, req: InitRequest) {
         } else {
             Name::simple(sim.names.define(desc.name))
         };
-        agent.name = name;
+        entity.name = name;
         if desc.is_player {
-            agent.speed = 5.;
+            entity.speed = 5.;
         }
-        agent.body.pos = V2::new(desc.pos.0, desc.pos.1);
+        entity.body.pos = V2::new(desc.pos.0, desc.pos.1);
 
-        agent.name = name;
-        agent.is_player = desc.is_player;
-        agent.fixed_behavior = if desc.is_player {
+        entity.name = name;
+        entity.is_player = desc.is_player;
+        entity.fixed_behavior = if desc.is_player {
             Some(Behavior::Player)
         } else {
             None
         };
 
-        agent.vars_mut().set_many(desc.vars);
+        entity.vars_mut().set_many(desc.vars);
         for &flag in desc.flags {
-            agent.flags.set(flag, true);
+            entity.flags.set(flag, true);
         }
 
-        let agent = agent.id;
+        let entity = entity.id;
 
         for &set in desc.sets {
-            sim.agents.add_to_set(set, agent);
+            sim.entities.add_to_set(set, entity);
         }
 
         let is_location = LOCATION_SETS.iter().any(|set| desc.sets.contains(set));
         if is_location {
-            sim.agents.add_to_set(Set::Locations, agent);
+            sim.entities.add_to_set(Set::Locations, entity);
         }
 
         if !desc.key.is_empty() {
-            keys.insert(desc.key, agent);
+            keys.insert(desc.key, entity);
         }
-        pass2.push((desc, agent));
+        pass2.push((desc, entity));
     }
 
-    for (desc, agent) in pass2 {
+    for (desc, entity) in pass2 {
         for &(hierarchy, key) in desc.parents {
             let parent = keys.get(key).copied().unwrap();
-            sim.agents.set_parent(hierarchy, parent, agent);
+            sim.entities.set_parent(hierarchy, parent, entity);
         }
 
         for &(hierarchy, key) in desc.children {
             let child = keys.get(key).copied().unwrap();
-            sim.agents.set_parent(hierarchy, agent, child);
+            sim.entities.set_parent(hierarchy, entity, child);
         }
     }
 }

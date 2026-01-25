@@ -2,7 +2,7 @@ use slotmap::Key;
 use slotmap::KeyData;
 use util::string_pool::{SpanHandle, StringPool};
 
-use crate::agents::{self, *};
+use crate::entities::{self, *};
 use crate::objects::*;
 use crate::simulation::*;
 
@@ -37,8 +37,8 @@ impl MapItems {
 }
 
 impl MapItemId {
-    pub(crate) fn as_entity(self) -> AgentId {
-        AgentId::from(KeyData::from_ffi(self.0))
+    pub(crate) fn as_entity(self) -> EntityId {
+        EntityId::from(KeyData::from_ffi(self.0))
     }
 }
 
@@ -84,7 +84,7 @@ pub(crate) fn view(sim: &Simulation, req: &Request, response: &mut Response) {
 
         // Create requested objects
         for &view_entity in &req.view_entities {
-            let agent = match sim.agents.get(view_entity.entity) {
+            let entity = match sim.entities.get(view_entity.entity) {
                 Some(x) => x,
                 None => {
                     continue;
@@ -93,46 +93,46 @@ pub(crate) fn view(sim: &Simulation, req: &Request, response: &mut Response) {
             ctx.spawn(|ctx| {
                 let tag = req.entity_tag(view_entity);
                 ctx.tag(tag);
-                ctx.display("name", sim.names.resolve(agent.name));
+                ctx.display("name", sim.names.resolve(entity.name));
 
                 {
                     // Display food
-                    let stored = agent.get_var(Var::FoodStored);
-                    if agent.in_set(Set::Settlements) {
-                        let capacity = agent.get_var(Var::FoodCapacity);
+                    let stored = entity.get_var(Var::FoodStored);
+                    if entity.in_set(Set::Settlements) {
+                        let capacity = entity.get_var(Var::FoodCapacity);
                         ctx.display("food", format_args!("{stored}/{capacity}"));
                     } else {
                         ctx.display("food", stored);
                     }
                 }
 
-                ctx.display("minerals", agent.get_var(Var::Minerals));
-                ctx.display("goods", agent.get_var(Var::Goods));
+                ctx.display("minerals", entity.get_var(Var::Minerals));
+                ctx.display("goods", entity.get_var(Var::Goods));
 
-                if agent.in_set(agents::Set::People) {
-                    ctx.display("renown", agent.get_var(Var::Renown));
+                if entity.in_set(entities::Set::People) {
+                    ctx.display("renown", entity.get_var(Var::Renown));
                 }
 
-                if agent.in_set(agents::Set::Settlements) {
-                    ctx.display("population", agent.get_var(Var::Population));
+                if entity.in_set(entities::Set::Settlements) {
+                    ctx.display("population", entity.get_var(Var::Population));
                     ctx.fmt(
                         "prosperity",
-                        format_args!("{:1.2}%", agent.get_var(Var::Prosperity) * 100.),
+                        format_args!("{:1.2}%", entity.get_var(Var::Prosperity) * 100.),
                     );
 
                     ctx.display(
                         "farmer_opportunity",
-                        format_args!("{:1.2}", agent.get_var(Var::FarmerOpportunity)),
+                        format_args!("{:1.2}", entity.get_var(Var::FarmerOpportunity)),
                     );
 
                     ctx.display(
                         "miner_opportunity",
-                        format_args!("{:1.2}", agent.get_var(Var::MinerOpportunity)),
+                        format_args!("{:1.2}", entity.get_var(Var::MinerOpportunity)),
                     );
 
                     ctx.display(
                         "caravan_opportunity",
-                        format_args!("{:1.2}", agent.get_var(Var::CaravanOpportunity)),
+                        format_args!("{:1.2}", entity.get_var(Var::CaravanOpportunity)),
                     );
                 }
             });
@@ -150,29 +150,29 @@ pub(crate) fn view(sim: &Simulation, req: &Request, response: &mut Response) {
             .unwrap_or_default();
 
         // Get parties and types, sorted by layer
-        let mut agents: Vec<_> = sim
-            .agents
+        let mut entities: Vec<_> = sim
+            .entities
             .iter()
-            .filter(|agent| !agent.get_flag(Flag::IsDisembodied) && !agent.get_flag(Flag::IsInside))
-            .map(|agent| (agent, sim.agents.get_type(agent.type_id)))
+            .filter(|entity| !entity.get_flag(Flag::IsDisembodied) && !entity.get_flag(Flag::IsInside))
+            .map(|entity| (entity, sim.entities.get_type(entity.type_id)))
             .collect();
 
-        agents.sort_by_key(|(_, typ)| typ.layer);
+        entities.sort_by_key(|(_, typ)| typ.layer);
 
-        for (agent, typ) in agents {
+        for (entity, typ) in entities {
             // TODO: Filter here for being in view
 
-            let is_highlighted = highlighted_entity == agent.id;
+            let is_highlighted = highlighted_entity == entity.id;
             let show_name = is_highlighted || typ.always_show_name;
 
             let name = if show_name {
-                let name = sim.names.resolve(agent.name);
+                let name = sim.names.resolve(entity.name);
                 ctx.names.push(name)
             } else {
                 Default::default()
             };
 
-            let faction = sim.agents.parent_of(Hierarchy::FactionMembership, agent.id);
+            let faction = sim.entities.parent_of(Hierarchy::FactionMembership, entity.id);
 
             let color = sim
                 .faction_colors
@@ -181,10 +181,10 @@ pub(crate) fn view(sim: &Simulation, req: &Request, response: &mut Response) {
                 .unwrap_or((200, 200, 200));
 
             ctx.entries.push(MapItemData {
-                id: agent.id.data().as_ffi(),
+                id: entity.id.data().as_ffi(),
                 name,
                 image: typ.image,
-                body: agent.body,
+                body: entity.body,
                 color,
             });
         }

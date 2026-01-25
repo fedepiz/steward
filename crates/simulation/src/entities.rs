@@ -5,12 +5,12 @@ use slotmap::*;
 use strum::*;
 use util::bitset::BitSet;
 
-new_key_type! { pub struct AgentId; }
-new_key_type! { pub struct AgentTypeId; }
+new_key_type! { pub struct EntityId; }
+new_key_type! { pub struct ArchetypeId; }
 
 #[derive(Default, Clone, Copy)]
-pub(crate) struct AgentType {
-    pub id: AgentTypeId,
+pub(crate) struct Archetype {
+    pub id: ArchetypeId,
     pub tag: &'static str,
     pub image: &'static str,
     pub name: Name,
@@ -98,51 +98,51 @@ pub(crate) enum Relationship {
 }
 
 #[derive(Default)]
-pub(crate) struct Agents {
-    null_dummy: Agent,
-    types: SlotMap<AgentTypeId, AgentType>,
-    entries: SlotMap<AgentId, Agent>,
+pub(crate) struct Entities {
+    null_dummy: Entity,
+    types: SlotMap<ArchetypeId, Archetype>,
+    entries: SlotMap<EntityId, Entity>,
     hierarchies: [HierarchyData; Hierarchy::COUNT],
     relationships: [RelationshipData; Relationship::COUNT],
-    sets: [BTreeSet<AgentId>; Set::COUNT],
-    despawn_queue: Vec<AgentId>,
+    sets: [BTreeSet<EntityId>; Set::COUNT],
+    despawn_queue: Vec<EntityId>,
 }
 
-impl Agents {
-    pub(crate) fn spawn(&mut self) -> &mut Agent {
-        let id = self.entries.insert(Agent::default());
-        let agent = Agent {
+impl Entities {
+    pub(crate) fn spawn(&mut self) -> &mut Entity {
+        let id = self.entries.insert(Entity::default());
+        let entity = Entity {
             id,
             ..Default::default()
         };
         let entry = &mut self.entries[id];
-        *entry = agent;
+        *entry = entity;
         entry
     }
 
-    pub(crate) fn despawn(&mut self, id: AgentId) -> Option<Agent> {
-        let agent = match self.entries.get_mut(id) {
+    pub(crate) fn despawn(&mut self, id: EntityId) -> Option<Entity> {
+        let entity = match self.entries.get_mut(id) {
             Some(entity) => std::mem::take(entity),
             None => {
                 return None;
             }
         };
 
-        for set_idx in agent.sets.iter() {
-            self.sets[set_idx].remove(&agent.id);
+        for set_idx in entity.sets.iter() {
+            self.sets[set_idx].remove(&entity.id);
         }
 
         for hierarchy in &mut self.hierarchies {
-            hierarchy.remove_agent(agent.id);
+            hierarchy.remove_entity(entity.id);
         }
 
         for relationship in &mut self.relationships {
-            relationship.remove_agent(agent.id);
+            relationship.remove_entity(entity.id);
         }
 
-        self.despawn_queue.push(agent.id);
+        self.despawn_queue.push(entity.id);
 
-        Some(agent)
+        Some(entity)
     }
 
     pub(crate) fn garbage_collect(&mut self) {
@@ -151,14 +151,14 @@ impl Agents {
         }
     }
 
-    pub(crate) fn spawn_with_type(&mut self, type_id: AgentTypeId) -> &mut Agent {
+    pub(crate) fn spawn_with_type(&mut self, type_id: ArchetypeId) -> &mut Entity {
         let typ = self.types.get(type_id).copied().unwrap();
         let entity = self.spawn();
         Self::set_type(entity, &typ);
         entity
     }
 
-    fn set_type(entity: &mut Agent, typ: &AgentType) {
+    fn set_type(entity: &mut Entity, typ: &Archetype) {
         entity.type_id = typ.id;
         entity.name = typ.name;
         entity.body.size = typ.size;
@@ -166,26 +166,26 @@ impl Agents {
         entity.flags.set(Flag::IsDisembodied, typ.is_disembodied);
     }
 
-    pub(crate) fn add_type(&mut self) -> &mut AgentType {
-        let id = self.types.insert(AgentType::default());
+    pub(crate) fn add_type(&mut self) -> &mut Archetype {
+        let id = self.types.insert(Archetype::default());
         let data = &mut self.types[id];
         data.id = id;
         data
     }
 
-    pub(crate) fn find_type_by_tag(&self, tag: &str) -> Option<&AgentType> {
+    pub(crate) fn find_type_by_tag(&self, tag: &str) -> Option<&Archetype> {
         self.types.values().find(|typ| typ.tag == tag)
     }
 
-    pub(crate) fn get_type(&self, id: AgentTypeId) -> AgentType {
+    pub(crate) fn get_type(&self, id: ArchetypeId) -> Archetype {
         self.types.get(id).copied().unwrap_or_default()
     }
 
-    pub(crate) fn iter(&self) -> impl Iterator<Item = &Agent> + ExactSizeIterator {
+    pub(crate) fn iter(&self) -> impl Iterator<Item = &Entity> + ExactSizeIterator {
         self.entries.values()
     }
 
-    pub(crate) fn iter_mut(&mut self) -> impl Iterator<Item = &mut Agent> + ExactSizeIterator {
+    pub(crate) fn iter_mut(&mut self) -> impl Iterator<Item = &mut Entity> + ExactSizeIterator {
         self.entries.values_mut()
     }
 
@@ -197,69 +197,69 @@ impl Agents {
         self.entries.capacity()
     }
 
-    pub(crate) fn ids(&self) -> impl Iterator<Item = AgentId> + ExactSizeIterator {
+    pub(crate) fn ids(&self) -> impl Iterator<Item = EntityId> + ExactSizeIterator {
         self.entries.keys()
     }
 
-    pub(crate) fn get(&self, id: AgentId) -> Option<&Agent> {
+    pub(crate) fn get(&self, id: EntityId) -> Option<&Entity> {
         self.entries.get(id)
     }
 
-    pub(crate) fn get_mut(&mut self, id: AgentId) -> Option<&mut Agent> {
+    pub(crate) fn get_mut(&mut self, id: EntityId) -> Option<&mut Entity> {
         self.entries.get_mut(id)
     }
 
-    pub fn vars_mut(&mut self, id: AgentId) -> VarsMut<'_> {
+    pub fn vars_mut(&mut self, id: EntityId) -> VarsMut<'_> {
         self.entries
             .get_mut(id)
-            .map(Agent::vars_mut)
+            .map(Entity::vars_mut)
             .unwrap_or_default()
     }
 
-    pub fn add_to_set(&mut self, set: Set, agent: AgentId) -> bool {
+    pub fn add_to_set(&mut self, set: Set, entity: EntityId) -> bool {
         let idx = set as usize;
-        self.entries[agent].sets.set(idx, true);
-        self.sets[idx].insert(agent)
+        self.entries[entity].sets.set(idx, true);
+        self.sets[idx].insert(entity)
     }
 
-    pub fn remove_from_set(&mut self, set: Set, agent: AgentId) -> bool {
+    pub fn remove_from_set(&mut self, set: Set, entity: EntityId) -> bool {
         let idx = set as usize;
-        self.entries[agent].sets.set(idx, false);
-        self.sets[idx].remove(&agent)
+        self.entries[entity].sets.set(idx, false);
+        self.sets[idx].remove(&entity)
     }
 
-    pub fn iter_set_ids(&self, set: Set) -> impl Iterator<Item = AgentId> + use<'_> {
+    pub fn iter_set_ids(&self, set: Set) -> impl Iterator<Item = EntityId> + use<'_> {
         self.sets[set as usize].iter().copied()
     }
 
-    pub fn iter_set(&self, set: Set) -> impl Iterator<Item = &Agent> + use<'_> {
+    pub fn iter_set(&self, set: Set) -> impl Iterator<Item = &Entity> + use<'_> {
         self.iter_set_ids(set).map(|id| &self.entries[id])
     }
 
-    pub fn in_set(&self, id: AgentId, set: Set) -> bool {
+    pub fn in_set(&self, id: EntityId, set: Set) -> bool {
         self.entries[id].in_set(set)
     }
 
-    pub fn set_parent(&mut self, hierarchy: Hierarchy, parent: AgentId, child: AgentId) {
+    pub fn set_parent(&mut self, hierarchy: Hierarchy, parent: EntityId, child: EntityId) {
         let h_data = &mut self.hierarchies[hierarchy as usize];
         h_data.change(parent, child);
     }
 
-    pub fn remove_parent(&mut self, hierarchy: Hierarchy, child: AgentId) {
+    pub fn remove_parent(&mut self, hierarchy: Hierarchy, child: EntityId) {
         let h_data = &mut self.hierarchies[hierarchy as usize];
-        h_data.change(AgentId::null(), child);
+        h_data.change(EntityId::null(), child);
     }
 
     pub fn children_of(
         &self,
         hierarchy: Hierarchy,
-        parent: AgentId,
-    ) -> impl Iterator<Item = AgentId> + use<'_> {
+        parent: EntityId,
+    ) -> impl Iterator<Item = EntityId> + use<'_> {
         let h_data = &self.hierarchies[hierarchy as usize];
         h_data.children_of(parent)
     }
 
-    pub fn parent_of(&self, hierarchy: Hierarchy, child: AgentId) -> AgentId {
+    pub fn parent_of(&self, hierarchy: Hierarchy, child: EntityId) -> EntityId {
         let h_data = &self.hierarchies[hierarchy as usize];
         h_data.parent_of(child)
     }
@@ -267,15 +267,15 @@ impl Agents {
     pub fn set_relationship(
         &mut self,
         relationship: Relationship,
-        from: AgentId,
-        to: AgentId,
+        from: EntityId,
+        to: EntityId,
         value: f32,
     ) {
         let rel_data = &mut self.relationships[relationship as usize];
         rel_data.set(from, to, value);
     }
 
-    pub fn remove_relationship(&mut self, relationship: Relationship, from: AgentId, to: AgentId) {
+    pub fn remove_relationship(&mut self, relationship: Relationship, from: EntityId, to: EntityId) {
         let rel_data = &mut self.relationships[relationship as usize];
         rel_data.remove(from, to);
     }
@@ -283,41 +283,41 @@ impl Agents {
     pub fn relationship(
         &self,
         relationship: Relationship,
-        from: AgentId,
-        to: AgentId,
+        from: EntityId,
+        to: EntityId,
     ) -> Option<f32> {
         let rel_data = &self.relationships[relationship as usize];
         rel_data.get(from, to)
     }
 
-    pub fn has_relationship(&self, relationship: Relationship, from: AgentId, to: AgentId) -> bool {
+    pub fn has_relationship(&self, relationship: Relationship, from: EntityId, to: EntityId) -> bool {
         self.relationship(relationship, from, to).is_some()
     }
 
     pub fn relationships_from(
         &self,
         relationship: Relationship,
-        from: AgentId,
-    ) -> impl Iterator<Item = (AgentId, f32)> + use<'_> {
+        from: EntityId,
+    ) -> impl Iterator<Item = (EntityId, f32)> + use<'_> {
         let rel_data = &self.relationships[relationship as usize];
         rel_data.from(from)
     }
 
-    pub fn clear_relationships_from(&mut self, relationship: Relationship, from: AgentId) {
+    pub fn clear_relationships_from(&mut self, relationship: Relationship, from: EntityId) {
         let rel_data = &mut self.relationships[relationship as usize];
         rel_data.clear_from(from);
     }
 
-    pub fn clear_relationships_to(&mut self, relationship: Relationship, to: AgentId) {
+    pub fn clear_relationships_to(&mut self, relationship: Relationship, to: EntityId) {
         let rel_data = &mut self.relationships[relationship as usize];
         rel_data.clear_to(to);
     }
 }
 
-impl std::ops::Index<AgentId> for Agents {
-    type Output = Agent;
+impl std::ops::Index<EntityId> for Entities {
+    type Output = Entity;
 
-    fn index(&self, index: AgentId) -> &Self::Output {
+    fn index(&self, index: EntityId) -> &Self::Output {
         match self.entries.get(index) {
             Some(x) => x,
             None => {
@@ -326,15 +326,15 @@ impl std::ops::Index<AgentId> for Agents {
                 if index.is_null() {
                     &self.null_dummy
                 } else {
-                    panic!("Invalid agent id used")
+                    panic!("Invalid entity id used")
                 }
             }
         }
     }
 }
 
-impl std::ops::IndexMut<AgentId> for Agents {
-    fn index_mut(&mut self, index: AgentId) -> &mut Self::Output {
+impl std::ops::IndexMut<EntityId> for Entities {
+    fn index_mut(&mut self, index: EntityId) -> &mut Self::Output {
         match self.entries.get_mut(index) {
             Some(x) => x,
             None => {
@@ -343,23 +343,23 @@ impl std::ops::IndexMut<AgentId> for Agents {
                 if index.is_null() {
                     &mut self.null_dummy
                 } else {
-                    panic!("Invalid agent id used")
+                    panic!("Invalid entity id used")
                 }
             }
         }
     }
 }
 
-impl std::ops::Index<AgentTypeId> for Agents {
-    type Output = AgentType;
+impl std::ops::Index<ArchetypeId> for Entities {
+    type Output = Archetype;
 
-    fn index(&self, index: AgentTypeId) -> &Self::Output {
+    fn index(&self, index: ArchetypeId) -> &Self::Output {
         &self.types[index]
     }
 }
 
-impl std::ops::IndexMut<AgentTypeId> for Agents {
-    fn index_mut(&mut self, index: AgentTypeId) -> &mut Self::Output {
+impl std::ops::IndexMut<ArchetypeId> for Entities {
+    fn index_mut(&mut self, index: ArchetypeId) -> &mut Self::Output {
         &mut self.types[index]
     }
 }
@@ -368,8 +368,8 @@ const SET_BITSET_SIZE: usize = (Set::COUNT + 63) / 64;
 const FLAG_BITSET_SIZE: usize = (Flag::COUNT + 63) / 64;
 
 #[derive(Default, Clone, Copy)]
-pub(crate) struct Agent {
-    pub id: AgentId,
+pub(crate) struct Entity {
+    pub id: EntityId,
     pub name: Name,
     pub is_player: bool,
     pub behavior: Behavior,
@@ -380,7 +380,7 @@ pub(crate) struct Agent {
     sets: BitSet<SET_BITSET_SIZE>,
     pub flags: Flags,
     // Party-like
-    pub type_id: AgentTypeId,
+    pub type_id: ArchetypeId,
     pub body: Body,
     pub speed: f32,
 }
@@ -420,16 +420,16 @@ impl Flags {
 pub(crate) enum Location {
     Nowhere,
     FarOut,
-    Near(AgentId),
-    Proximate(AgentId),
-    Inside(AgentId),
+    Near(EntityId),
+    Proximate(EntityId),
+    Inside(EntityId),
 }
 
 impl Location {
-    pub fn is_at(self, agent: AgentId) -> bool {
+    pub fn is_at(self, entity: EntityId) -> bool {
         match self {
-            Self::Proximate(id) => id == agent,
-            Self::Inside(id) => id == agent,
+            Self::Proximate(id) => id == entity,
+            Self::Inside(id) => id == entity,
             _ => false,
         }
     }
@@ -539,7 +539,7 @@ impl TaskInteraction {
 pub enum Behavior {
     Idle,
     GoTo {
-        target: AgentId,
+        target: EntityId,
         on_arrival: OnArrival,
     },
     Player,
@@ -551,7 +551,7 @@ impl Default for Behavior {
     }
 }
 
-impl Agent {
+impl Entity {
     pub(crate) fn in_set(&self, flag: Set) -> bool {
         self.sets.get(flag as usize)
     }
@@ -614,15 +614,15 @@ impl<'a> VarsMut<'a> {
 
 #[derive(Default)]
 struct HierarchyData {
-    child_to_parent: SecondaryMap<AgentId, AgentId>,
+    child_to_parent: SecondaryMap<EntityId, EntityId>,
     // We store parent to child "semi-contiguously" as pairs.
     // We store the child as a raw u64 before we need to have a min-max range.
     // The u64 is just the raw encoding of the Slotmap key.
-    parent_to_child: BTreeSet<(AgentId, u64)>,
+    parent_to_child: BTreeSet<(EntityId, u64)>,
 }
 
 impl HierarchyData {
-    fn change(&mut self, parent: AgentId, child: AgentId) {
+    fn change(&mut self, parent: EntityId, child: EntityId) {
         let previous_parent = if parent.is_null() {
             self.child_to_parent.remove(child)
         } else {
@@ -638,36 +638,36 @@ impl HierarchyData {
         }
     }
 
-    fn parent_of(&self, agent: AgentId) -> AgentId {
-        self.child_to_parent.get(agent).copied().unwrap_or_default()
+    fn parent_of(&self, entity: EntityId) -> EntityId {
+        self.child_to_parent.get(entity).copied().unwrap_or_default()
     }
 
-    fn children_of(&self, parent: AgentId) -> impl Iterator<Item = AgentId> + use<'_> {
+    fn children_of(&self, parent: EntityId) -> impl Iterator<Item = EntityId> + use<'_> {
         self.parent_to_child
             .range(Self::range_of(parent))
-            .map(|&(_, child)| AgentId::from(KeyData::from_ffi(child)))
+            .map(|&(_, child)| EntityId::from(KeyData::from_ffi(child)))
     }
 
-    fn range_of(parent: AgentId) -> std::ops::RangeInclusive<(AgentId, u64)> {
+    fn range_of(parent: EntityId) -> std::ops::RangeInclusive<(EntityId, u64)> {
         (parent, u64::MIN)..=(parent, u64::MAX)
     }
 
-    fn remove_agent(&mut self, agent: AgentId) {
+    fn remove_entity(&mut self, entity: EntityId) {
         // Remove slice of children
         let children_list = self
             .parent_to_child
-            .extract_if(Self::range_of(agent), |_| true)
-            .map(|(_, child)| AgentId::from(KeyData::from_ffi(child)));
+            .extract_if(Self::range_of(entity), |_| true)
+            .map(|(_, child)| EntityId::from(KeyData::from_ffi(child)));
 
         // For each childi n the slice, remove from the parent
         for child in children_list {
             let old_parent = self.child_to_parent.remove(child);
-            assert!(old_parent == Some(agent));
+            assert!(old_parent == Some(entity));
         }
 
-        // Remove agent's own parent
-        if let Some(parent) = self.child_to_parent.remove(agent) {
-            let idx = agent.0.as_ffi();
+        // Remove entity's own parent
+        if let Some(parent) = self.child_to_parent.remove(entity) {
+            let idx = entity.0.as_ffi();
             self.parent_to_child.remove(&(parent, idx));
         }
     }
@@ -675,12 +675,12 @@ impl HierarchyData {
 
 #[derive(Default)]
 struct RelationshipData {
-    out_edges: SecondaryMap<AgentId, BTreeMap<AgentId, f32>>,
-    in_edges: SecondaryMap<AgentId, BTreeSet<AgentId>>,
+    out_edges: SecondaryMap<EntityId, BTreeMap<EntityId, f32>>,
+    in_edges: SecondaryMap<EntityId, BTreeSet<EntityId>>,
 }
 
 impl RelationshipData {
-    fn set(&mut self, from: AgentId, to: AgentId, value: f32) {
+    fn set(&mut self, from: EntityId, to: EntityId, value: f32) {
         if let Some(map) = self.out_edges.get_mut(from) {
             map.insert(to, value);
         } else {
@@ -698,7 +698,7 @@ impl RelationshipData {
         }
     }
 
-    fn remove(&mut self, from: AgentId, to: AgentId) {
+    fn remove(&mut self, from: EntityId, to: EntityId) {
         if let Some(map) = self.out_edges.get_mut(from) {
             map.remove(&to);
             if map.is_empty() {
@@ -714,13 +714,13 @@ impl RelationshipData {
         }
     }
 
-    fn get(&self, from: AgentId, to: AgentId) -> Option<f32> {
+    fn get(&self, from: EntityId, to: EntityId) -> Option<f32> {
         self.out_edges
             .get(from)
             .and_then(|map| map.get(&to).copied())
     }
 
-    fn from(&self, from: AgentId) -> impl Iterator<Item = (AgentId, f32)> + use<'_> {
+    fn from(&self, from: EntityId) -> impl Iterator<Item = (EntityId, f32)> + use<'_> {
         self.out_edges
             .get(from)
             .map(|map| map.iter().map(|(id, value)| (*id, *value)))
@@ -728,7 +728,7 @@ impl RelationshipData {
             .flatten()
     }
 
-    fn clear_from(&mut self, from: AgentId) {
+    fn clear_from(&mut self, from: EntityId) {
         let edges = match self.out_edges.remove(from) {
             Some(edges) => edges,
             None => {
@@ -746,7 +746,7 @@ impl RelationshipData {
         }
     }
 
-    fn clear_to(&mut self, to: AgentId) {
+    fn clear_to(&mut self, to: EntityId) {
         let froms = match self.in_edges.remove(to) {
             Some(froms) => froms,
             None => {
@@ -764,9 +764,9 @@ impl RelationshipData {
         }
     }
 
-    fn remove_agent(&mut self, agent: AgentId) {
-        self.clear_from(agent);
-        self.clear_to(agent);
+    fn remove_entity(&mut self, entity: EntityId) {
+        self.clear_from(entity);
+        self.clear_to(entity);
     }
 }
 
@@ -774,42 +774,42 @@ impl RelationshipData {
 mod tests {
     use super::*;
 
-    fn insert_agent(agents: &mut Agents) -> AgentId {
-        let id = agents.entries.insert(Agent::default());
-        if let Some(agent) = agents.entries.get_mut(id) {
-            agent.id = id;
+    fn insert_entity(entities: &mut Entities) -> EntityId {
+        let id = entities.entries.insert(Entity::default());
+        if let Some(entity) = entities.entries.get_mut(id) {
+            entity.id = id;
         }
         id
     }
 
     #[test]
     fn hierarchy_parent_despawn_clears_child_links() {
-        let mut agents = Agents::default();
-        let parent = insert_agent(&mut agents);
-        let child = insert_agent(&mut agents);
+        let mut entities = Entities::default();
+        let parent = insert_entity(&mut entities);
+        let child = insert_entity(&mut entities);
 
-        agents.set_parent(Hierarchy::FactionMembership, parent, child);
-        agents.despawn(parent);
+        entities.set_parent(Hierarchy::FactionMembership, parent, child);
+        entities.despawn(parent);
 
-        let children: Vec<_> = agents
+        let children: Vec<_> = entities
             .children_of(Hierarchy::FactionMembership, parent)
             .collect();
         assert!(children.is_empty());
 
-        let h_data = &agents.hierarchies[Hierarchy::FactionMembership as usize];
+        let h_data = &entities.hierarchies[Hierarchy::FactionMembership as usize];
         assert!(h_data.parent_of(child).is_null());
     }
 
     #[test]
     fn hierarchy_child_despawn_clears_parent_links() {
-        let mut agents = Agents::default();
-        let parent = insert_agent(&mut agents);
-        let child = insert_agent(&mut agents);
+        let mut entities = Entities::default();
+        let parent = insert_entity(&mut entities);
+        let child = insert_entity(&mut entities);
 
-        agents.set_parent(Hierarchy::FactionMembership, parent, child);
-        agents.despawn(child);
+        entities.set_parent(Hierarchy::FactionMembership, parent, child);
+        entities.despawn(child);
 
-        let children: Vec<_> = agents
+        let children: Vec<_> = entities
             .children_of(Hierarchy::FactionMembership, parent)
             .collect();
         assert!(children.is_empty());
@@ -817,42 +817,42 @@ mod tests {
 
     #[test]
     fn hierarchy_reparenting_removes_previous_link() {
-        let mut agents = Agents::default();
-        let parent_a = insert_agent(&mut agents);
-        let parent_b = insert_agent(&mut agents);
-        let child = insert_agent(&mut agents);
+        let mut entities = Entities::default();
+        let parent_a = insert_entity(&mut entities);
+        let parent_b = insert_entity(&mut entities);
+        let child = insert_entity(&mut entities);
 
-        agents.set_parent(Hierarchy::FactionMembership, parent_a, child);
-        agents.set_parent(Hierarchy::FactionMembership, parent_b, child);
+        entities.set_parent(Hierarchy::FactionMembership, parent_a, child);
+        entities.set_parent(Hierarchy::FactionMembership, parent_b, child);
 
-        let children_a: Vec<_> = agents
+        let children_a: Vec<_> = entities
             .children_of(Hierarchy::FactionMembership, parent_a)
             .collect();
-        let children_b: Vec<_> = agents
+        let children_b: Vec<_> = entities
             .children_of(Hierarchy::FactionMembership, parent_b)
             .collect();
         assert!(children_a.is_empty());
         assert_eq!(children_b, vec![child]);
 
-        let h_data = &agents.hierarchies[Hierarchy::FactionMembership as usize];
+        let h_data = &entities.hierarchies[Hierarchy::FactionMembership as usize];
         assert_eq!(h_data.parent_of(child), parent_b);
     }
 
     #[test]
     fn relationships_set_get_and_has() {
-        let mut agents = Agents::default();
-        let a = insert_agent(&mut agents);
-        let b = insert_agent(&mut agents);
-        let c = insert_agent(&mut agents);
+        let mut entities = Entities::default();
+        let a = insert_entity(&mut entities);
+        let b = insert_entity(&mut entities);
+        let c = insert_entity(&mut entities);
 
-        agents.set_relationship(Relationship::Placeholder1, a, b, 1.5);
+        entities.set_relationship(Relationship::Placeholder1, a, b, 1.5);
         assert_eq!(
-            agents.relationship(Relationship::Placeholder1, a, b),
+            entities.relationship(Relationship::Placeholder1, a, b),
             Some(1.5)
         );
-        assert!(agents.has_relationship(Relationship::Placeholder1, a, b));
+        assert!(entities.has_relationship(Relationship::Placeholder1, a, b));
         assert!(
-            agents
+            entities
                 .relationship(Relationship::Placeholder1, a, c)
                 .is_none()
         );
@@ -860,149 +860,149 @@ mod tests {
 
     #[test]
     fn relationships_update_value() {
-        let mut agents = Agents::default();
-        let a = insert_agent(&mut agents);
-        let b = insert_agent(&mut agents);
+        let mut entities = Entities::default();
+        let a = insert_entity(&mut entities);
+        let b = insert_entity(&mut entities);
 
-        agents.set_relationship(Relationship::Placeholder1, a, b, 1.0);
-        agents.set_relationship(Relationship::Placeholder1, a, b, 2.0);
+        entities.set_relationship(Relationship::Placeholder1, a, b, 1.0);
+        entities.set_relationship(Relationship::Placeholder1, a, b, 2.0);
         assert_eq!(
-            agents.relationship(Relationship::Placeholder1, a, b),
+            entities.relationship(Relationship::Placeholder1, a, b),
             Some(2.0)
         );
     }
 
     #[test]
     fn relationships_clear_from_only_removes_outgoing() {
-        let mut agents = Agents::default();
-        let a = insert_agent(&mut agents);
-        let b = insert_agent(&mut agents);
-        let c = insert_agent(&mut agents);
-        let d = insert_agent(&mut agents);
+        let mut entities = Entities::default();
+        let a = insert_entity(&mut entities);
+        let b = insert_entity(&mut entities);
+        let c = insert_entity(&mut entities);
+        let d = insert_entity(&mut entities);
 
-        agents.set_relationship(Relationship::Placeholder1, a, b, 1.0);
-        agents.set_relationship(Relationship::Placeholder1, a, c, 2.0);
-        agents.set_relationship(Relationship::Placeholder1, d, a, 3.0);
+        entities.set_relationship(Relationship::Placeholder1, a, b, 1.0);
+        entities.set_relationship(Relationship::Placeholder1, a, c, 2.0);
+        entities.set_relationship(Relationship::Placeholder1, d, a, 3.0);
 
-        agents.clear_relationships_from(Relationship::Placeholder1, a);
+        entities.clear_relationships_from(Relationship::Placeholder1, a);
 
         assert!(
-            agents
+            entities
                 .relationship(Relationship::Placeholder1, a, b)
                 .is_none()
         );
         assert!(
-            agents
+            entities
                 .relationship(Relationship::Placeholder1, a, c)
                 .is_none()
         );
         assert_eq!(
-            agents.relationship(Relationship::Placeholder1, d, a),
+            entities.relationship(Relationship::Placeholder1, d, a),
             Some(3.0)
         );
     }
 
     #[test]
     fn relationships_clear_to_only_removes_incoming() {
-        let mut agents = Agents::default();
-        let a = insert_agent(&mut agents);
-        let b = insert_agent(&mut agents);
-        let c = insert_agent(&mut agents);
-        let d = insert_agent(&mut agents);
+        let mut entities = Entities::default();
+        let a = insert_entity(&mut entities);
+        let b = insert_entity(&mut entities);
+        let c = insert_entity(&mut entities);
+        let d = insert_entity(&mut entities);
 
-        agents.set_relationship(Relationship::Placeholder1, a, b, 1.0);
-        agents.set_relationship(Relationship::Placeholder1, c, b, 2.0);
-        agents.set_relationship(Relationship::Placeholder1, b, d, 3.0);
+        entities.set_relationship(Relationship::Placeholder1, a, b, 1.0);
+        entities.set_relationship(Relationship::Placeholder1, c, b, 2.0);
+        entities.set_relationship(Relationship::Placeholder1, b, d, 3.0);
 
-        agents.clear_relationships_to(Relationship::Placeholder1, b);
+        entities.clear_relationships_to(Relationship::Placeholder1, b);
 
         assert!(
-            agents
+            entities
                 .relationship(Relationship::Placeholder1, a, b)
                 .is_none()
         );
         assert!(
-            agents
+            entities
                 .relationship(Relationship::Placeholder1, c, b)
                 .is_none()
         );
         assert_eq!(
-            agents.relationship(Relationship::Placeholder1, b, d),
+            entities.relationship(Relationship::Placeholder1, b, d),
             Some(3.0)
         );
     }
 
     #[test]
     fn relationships_despawn_clears_incoming_and_outgoing() {
-        let mut agents = Agents::default();
-        let a = insert_agent(&mut agents);
-        let b = insert_agent(&mut agents);
-        let c = insert_agent(&mut agents);
-        let d = insert_agent(&mut agents);
-        let e = insert_agent(&mut agents);
+        let mut entities = Entities::default();
+        let a = insert_entity(&mut entities);
+        let b = insert_entity(&mut entities);
+        let c = insert_entity(&mut entities);
+        let d = insert_entity(&mut entities);
+        let e = insert_entity(&mut entities);
 
-        agents.set_relationship(Relationship::Placeholder1, a, b, 1.0);
-        agents.set_relationship(Relationship::Placeholder1, b, c, 2.0);
-        agents.set_relationship(Relationship::Placeholder1, c, b, 3.0);
-        agents.set_relationship(Relationship::Placeholder1, d, e, 4.0);
+        entities.set_relationship(Relationship::Placeholder1, a, b, 1.0);
+        entities.set_relationship(Relationship::Placeholder1, b, c, 2.0);
+        entities.set_relationship(Relationship::Placeholder1, c, b, 3.0);
+        entities.set_relationship(Relationship::Placeholder1, d, e, 4.0);
 
-        agents.despawn(b);
+        entities.despawn(b);
 
         assert!(
-            agents
+            entities
                 .relationship(Relationship::Placeholder1, a, b)
                 .is_none()
         );
         assert!(
-            agents
+            entities
                 .relationship(Relationship::Placeholder1, b, c)
                 .is_none()
         );
         assert!(
-            agents
+            entities
                 .relationship(Relationship::Placeholder1, c, b)
                 .is_none()
         );
         assert_eq!(
-            agents.relationship(Relationship::Placeholder1, d, e),
+            entities.relationship(Relationship::Placeholder1, d, e),
             Some(4.0)
         );
     }
 
     #[test]
     fn relationships_are_isolated_by_type() {
-        let mut agents = Agents::default();
-        let a = insert_agent(&mut agents);
-        let b = insert_agent(&mut agents);
+        let mut entities = Entities::default();
+        let a = insert_entity(&mut entities);
+        let b = insert_entity(&mut entities);
 
-        agents.set_relationship(Relationship::Placeholder1, a, b, 1.0);
-        agents.set_relationship(Relationship::Placeholder2, a, b, 2.0);
-        agents.remove_relationship(Relationship::Placeholder1, a, b);
+        entities.set_relationship(Relationship::Placeholder1, a, b, 1.0);
+        entities.set_relationship(Relationship::Placeholder2, a, b, 2.0);
+        entities.remove_relationship(Relationship::Placeholder1, a, b);
 
         assert!(
-            agents
+            entities
                 .relationship(Relationship::Placeholder1, a, b)
                 .is_none()
         );
         assert_eq!(
-            agents.relationship(Relationship::Placeholder2, a, b),
+            entities.relationship(Relationship::Placeholder2, a, b),
             Some(2.0)
         );
     }
 
     #[test]
-    fn relationships_from_are_sorted_by_agent_id() {
-        let mut agents = Agents::default();
-        let from = insert_agent(&mut agents);
-        let b = insert_agent(&mut agents);
-        let c = insert_agent(&mut agents);
+    fn relationships_from_are_sorted_by_entity_id() {
+        let mut entities = Entities::default();
+        let from = insert_entity(&mut entities);
+        let b = insert_entity(&mut entities);
+        let c = insert_entity(&mut entities);
 
         assert!(b < c);
 
-        agents.set_relationship(Relationship::Placeholder1, from, c, 2.0);
-        agents.set_relationship(Relationship::Placeholder1, from, b, 1.0);
+        entities.set_relationship(Relationship::Placeholder1, from, c, 2.0);
+        entities.set_relationship(Relationship::Placeholder1, from, b, 1.0);
 
-        let edges: Vec<_> = agents
+        let edges: Vec<_> = entities
             .relationships_from(Relationship::Placeholder1, from)
             .collect();
         assert_eq!(edges, vec![(b, 1.0), (c, 2.0)]);
@@ -1010,94 +1010,94 @@ mod tests {
 
     #[test]
     fn sets_add_remove_and_iterate() {
-        let mut agents = Agents::default();
-        let a = insert_agent(&mut agents);
-        let b = insert_agent(&mut agents);
+        let mut entities = Entities::default();
+        let a = insert_entity(&mut entities);
+        let b = insert_entity(&mut entities);
 
-        assert!(agents.add_to_set(Set::People, a));
-        assert!(agents.add_to_set(Set::People, b));
-        assert!(!agents.add_to_set(Set::People, a));
+        assert!(entities.add_to_set(Set::People, a));
+        assert!(entities.add_to_set(Set::People, b));
+        assert!(!entities.add_to_set(Set::People, a));
 
-        let mut members: Vec<_> = agents.iter_set_ids(Set::People).collect();
+        let mut members: Vec<_> = entities.iter_set_ids(Set::People).collect();
         members.sort();
         assert_eq!(members, vec![a, b]);
 
-        assert!(agents.remove_from_set(Set::People, a));
-        assert!(!agents.remove_from_set(Set::People, a));
-        let members: Vec<_> = agents.iter_set_ids(Set::People).collect();
+        assert!(entities.remove_from_set(Set::People, a));
+        assert!(!entities.remove_from_set(Set::People, a));
+        let members: Vec<_> = entities.iter_set_ids(Set::People).collect();
         assert_eq!(members, vec![b]);
     }
 
     #[test]
     fn sets_despawn_removes_membership() {
-        let mut agents = Agents::default();
-        let a = insert_agent(&mut agents);
-        let b = insert_agent(&mut agents);
+        let mut entities = Entities::default();
+        let a = insert_entity(&mut entities);
+        let b = insert_entity(&mut entities);
 
-        agents.add_to_set(Set::Settlements, a);
-        agents.add_to_set(Set::Settlements, b);
+        entities.add_to_set(Set::Settlements, a);
+        entities.add_to_set(Set::Settlements, b);
 
-        agents.despawn(a);
-        let members: Vec<_> = agents.iter_set_ids(Set::Settlements).collect();
+        entities.despawn(a);
+        let members: Vec<_> = entities.iter_set_ids(Set::Settlements).collect();
         assert_eq!(members, vec![b]);
     }
 
     #[test]
     fn vars_default_to_zero() {
-        let mut agents = Agents::default();
-        agents.spawn();
-        let agent = agents.iter().next().unwrap();
+        let mut entities = Entities::default();
+        entities.spawn();
+        let entity = entities.iter().next().unwrap();
 
-        let agent = &agents[agent.id];
-        assert_eq!(agent.get_var(Var::Renown), 0.0);
-        assert_eq!(agent.get_var(Var::Population), 0.0);
-        assert_eq!(agent.get_var(Var::Prosperity), 0.0);
+        let entity = &entities[entity.id];
+        assert_eq!(entity.get_var(Var::Renown), 0.0);
+        assert_eq!(entity.get_var(Var::Population), 0.0);
+        assert_eq!(entity.get_var(Var::Prosperity), 0.0);
     }
 
     #[test]
     fn vars_mut_set_persists() {
-        let mut agents = Agents::default();
-        agents.spawn();
-        let id = agents.ids().next().unwrap();
+        let mut entities = Entities::default();
+        entities.spawn();
+        let id = entities.ids().next().unwrap();
 
         {
-            let mut vars = agents.vars_mut(id);
+            let mut vars = entities.vars_mut(id);
             vars.set(Var::Renown, 3.5);
             vars.set(Var::Population, 10.0);
         }
 
-        let agent = &agents[id];
-        assert_eq!(agent.get_var(Var::Renown), 3.5);
-        assert_eq!(agent.get_var(Var::Population), 10.0);
+        let entity = &entities[id];
+        assert_eq!(entity.get_var(Var::Renown), 3.5);
+        assert_eq!(entity.get_var(Var::Population), 10.0);
     }
 
     #[test]
-    fn vars_agent_methods_are_consistent() {
-        let mut agents = Agents::default();
-        let id = agents.spawn().id;
+    fn vars_entity_methods_are_consistent() {
+        let mut entities = Entities::default();
+        let id = entities.spawn().id;
 
         {
-            let agent = agents.get_mut(id).unwrap();
-            let mut vars = agent.vars_mut();
+            let entity = entities.get_mut(id).unwrap();
+            let mut vars = entity.vars_mut();
             vars.set(Var::Renown, 4.0);
         }
 
-        let agent = agents.get(id).unwrap();
-        assert_eq!(agent.get_var(Var::Renown), 4.);
+        let entity = entities.get(id).unwrap();
+        assert_eq!(entity.get_var(Var::Renown), 4.);
     }
 
     #[test]
-    fn agent_flags_default_false() {
-        let agent = Agent::default();
-        assert!(!agent.flags.get(Flag::IsFarmer));
+    fn entity_flags_default_false() {
+        let entity = Entity::default();
+        assert!(!entity.flags.get(Flag::IsFarmer));
     }
 
     #[test]
-    fn agent_flags_set_and_clear() {
-        let mut agent = Agent::default();
-        agent.flags.set(Flag::IsFarmer, true);
-        assert!(agent.flags.get(Flag::IsFarmer));
-        agent.flags.set(Flag::IsFarmer, false);
-        assert!(!agent.flags.get(Flag::IsFarmer));
+    fn entity_flags_set_and_clear() {
+        let mut entity = Entity::default();
+        entity.flags.set(Flag::IsFarmer, true);
+        assert!(entity.flags.get(Flag::IsFarmer));
+        entity.flags.set(Flag::IsFarmer, false);
+        assert!(!entity.flags.get(Flag::IsFarmer));
     }
 }
