@@ -137,13 +137,26 @@ pub(crate) enum Goal {
     ToParty {
         target: PartyId,
         distance: f32,
-        enter_on_arrival: bool,
+        on_arrival: OnArrival,
     },
 }
 
 impl Default for Goal {
     fn default() -> Self {
         Self::Idle
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug)]
+pub(crate) enum OnArrival {
+    Nothing,
+    Enter,
+    Attack,
+}
+
+impl Default for OnArrival {
+    fn default() -> Self {
+        Self::Nothing
     }
 }
 

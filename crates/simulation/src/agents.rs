@@ -1,6 +1,9 @@
 use std::collections::{BTreeMap, BTreeSet};
 
-use crate::{names::Name, parties::PartyId};
+use crate::{
+    names::Name,
+    parties::{OnArrival, PartyId},
+};
 use slotmap::*;
 use strum::*;
 use util::bitset::BitSet;
@@ -428,7 +431,7 @@ pub enum Behavior {
     Idle,
     GoTo {
         target: AgentId,
-        enter_on_arrival: bool,
+        on_arrival: OnArrival,
     },
     Player,
 }

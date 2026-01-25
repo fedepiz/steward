@@ -68,7 +68,7 @@ fn tick(sim: &mut Simulation, mut request: Request, arena: &Bump) -> Response {
             sim.player_party_goal = Goal::ToParty {
                 target,
                 distance: 0.,
-                enter_on_arrival: false,
+                on_arrival: OnArrival::Nothing,
             };
         }
     }
@@ -110,7 +110,7 @@ fn tick(sim: &mut Simulation, mut request: Request, arena: &Bump) -> Response {
             let desired_container = match goal {
                 Goal::ToParty {
                     target,
-                    enter_on_arrival: true,
+                    on_arrival: OnArrival::Enter,
                     ..
                 } => target,
                 _ => PartyId::null(),
@@ -777,22 +777,26 @@ fn determine_party_goal(sim: &Simulation, party: &Party) -> Goal {
     match agent.behavior {
         Behavior::Idle => Goal::Idle,
         Behavior::Player => sim.player_party_goal,
-        Behavior::GoTo {
-            target,
-            enter_on_arrival,
-        } => {
-            let distance = if enter_on_arrival {
+        Behavior::GoTo { target, on_arrival } => {
+            let must_get_same_position = match on_arrival {
+                OnArrival::Enter => true,
+                OnArrival::Nothing => false,
+                OnArrival::Attack => false,
+            };
+
+            let distance = if must_get_same_position {
                 std::f32::NEG_INFINITY
             } else {
                 0.
             };
+
             sim.agents
                 .get(target)
                 .and_then(|agent| sim.parties.get(agent.party))
                 .map(|party| Goal::ToParty {
                     target: party.id,
                     distance,
-                    enter_on_arrival,
+                    on_arrival,
                 })
                 .unwrap_or_default()
         }
