@@ -100,11 +100,6 @@ fn tick(sim: &mut Simulation, mut request: Request, arena: &Bump) -> Response {
             tick_activities(arena, sim);
         }
 
-        sim.parties.garbage_collect();
-        // NOTE: NO MORE PARTY REMOVALS AFTER HERE!
-        // DO ALL YOUR LOGIC DESPAWNING STUFF BEFORE
-        // FROM HERE ON WE HAVE THE VERY "MECHANICAL" TICK PART
-
         let mut movement_elements = AVec::with_capacity_in(sim.parties.len(), arena);
 
         let mut desire_exit = AVec::with_capacity_in(sim.parties.len(), arena);
@@ -265,8 +260,10 @@ fn tick(sim: &mut Simulation, mut request: Request, arena: &Bump) -> Response {
                 sim.agents[id].location = location;
             }
         }
-    }
 
+        sim.agents.garbage_collect();
+        sim.parties.garbage_collect();
+    }
     let mut response = Response::default();
     crate::view::view(sim, &request, &mut response);
     response
@@ -402,6 +399,9 @@ fn detections(
                 continue;
             }
             let target = &sim.parties[target];
+            if target.agent.is_null() {
+                continue;
+            }
             let target_agent = &sim.agents[target.agent];
             // Distance net of sizes. 0 or lower means collision
             let distance = body_distance(party.body, target.body);

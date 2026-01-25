@@ -4,6 +4,7 @@ use crate::{
     names::Name,
     parties::{OnArrival, PartyId},
 };
+use pathfinding::undirected::prim::prim;
 use slotmap::*;
 use strum::*;
 use util::bitset::BitSet;
@@ -82,10 +83,12 @@ pub(crate) enum Relationship {
 
 #[derive(Default)]
 pub(crate) struct Agents {
+    null_dummy: Agent,
     entries: SlotMap<AgentId, Agent>,
     hierarchies: [HierarchyData; Hierarchy::COUNT],
     relationships: [RelationshipData; Relationship::COUNT],
     sets: [BTreeSet<AgentId>; Set::COUNT],
+    despawn_queue: Vec<AgentId>,
 }
 
 impl Agents {
@@ -101,26 +104,34 @@ impl Agents {
     }
 
     pub(crate) fn despawn(&mut self, id: AgentId) -> Option<Agent> {
-        let entity = match self.entries.remove(id) {
-            Some(entity) => entity,
+        let agent = match self.entries.get_mut(id) {
+            Some(entity) => std::mem::take(entity),
             None => {
                 return None;
             }
         };
 
-        for set_idx in entity.sets.iter() {
-            self.sets[set_idx].remove(&entity.id);
+        for set_idx in agent.sets.iter() {
+            self.sets[set_idx].remove(&agent.id);
         }
 
         for hierarchy in &mut self.hierarchies {
-            hierarchy.remove_agent(id);
+            hierarchy.remove_agent(agent.id);
         }
 
         for relationship in &mut self.relationships {
-            relationship.remove_agent(id);
+            relationship.remove_agent(agent.id);
         }
 
-        Some(entity)
+        self.despawn_queue.push(agent.id);
+
+        Some(agent)
+    }
+
+    pub(crate) fn garbage_collect(&mut self) {
+        for id in self.despawn_queue.drain(..) {
+            self.entries.remove(id);
+        }
     }
 
     pub(crate) fn iter(&self) -> impl Iterator<Item = &Agent> + ExactSizeIterator {
@@ -260,13 +271,35 @@ impl std::ops::Index<AgentId> for Agents {
     type Output = Agent;
 
     fn index(&self, index: AgentId) -> &Self::Output {
-        &self.entries[index]
+        match self.entries.get(index) {
+            Some(x) => x,
+            None => {
+                // It is ok to index with the Null id, which results in the null-dummy.
+                // This is according to ZII
+                if index.is_null() {
+                    &self.null_dummy
+                } else {
+                    panic!("Invalid agent id used")
+                }
+            }
+        }
     }
 }
 
 impl std::ops::IndexMut<AgentId> for Agents {
     fn index_mut(&mut self, index: AgentId) -> &mut Self::Output {
-        &mut self.entries[index]
+        match self.entries.get_mut(index) {
+            Some(x) => x,
+            None => {
+                // It is ok to index with the Null id, which results in the null-dummy.
+                // This is according to ZII
+                if index.is_null() {
+                    &mut self.null_dummy
+                } else {
+                    panic!("Invalid agent id used")
+                }
+            }
+        }
     }
 }
 
