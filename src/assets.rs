@@ -226,8 +226,8 @@ fn asset_key(base: &Path, path: &Path) -> Option<String> {
 
 #[derive(Deserialize)]
 struct AtlasFile {
-    image: String,
-    size: [u32; 2],
+    // image: String,
+    // size: [u32; 2],
     sprites: HashMap<String, AtlasRect>,
 }
 

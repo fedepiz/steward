@@ -44,6 +44,7 @@ impl TerrainMap {
 
 #[derive(Default, Clone, Copy)]
 pub(crate) struct TerrainType {
+    #[allow(unused)]
     pub(crate) name: &'static str,
     pub(crate) movement_speed_multiplier: f32,
     pub(crate) color: (u8, u8, u8),

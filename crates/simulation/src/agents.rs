@@ -149,10 +149,6 @@ impl Agents {
         self.entries.get_mut(id)
     }
 
-    pub fn vars(&self, id: AgentId) -> Vars<'_> {
-        self.entries.get(id).map(Agent::vars).unwrap_or_default()
-    }
-
     pub fn vars_mut(&mut self, id: AgentId) -> VarsMut<'_> {
         self.entries
             .get_mut(id)
@@ -455,58 +451,12 @@ impl Agent {
         self.sets.get(flag as usize)
     }
 
-    pub(crate) fn vars(&self) -> Vars<'_> {
-        Vars(&self.vars)
-    }
-
     pub(crate) fn vars_mut(&mut self) -> VarsMut<'_> {
         VarsMut(&mut self.vars)
     }
 
     pub(crate) fn get_var(&self, var: Var) -> f64 {
         self.vars[var as usize]
-    }
-}
-
-#[derive(Clone, Copy, Default)]
-pub(crate) struct Vars<'a>(&'a [f64]);
-
-impl Vars<'_> {
-    pub(crate) fn get(&self, var: Var) -> f64 {
-        self.try_get(var).unwrap_or(0.)
-    }
-
-    pub(crate) fn try_get(&self, var: Var) -> Option<f64> {
-        let idx = var as usize;
-        self.0.get(idx).copied()
-    }
-
-    pub(crate) fn copy_out<'a>(&self, alloc: impl VarAllocator<'a>) -> Vars<'a> {
-        alloc.host_vars(self).into_shared()
-    }
-
-    pub(crate) fn copy_out_mut<'a>(&self, alloc: impl VarAllocator<'a>) -> VarsMut<'a> {
-        alloc.host_vars(self)
-    }
-}
-
-pub(crate) trait VarAllocator<'a> {
-    fn host_vars(self, vars: &Vars) -> VarsMut<'a>;
-}
-
-impl<'a> VarAllocator<'a> for &'a bumpalo::Bump {
-    fn host_vars(self, vars: &Vars) -> VarsMut<'a> {
-        let mut vec = bumpalo::collections::Vec::with_capacity_in(vars.0.len(), self);
-        vec.extend(vars.0.iter().copied());
-        VarsMut(vec.into_bump_slice_mut())
-    }
-}
-
-impl<'a> VarAllocator<'a> for &'a mut Vec<f64> {
-    fn host_vars(self, vars: &Vars) -> VarsMut<'a> {
-        self.reserve(vars.0.len().saturating_sub(self.len()));
-        self.extend(vars.0.iter().copied());
-        VarsMut(self.as_mut_slice())
     }
 }
 
@@ -544,11 +494,6 @@ impl<'a> VarsMut<'a> {
     pub(crate) fn modify(&mut self, var: Var, f: impl FnOnce(f64) -> f64) {
         let x = self.get(var);
         self.set(var, f(x));
-    }
-
-    #[inline]
-    pub(crate) fn into_shared(self) -> Vars<'a> {
-        Vars(&*self.0)
     }
 
     #[inline]
@@ -994,10 +939,10 @@ mod tests {
         agents.spawn();
         let agent = agents.iter().next().unwrap();
 
-        let vars = agents.vars(agent.id);
-        assert_eq!(vars.get(Var::Renown), 0.0);
-        assert_eq!(vars.get(Var::Population), 0.0);
-        assert_eq!(vars.get(Var::Prosperity), 0.0);
+        let agent = &agents[agent.id];
+        assert_eq!(agent.get_var(Var::Renown), 0.0);
+        assert_eq!(agent.get_var(Var::Population), 0.0);
+        assert_eq!(agent.get_var(Var::Prosperity), 0.0);
     }
 
     #[test]
@@ -1012,48 +957,9 @@ mod tests {
             vars.set(Var::Population, 10.0);
         }
 
-        let vars = agents.vars(id);
-        assert_eq!(vars.get(Var::Renown), 3.5);
-        assert_eq!(vars.get(Var::Population), 10.0);
-    }
-
-    #[test]
-    fn vars_copy_out_to_vec() {
-        let mut agents = Agents::default();
-        agents.spawn();
-        let id = agents.ids().next().unwrap();
-
-        {
-            let mut vars = agents.vars_mut(id);
-            vars.set(Var::Renown, 1.25);
-            vars.set(Var::Prosperity, 7.0);
-        }
-
-        let vars = agents.vars(id);
-        let mut buffer = Vec::new();
-        let copy = vars.copy_out(&mut buffer);
-        assert_eq!(copy.get(Var::Renown), 1.25);
-        assert_eq!(copy.get(Var::Prosperity), 7.0);
-    }
-
-    #[test]
-    fn vars_copy_out_mut_is_independent() {
-        let mut agents = Agents::default();
-        agents.spawn();
-        let id = agents.ids().next().unwrap();
-
-        {
-            let mut vars = agents.vars_mut(id);
-            vars.set(Var::Renown, 2.0);
-        }
-
-        let vars = agents.vars(id);
-        let mut buffer = Vec::new();
-        let mut copy = vars.copy_out_mut(&mut buffer);
-        copy.set(Var::Renown, 9.0);
-
-        let vars = agents.vars(id);
-        assert_eq!(vars.get(Var::Renown), 2.0);
+        let agent = &agents[id];
+        assert_eq!(agent.get_var(Var::Renown), 3.5);
+        assert_eq!(agent.get_var(Var::Population), 10.0);
     }
 
     #[test]
@@ -1068,8 +974,7 @@ mod tests {
         }
 
         let agent = agents.get(id).unwrap();
-        let vars = agent.vars();
-        assert_eq!(vars.get(Var::Renown), 4.0);
+        assert_eq!(agent.get_var(Var::Renown), 4.);
     }
 
     #[test]
