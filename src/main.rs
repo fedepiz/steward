@@ -94,7 +94,11 @@ fn make_pawns<'a, 'b>(
             image: item.image,
             bounds: mq::Rect::new(item.x, item.y, item.width, item.height),
             fill,
-            stroke: if is_selected { mq::YELLOW } else { mq::BLACK },
+            stroke: if is_selected {
+                mq::YELLOW
+            } else {
+                mq::Color::default().with_alpha(0.)
+            },
             label: LabelDesc {
                 text: item.name,
                 size: text_size,

@@ -152,7 +152,7 @@ pub(crate) fn init(sim: &mut Simulation, req: InitRequest) {
 
     let entities = [
         EntityDesc {
-            pos: (590., 520.),
+            pos: (615., 540.),
             party_typ: "person",
             name: "Ambrosius Aurelianus",
             sets: &[Set::People],

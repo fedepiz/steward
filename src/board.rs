@@ -75,6 +75,7 @@ impl Pawn {
         if self.fill.a > 0.0 {
             draw_texture("background", self.fill);
         }
+
         draw_texture(self.image, mq::WHITE);
 
         if self.stroke.a > 0.0 {
