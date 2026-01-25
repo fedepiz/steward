@@ -112,7 +112,7 @@ fn tick(sim: &mut Simulation, mut request: Request, arena: &Bump) -> Response {
 
         // Parties logical update
         for party in sim.parties.iter() {
-            let goal = determine_party_goal(sim, party);
+            let (goal, avoid_area) = determine_party_goal_and_avoidance(sim, party);
 
             let detection = sim.parties.detections.get_for(party.id);
 
@@ -156,7 +156,7 @@ fn tick(sim: &mut Simulation, mut request: Request, arena: &Bump) -> Response {
             // Resolve movement target
             let (destination, direct) = match movement_target {
                 MovementTarget::Immobile => (party.body.pos, false),
-                MovementTarget::FixedPos(pos) => (pos, false),
+                MovementTarget::FixedPos { pos, direct } => (pos, direct),
                 MovementTarget::Party(id) => (sim.parties[id].body.pos, false),
             };
 
@@ -174,6 +174,7 @@ fn tick(sim: &mut Simulation, mut request: Request, arena: &Bump) -> Response {
                 pos: party.body.pos,
                 destination,
                 direct,
+                avoid_area,
             });
         }
 
@@ -391,14 +392,16 @@ fn detections(
             // Distance net of sizes. 0 or lower means collision
             let distance = body_distance(party.body, target.body);
 
-            let facts = facts.get_for(party.agent);
+            let facts = facts.get_for(target.agent);
             let is_location = facts.any_with_kind(FactKind::IsLocation);
+            let threat = calculate_power(&facts);
 
             scratch.push(Detection {
                 target: target.id,
                 agent: target.agent,
                 is_location,
                 distance,
+                threat,
             });
         }
         detections.set(party.id, &scratch);
@@ -818,21 +821,21 @@ fn prosperity_towards_equilibrium(sim: &mut Simulation, arena: &Bump) {
     }
 }
 
-fn determine_party_goal(sim: &Simulation, party: &Party) -> Goal {
+fn determine_party_goal_and_avoidance(sim: &Simulation, party: &Party) -> (Goal, movement::Area) {
     if party.speed == 0.0 {
-        return Goal::Idle;
+        return Default::default();
     }
 
     let agent = match sim.agents.get(party.agent) {
         Some(agent) => agent,
-        None => return Goal::Idle,
+        None => return Default::default(),
     };
 
     if agent.flags.get(Flag::IsActivityPartecipant) {
-        return Goal::Idle;
+        return Default::default();
     }
 
-    match agent.behavior {
+    let goal = match agent.behavior {
         Behavior::Idle => Goal::Idle,
         Behavior::Player => sim.player_party_goal,
         Behavior::GoTo { target, on_arrival } => {
@@ -858,7 +861,31 @@ fn determine_party_goal(sim: &Simulation, party: &Party) -> Goal {
                 })
                 .unwrap_or_default()
         }
-    }
+    };
+
+    // Inner avoid range is the range of actual avoidance
+    const INNER_AVOID_RANGE: f32 = 6.;
+    // Outer avoid range is the range of consideration
+    const OUTER_AVOID_RANGE: f32 = INNER_AVOID_RANGE * 1.2;
+
+    // Do we detect a threat?
+    let detections = sim.parties.detections.get_for(party.id);
+    let primary_threat = detections
+        .iter()
+        .filter(|det| det.threat > 0. && det.distance <= OUTER_AVOID_RANGE)
+        .min_by_key(|det| (det.distance * 10.).round().max(0.) as u32);
+
+    let avoidance = primary_threat
+        .map(|det| {
+            let pos = sim.parties[det.target].body.pos;
+            movement::Area {
+                pos,
+                range: INNER_AVOID_RANGE,
+            }
+        })
+        .unwrap_or_default();
+
+    (goal, avoidance)
 }
 
 pub(crate) fn determine_party_movement_target(
@@ -868,7 +895,7 @@ pub(crate) fn determine_party_movement_target(
 ) -> MovementTarget {
     match goal {
         Goal::Idle => MovementTarget::Immobile,
-        Goal::MoveTo(pos) => MovementTarget::FixedPos(pos),
+        Goal::MoveTo(pos) => MovementTarget::FixedPos { pos, direct: false },
         Goal::ToParty {
             target, distance, ..
         } => {
@@ -921,6 +948,18 @@ impl AgentFacts<'_> {
     fn any_with_kind(&self, kind: FactKind) -> bool {
         self.0.iter().any(|fact| fact.kind == kind)
     }
+
+    fn accumulate_with_kind(&self, kinds: &[(FactKind, f32)]) -> f32 {
+        let mut sum = 0.;
+        for fact in self.0 {
+            for &(tgt, accum) in kinds {
+                if fact.kind == tgt {
+                    sum += accum;
+                }
+            }
+        }
+        sum
+    }
 }
 
 #[derive(Clone, Copy, Default)]
@@ -941,6 +980,7 @@ impl From<FactKind> for Fact {
 enum FactKind {
     Unknown,
     IsLocation,
+    IsPlayer,
 }
 
 impl Default for FactKind {
@@ -957,10 +997,17 @@ fn collect_facts<'a>(arena: &'a Bump, agents: &Agents) -> Facts<'a> {
         if agent.in_set(Set::Locations) {
             scratch.push(Fact::from(FactKind::IsLocation));
         }
+        if agent.is_player {
+            scratch.push(Fact::from(FactKind::IsPlayer));
+        }
 
         out.insert(agent.id, scratch.drain(..));
     }
     out
+}
+
+fn calculate_power(facts: &AgentFacts) -> f32 {
+    facts.accumulate_with_kind(&[(FactKind::IsPlayer, 10.)])
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]

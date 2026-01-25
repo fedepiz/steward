@@ -85,7 +85,12 @@ pub(crate) fn view(sim: &Simulation, req: &Request, response: &mut Response) {
 
         // Create requested objects
         for &view_entity in &req.view_entities {
-            let party = &sim.parties[view_entity.entity];
+            let party = match sim.parties.get(view_entity.entity) {
+                Some(x) => x,
+                None => {
+                    continue;
+                }
+            };
             ctx.spawn(|ctx| {
                 let tag = req.entity_tag(view_entity);
                 ctx.tag(tag);

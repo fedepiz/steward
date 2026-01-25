@@ -46,6 +46,7 @@ pub(crate) struct Detection {
     pub distance: f32,
     pub agent: AgentId,
     pub is_location: bool,
+    pub threat: f32,
 }
 
 impl Parties {
@@ -191,7 +192,7 @@ pub(crate) struct Party {
 #[derive(Clone, Copy, PartialEq, PartialOrd)]
 pub(crate) enum MovementTarget {
     Immobile,
-    FixedPos(V2),
+    FixedPos { pos: V2, direct: bool },
     Party(PartyId),
 }
 

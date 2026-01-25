@@ -11,6 +11,13 @@ pub(crate) struct Element {
     pub pos: V2,
     pub destination: V2,
     pub direct: bool,
+    pub avoid_area: Area,
+}
+
+#[derive(Default, Clone, Copy)]
+pub(crate) struct Area {
+    pub pos: V2,
+    pub range: f32,
 }
 
 pub(crate) struct Output {
@@ -54,6 +61,7 @@ pub(crate) fn tick_movement<G: MovementGraph>(
     let next_positions: Vec<_> = elements
         .iter()
         .map(|element| {
+            let element = apply_avoid_area(*element);
             // Derive the next step
             let next_step = if element.direct {
                 element.destination
@@ -128,6 +136,64 @@ pub(crate) fn tick_movement<G: MovementGraph>(
         positions: next_positions,
         spatial_map,
     }
+}
+
+fn apply_avoid_area(mut element: Element) -> Element {
+    // If there is no avoid_area, or my speed is 0, all of this is pointless
+    if element.avoid_area.range <= 0.0 || element.speed == 0.0 {
+        return element;
+    }
+
+    let center = element.avoid_area.pos;
+    let range = element.avoid_area.range;
+    let range_sq = range * range;
+
+    // Inside-vs-outside check uses squared distances to avoid sqrt.
+    let dist_sq = V2::distance_squared(element.pos, center);
+    if dist_sq <= range_sq {
+        // Inside the area: override movement so we head straight away from the center.
+        // "Direct" is important so we bypass pathfinding and walk out immediately.
+        let mut direction = (element.pos - center).normalize();
+        if direction == V2::default() {
+            // Degenerate case: exactly at the center. Pick an arbitrary axis.
+            direction = V2::new(1.0, 0.0);
+        }
+        element.destination = element.pos + direction * (range * 2.0);
+        element.direct = true;
+        return element;
+    }
+
+    // If we are not inside, and we are at the position, we can stop here.
+    if element.destination == element.pos {
+        return element;
+    }
+
+    // Outside the area: check if the straight-line segment to the destination
+    // would intersect the avoid circle. If yes, refuse to move at all.
+    if segment_intersects_circle(element.pos, element.destination, center, range_sq) {
+        element.destination = element.pos;
+        element.direct = true;
+    }
+
+    element
+}
+
+fn segment_intersects_circle(p1: V2, p2: V2, center: V2, range_sq: f32) -> bool {
+    let d = p2 - p1;
+    let a = d.x * d.x + d.y * d.y;
+    if a == 0.0 {
+        // Degenerate segment: treat as no intersection here (caller handles inside case).
+        return false;
+    }
+
+    let f = p1 - center;
+    // Project the circle center onto the segment to find the closest point.
+    // t in [0,1] gives the closest point along the segment from p1 to p2.
+    let t = (-(f.x * d.x + f.y * d.y) / a).clamp(0.0, 1.0);
+    // Closest point = p1 + d * t.
+    let closest = V2::new(p1.x + d.x * t, p1.y + d.y * t);
+    // Intersects if closest point is within the circle radius.
+    V2::distance_squared(closest, center) <= range_sq
 }
 
 fn interpolate_position(pos: V2, dest: V2, speed: f32) -> V2 {
