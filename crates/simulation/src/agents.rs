@@ -122,6 +122,10 @@ impl Agents {
         self.entries.len()
     }
 
+    pub(crate) fn capacity(&self) -> usize {
+        self.entries.capacity()
+    }
+
     pub(crate) fn ids(&self) -> impl Iterator<Item = AgentId> + ExactSizeIterator {
         self.entries.keys()
     }

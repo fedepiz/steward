@@ -169,8 +169,6 @@ pub(crate) struct Party {
     pub agent: AgentId,
     // Non-null means this party is hosted inside the parent party (null means not inside).
     pub inside_of: PartyId,
-    // Is this the kind of party which is a 'location'?
-    pub is_location: bool,
 }
 
 #[derive(Clone, Copy, PartialEq, PartialOrd)]

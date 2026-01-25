@@ -434,7 +434,6 @@ pub(crate) fn init(sim: &mut Simulation, req: InitRequest) {
         party.agent = agent.id;
 
         // Settlements are locations
-        party.is_location = LOCATION_SETS.iter().any(|set| desc.sets.contains(set));
 
         let agent = agent.id;
 
@@ -443,7 +442,9 @@ pub(crate) fn init(sim: &mut Simulation, req: InitRequest) {
         for &set in desc.sets {
             sim.agents.add_to_set(set, agent);
         }
-        if party.is_location {
+
+        let is_location = LOCATION_SETS.iter().any(|set| desc.sets.contains(set));
+        if is_location {
             sim.agents.add_to_set(Set::Locations, agent);
         }
 

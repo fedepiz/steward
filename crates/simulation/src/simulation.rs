@@ -1,6 +1,6 @@
 use bumpalo::Bump;
 use slotmap::{Key, KeyData, SecondaryMap};
-use util::string_pool::*;
+use util::{span::Span, string_pool::*};
 
 use crate::{
     agents::{self, *},
@@ -96,6 +96,9 @@ fn tick(sim: &mut Simulation, mut request: Request, arena: &Bump) -> Response {
         let mut movement_elements = AVec::with_capacity_in(sim.parties.len(), arena);
         let mut desired_change_of_container = AVec::with_capacity_in(sim.parties.len(), arena);
 
+        // Collect agent facts
+        let facts = &self::collect_facts(arena, &sim.agents);
+
         // Parties logical update
         for party in sim.parties.iter() {
             let goal = determine_party_goal(sim, party);
@@ -146,7 +149,7 @@ fn tick(sim: &mut Simulation, mut request: Request, arena: &Bump) -> Response {
         {
             let _span = tracing::info_span!("Detections").entered();
             let mut detections = std::mem::take(&mut sim.parties.detections);
-            self::detections(&mut detections, &sim.parties, spatial_map);
+            self::detections(&mut detections, &sim.parties, spatial_map, facts);
             sim.parties.detections = detections;
         }
 
@@ -185,7 +188,7 @@ fn tick(sim: &mut Simulation, mut request: Request, arena: &Bump) -> Response {
                 .agents
                 .iter()
                 .map(|agent| {
-                    let location = location_of_agent(sim, agent, &mut scratch);
+                    let location = location_of_agent(sim, agent, facts, &mut scratch);
                     (agent.id, location)
                 })
                 .collect();
@@ -205,6 +208,7 @@ fn tick(sim: &mut Simulation, mut request: Request, arena: &Bump) -> Response {
 fn location_of_agent(
     sim: &Simulation,
     agent: &Agent,
+    facts: &Facts,
     scratch: &mut Vec<(AgentId, f32)>,
 ) -> Location {
     // Disembodied agent has no location
@@ -212,12 +216,16 @@ fn location_of_agent(
         return Location::Nowhere;
     }
 
+    let facts = facts.get_for(agent.id);
+
     // If the agent is a settlement, then it's at a settlement!
-    let party = &sim.parties[agent.party];
-    if party.is_location {
+    let is_location = facts.any_with_kind(FactKind::IsLocation);
+
+    if is_location {
         return Location::Proximate(agent.id);
     }
 
+    let party = &sim.parties[agent.party];
     // If an agent's party is inside another party, that the agent party is at the location
     if let Some(container) = sim.parties.get(party.inside_of) {
         return Location::Inside(container.agent);
@@ -313,33 +321,41 @@ impl Request {
     }
 }
 
-fn detections(detections: &mut Detections, entities: &Parties, spatial_map: &SpatialMap) {
+fn detections(
+    detections: &mut Detections,
+    parties: &Parties,
+    spatial_map: &SpatialMap,
+    facts: &Facts,
+) {
     detections.clear();
 
     let mut scratch = Vec::with_capacity(100);
-    for entity in entities.iter() {
+    for party in parties.iter() {
         const DETECTION_RANGE: f32 = 20.;
-        let neighbours = spatial_map.search(entity.body.pos, DETECTION_RANGE);
+        let neighbours = spatial_map.search(party.body.pos, DETECTION_RANGE);
         for target in neighbours {
             // Do not look at yourself
-            if target == entity.id {
+            if target == party.id {
                 continue;
             }
-            let target = &entities[target];
-            let center_to_center_distance = V2::distance(entity.body.pos, target.body.pos);
-            let collision_range = (entity.body.size + target.body.size) / 2.;
+            let target = &parties[target];
+            let center_to_center_distance = V2::distance(party.body.pos, target.body.pos);
+            let collision_range = (party.body.size + target.body.size) / 2.;
 
             // Distance net of sizes. 0 or lower means collision
             let distance = center_to_center_distance - collision_range;
 
+            let facts = facts.get_for(party.agent);
+            let is_location = facts.any_with_kind(FactKind::IsLocation);
+
             scratch.push(Detection {
                 target: target.id,
                 agent: target.agent,
-                is_location: target.is_location,
+                is_location,
                 distance,
             });
         }
-        detections.set(entity.id, &scratch);
+        detections.set(party.id, &scratch);
         scratch.clear();
     }
 }
@@ -807,4 +823,79 @@ pub(crate) fn determine_party_movement_target(
             }
         }
     }
+}
+
+pub(crate) struct Facts<'a> {
+    buffer: AVec<'a, Fact>,
+    by_agent: SecondaryMap<AgentId, Span>,
+}
+
+impl<'a> Facts<'a> {
+    fn new(arena: &'a Bump, capacity: usize) -> Self {
+        Self {
+            buffer: AVec::new_in(arena),
+            by_agent: SecondaryMap::with_capacity(capacity),
+        }
+    }
+
+    fn insert(&mut self, id: AgentId, facts: impl IntoIterator<Item = Fact>) {
+        let start = self.buffer.len();
+        self.buffer.extend(facts);
+        let end = self.buffer.len();
+        let span = Span::between(start, end);
+        self.by_agent.insert(id, span);
+    }
+
+    fn get_for(&self, id: AgentId) -> AgentFacts<'_> {
+        let span = self.by_agent.get(id).copied().unwrap_or_default();
+        AgentFacts(span.view(&self.buffer))
+    }
+}
+
+#[derive(Clone, Copy)]
+struct AgentFacts<'a>(&'a [Fact]);
+
+impl AgentFacts<'_> {
+    fn any_with_kind(&self, kind: FactKind) -> bool {
+        self.0.iter().any(|fact| fact.kind == kind)
+    }
+}
+
+#[derive(Clone, Copy, Default)]
+struct Fact {
+    kind: FactKind,
+}
+
+impl From<FactKind> for Fact {
+    fn from(kind: FactKind) -> Self {
+        Self {
+            kind,
+            ..Default::default()
+        }
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+enum FactKind {
+    Unknown,
+    IsLocation,
+}
+
+impl Default for FactKind {
+    fn default() -> Self {
+        Self::Unknown
+    }
+}
+
+fn collect_facts<'a>(arena: &'a Bump, agents: &Agents) -> Facts<'a> {
+    let mut out = Facts::new(arena, agents.capacity());
+    let mut scratch = AVec::new_in(arena);
+    for agent in agents.iter() {
+        if agent.in_set(Set::Locations) {
+            scratch.push(Fact::from(FactKind::IsLocation));
+        }
+
+        out.insert(agent.id, scratch.drain(..));
+    }
+    out
 }
