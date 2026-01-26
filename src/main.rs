@@ -359,6 +359,8 @@ fn gui(ctx: &egui::Context, response: &simulation::Response) {
                     ui.end_row();
 
                     let vars = [
+                        ("location", "Location"),
+                        ("soldiers", "Soldiers"),
                         ("renown", "Renown"),
                         ("population", "Population"),
                         ("food", "Food"),

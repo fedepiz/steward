@@ -3,6 +3,7 @@ use slotmap::KeyData;
 use util::string_pool::{SpanHandle, StringPool};
 
 use crate::entities::{self, *};
+use crate::names::Name;
 use crate::objects::*;
 use crate::simulation::*;
 
@@ -106,8 +107,30 @@ pub(crate) fn view(sim: &Simulation, req: &Request, response: &mut Response) {
                     }
                 }
 
-                ctx.display("minerals", entity.get_var(Var::Minerals));
-                ctx.display("goods", entity.get_var(Var::Goods));
+                for (key, var) in [
+                    ("minerals", Var::Minerals),
+                    ("goods", Var::Goods),
+                    ("soldiers", Var::Soldiers),
+                ] {
+                    ctx.display(key, entity.get_var(var));
+                }
+
+                {
+                    let (prefix, target) = match entity.location {
+                        Location::Nowhere => ("Nowhere", EntityId::null()),
+                        Location::FarOut => ("Far Out", EntityId::null()),
+                        Location::Near(x) => ("Near ", x),
+                        Location::Proximate(x) => ("Proximate ", x),
+                        Location::Inside(x) => ("Inside ", x),
+                    };
+                    let name = if target.is_null() {
+                        Name::default()
+                    } else {
+                        sim.entities[target].name
+                    };
+                    let name = sim.names.resolve(name);
+                    ctx.fmt("location", format_args!("{prefix}{name}"));
+                }
 
                 if entity.in_set(entities::Set::People) {
                     ctx.display("renown", entity.get_var(Var::Renown));
@@ -153,7 +176,9 @@ pub(crate) fn view(sim: &Simulation, req: &Request, response: &mut Response) {
         let mut entities: Vec<_> = sim
             .entities
             .iter()
-            .filter(|entity| !entity.get_flag(Flag::IsDisembodied) && !entity.get_flag(Flag::IsInside))
+            .filter(|entity| {
+                !entity.get_flag(Flag::IsDisembodied) && !entity.get_flag(Flag::IsInside)
+            })
             .map(|entity| (entity, sim.entities.get_type(entity.type_id)))
             .collect();
 
@@ -172,7 +197,9 @@ pub(crate) fn view(sim: &Simulation, req: &Request, response: &mut Response) {
                 Default::default()
             };
 
-            let faction = sim.entities.parent_of(Hierarchy::FactionMembership, entity.id);
+            let faction = sim
+                .entities
+                .parent_of(Hierarchy::FactionMembership, entity.id);
 
             let color = sim
                 .faction_colors

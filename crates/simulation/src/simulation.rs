@@ -266,8 +266,8 @@ fn tick(sim: &mut Simulation, mut request: Request, arena: &Bump) -> Response {
             }
         }
 
-        // Resolve desired beging of battle
         {
+            // Resolve desired beging of battle
             let _span = tracing::info_span!("Post Move State Changes").entered();
             resolve_activity_starts(sim, &activity_start_intent);
 
@@ -346,11 +346,13 @@ fn location_of_entity(
 
     scratch.clear();
 
+    const NEAR_DISTANCE: f32 = 10.;
+
     // Only consider parties in the target set
     scratch.extend(
         detections
             .iter()
-            .filter(|det| det.is_location)
+            .filter(|det| det.is_location && det.distance <= NEAR_DISTANCE)
             .map(|det| (det.id, det.distance)),
     );
 
@@ -913,8 +915,8 @@ fn determine_party_movement_target(detections: &[Detection], goal: Goal) -> Move
     }
 }
 
-fn calculate_power(entity: &Entity) -> f32 {
-    if entity.is_player { 10. } else { 0. }
+fn calculate_power(entity: &Entity) -> f64 {
+    entity.get_var(Var::Soldiers)
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -1138,7 +1140,7 @@ mod detection {
         pub id: EntityId,
         pub distance: f32,
         pub is_location: bool,
-        pub threat: f32,
+        pub threat: f64,
     }
 
     pub(crate) fn calculate(

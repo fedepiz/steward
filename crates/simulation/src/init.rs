@@ -76,6 +76,16 @@ pub(crate) fn init(sim: &mut Simulation, req: InitRequest) {
 
     {
         let typ = sim.entities.add_type();
+        typ.tag = "bandit_camp";
+        typ.image = "tent";
+        typ.name = Name::simple(sim.names.define("Bandit Camp"));
+        typ.speed = 0.;
+        typ.size = 2.5;
+        typ.layer = 0;
+    }
+
+    {
+        let typ = sim.entities.add_type();
         typ.tag = "village";
         typ.image = "village";
         typ.name = Name::simple(sim.names.define("Village"));
@@ -112,6 +122,7 @@ pub(crate) fn init(sim: &mut Simulation, req: InitRequest) {
         key: &'a str,
         name: &'a str,
         color: (u8, u8, u8),
+        flags: &'a [Flag],
     }
 
     let factions = [
@@ -119,11 +130,19 @@ pub(crate) fn init(sim: &mut Simulation, req: InitRequest) {
             key: "rheged",
             name: "Rheged",
             color: (200, 40, 40),
+            ..Default::default()
         },
         FactionDesc {
             key: "crafu",
             name: "Crafu",
             color: (130, 70, 180),
+            ..Default::default()
+        },
+        FactionDesc {
+            key: "bandits",
+            name: "Bandits",
+            color: (150, 150, 150),
+            flags: &[Flag::IsGenerallyHostile],
         },
     ];
 
@@ -156,10 +175,17 @@ pub(crate) fn init(sim: &mut Simulation, req: InitRequest) {
             party_typ: "person",
             name: "Ambrosius Aurelianus",
             sets: &[Set::People],
-            vars: &[(Var::Renown, PERSON_RENOWN)],
+            vars: &[(Var::Renown, PERSON_RENOWN), (Var::Soldiers, 100.)],
             flags: &[Flag::IsGenerallyHostile],
             is_player: true,
-            // parents: &[(Hierarchy::FactionMembership, "rheged")],
+            parents: &[(Hierarchy::FactionMembership, "bandits")],
+            ..Default::default()
+        },
+        EntityDesc {
+            pos: (620., 545.),
+            party_typ: "bandit_camp",
+            sets: &[Set::Settlements, Set::Locations],
+            parents: &[(Hierarchy::FactionMembership, "bandits")],
             ..Default::default()
         },
         EntityDesc {
@@ -421,6 +447,9 @@ pub(crate) fn init(sim: &mut Simulation, req: InitRequest) {
         let archetype = sim.entities.find_type_by_tag("faction").unwrap().id;
         let entity = sim.entities.spawn_with_type(archetype);
         entity.name = Name::simple(sim.names.define(faction.name));
+        for &flag in faction.flags {
+            entity.set_flag(flag, true);
+        }
         let entity = entity.id;
         sim.entities.add_to_set(Set::Factions, entity);
         sim.faction_colors.insert(entity, faction.color);

@@ -23,6 +23,8 @@ pub(crate) struct Archetype {
 
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, EnumCount, EnumIter, Debug)]
 pub(crate) enum Var {
+    // Generic Party
+    Soldiers,
     // Person
     Money,
     Renown,
@@ -275,7 +277,12 @@ impl Entities {
         rel_data.set(from, to, value);
     }
 
-    pub fn remove_relationship(&mut self, relationship: Relationship, from: EntityId, to: EntityId) {
+    pub fn remove_relationship(
+        &mut self,
+        relationship: Relationship,
+        from: EntityId,
+        to: EntityId,
+    ) {
         let rel_data = &mut self.relationships[relationship as usize];
         rel_data.remove(from, to);
     }
@@ -290,7 +297,12 @@ impl Entities {
         rel_data.get(from, to)
     }
 
-    pub fn has_relationship(&self, relationship: Relationship, from: EntityId, to: EntityId) -> bool {
+    pub fn has_relationship(
+        &self,
+        relationship: Relationship,
+        from: EntityId,
+        to: EntityId,
+    ) -> bool {
         self.relationship(relationship, from, to).is_some()
     }
 
@@ -564,8 +576,16 @@ impl Entity {
         self.vars[var as usize]
     }
 
+    pub(crate) fn set_var(&mut self, var: Var, value: f64) {
+        self.vars[var as usize] = value;
+    }
+
     pub(crate) fn get_flag(&self, flag: Flag) -> bool {
         self.flags.get(flag)
+    }
+
+    pub(crate) fn set_flag(&mut self, flag: Flag, value: bool) {
+        self.flags.set(flag, value);
     }
 }
 
@@ -639,7 +659,10 @@ impl HierarchyData {
     }
 
     fn parent_of(&self, entity: EntityId) -> EntityId {
-        self.child_to_parent.get(entity).copied().unwrap_or_default()
+        self.child_to_parent
+            .get(entity)
+            .copied()
+            .unwrap_or_default()
     }
 
     fn children_of(&self, parent: EntityId) -> impl Iterator<Item = EntityId> + use<'_> {
