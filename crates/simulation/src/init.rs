@@ -186,7 +186,10 @@ pub(crate) fn init(sim: &mut Simulation, req: InitRequest) {
             name: "Gwaith map Elffin",
             sets: &[Set::People],
             vars: &[(Var::Renown, PERSON_RENOWN)],
-            parents: &[(Hierarchy::FactionMembership, "rheged")],
+            parents: &[
+                (Hierarchy::FactionMembership, "rheged"),
+                (Hierarchy::HomeOf, "caer_wenddoleu"),
+            ],
             children: &[
                 (Hierarchy::Lordship, "caer_wenddoleu"),
                 (Hierarchy::Lordship, "anava"),

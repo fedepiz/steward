@@ -50,6 +50,49 @@ impl Simulation {
     }
 }
 
+#[derive(Clone, Copy, PartialEq, PartialOrd)]
+enum Goal {
+    Idle,
+    MoveTo(V2),
+    ToEntity {
+        target: EntityId,
+        distance: f32,
+        on_arrival: OnArrival,
+    },
+}
+
+impl Default for Goal {
+    fn default() -> Self {
+        Self::Idle
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug)]
+pub(crate) enum OnArrival {
+    Nothing,
+    Enter,
+    Attack,
+}
+
+impl Default for OnArrival {
+    fn default() -> Self {
+        Self::Nothing
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, PartialOrd)]
+enum MovementTarget {
+    Immobile,
+    FixedPos { pos: V2, direct: bool },
+    Entity(EntityId),
+}
+
+impl Default for MovementTarget {
+    fn default() -> Self {
+        Self::Immobile
+    }
+}
+
 fn tick(sim: &mut Simulation, mut request: Request, arena: &Bump) -> Response {
     if let Some(req) = request.init.take() {
         *sim = Simulation::default();
@@ -848,10 +891,7 @@ fn determine_party_goal_and_avoidance(sim: &Simulation, entity: &Entity) -> (Goa
     (goal, avoidance)
 }
 
-pub(crate) fn determine_party_movement_target(
-    detections: &[Detection],
-    goal: Goal,
-) -> MovementTarget {
+fn determine_party_movement_target(detections: &[Detection], goal: Goal) -> MovementTarget {
     match goal {
         Goal::Idle => MovementTarget::Immobile,
         Goal::MoveTo(pos) => MovementTarget::FixedPos { pos, direct: false },
@@ -1153,48 +1193,5 @@ mod detection {
 
         // Distance net of sizes. 0 or lower means collision
         center_to_center_distance - collision_range
-    }
-}
-
-#[derive(Clone, Copy, PartialEq, PartialOrd)]
-pub(crate) enum Goal {
-    Idle,
-    MoveTo(V2),
-    ToEntity {
-        target: EntityId,
-        distance: f32,
-        on_arrival: OnArrival,
-    },
-}
-
-impl Default for Goal {
-    fn default() -> Self {
-        Self::Idle
-    }
-}
-
-#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug)]
-pub(crate) enum OnArrival {
-    Nothing,
-    Enter,
-    Attack,
-}
-
-impl Default for OnArrival {
-    fn default() -> Self {
-        Self::Nothing
-    }
-}
-
-#[derive(Clone, Copy, PartialEq, PartialOrd)]
-pub(crate) enum MovementTarget {
-    Immobile,
-    FixedPos { pos: V2, direct: bool },
-    Entity(EntityId),
-}
-
-impl Default for MovementTarget {
-    fn default() -> Self {
-        Self::Immobile
     }
 }
