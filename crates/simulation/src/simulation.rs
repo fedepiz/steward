@@ -169,26 +169,7 @@ fn tick(sim: &mut Simulation, mut request: Request, arena: &Bump) -> Response {
 
         let mut activity_start_intent = AVec::with_capacity_in(sim.entities.len(), arena);
 
-        let mut diplo_map = DiploMap::new(arena, sim.entities.capacity());
-        {
-            let _span = tracing::info_span!("Collect Facts").entered();
-
-            for entity in sim.entities.iter() {
-                let generally_hostile = entity.flags.get(Flag::IsGenerallyHostile);
-                if entity.in_set(Set::Factions) {
-                    let related = sim
-                        .entities
-                        .relationships_from(Relationship::Diplo, entity.id);
-                    let hostile = related.filter(|&(_, x)| x < 0.).map(|(id, _)| id);
-                    diplo_map.insert(entity.id, EntityId::null(), hostile, generally_hostile);
-                } else {
-                    let faction = sim
-                        .entities
-                        .parent_of(Hierarchy::FactionMembership, entity.id);
-                    diplo_map.insert(entity.id, faction, std::iter::empty(), generally_hostile);
-                }
-            }
-        }
+        let diplo_map = DiploMap::calculate(arena, sim);
 
         // Parties logical update
         for subject in sim.entities.iter() {
@@ -452,7 +433,7 @@ pub struct Request {
     pub advance_ticks: u32,
     pub move_to_pos: Option<(f32, f32)>,
     pub move_to_item: Option<MapItemId>,
-    pub highlighted_item: Option<MapItemId>,
+    pub highlighted_item: MapItemId,
     pub extract_terrain: bool,
     pub(crate) strings: StringPool,
     pub(crate) view_entities: Vec<ViewEntity>,
@@ -464,8 +445,14 @@ impl Request {
     }
 }
 
-#[derive(Default, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub struct MapItemId(pub u64);
+
+impl Default for MapItemId {
+    fn default() -> Self {
+        Self(EntityId::default().data().as_ffi())
+    }
+}
 
 #[derive(Clone, Copy)]
 pub(crate) struct ViewEntity {
@@ -1321,14 +1308,37 @@ struct DiploEntry {
 }
 
 impl<'a> DiploMap<'a> {
-    pub fn new(arena: &'a Bump, capacity: usize) -> Self {
+    fn new(arena: &'a Bump, capacity: usize) -> Self {
         Self {
             alloc: AVec::with_capacity_in(capacity, arena),
             entries: SecondaryMap::with_capacity(capacity),
         }
     }
 
-    pub fn insert(
+    pub fn calculate(arena: &'a Bump, sim: &Simulation) -> Self {
+        let _span = tracing::info_span!("Diplo Map").entered();
+        let mut diplo_map = Self::new(arena, sim.entities.capacity());
+
+        for entity in sim.entities.iter() {
+            let generally_hostile = entity.flags.get(Flag::IsGenerallyHostile);
+            if entity.in_set(Set::Factions) {
+                let related = sim
+                    .entities
+                    .relationships_from(Relationship::Diplo, entity.id);
+                let hostile = related.filter(|&(_, x)| x < 0.).map(|(id, _)| id);
+                diplo_map.insert(entity.id, EntityId::null(), hostile, generally_hostile);
+            } else {
+                let faction = sim
+                    .entities
+                    .parent_of(Hierarchy::FactionMembership, entity.id);
+                diplo_map.insert(entity.id, faction, std::iter::empty(), generally_hostile);
+            }
+        }
+
+        diplo_map
+    }
+
+    fn insert(
         &mut self,
         id: EntityId,
         parent: EntityId,

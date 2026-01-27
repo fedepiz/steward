@@ -81,13 +81,13 @@ type AVec<'a, T> = bumpalo::collections::Vec<'a, T>;
 fn make_pawns<'a, 'b>(
     arena: &'a bumpalo::Bump,
     items: &'b simulation::MapItems,
-    selected: Option<MapItemId>,
+    selected: MapItemId,
 ) -> AVec<'a, PawnDesc<'b>> {
     let text_size = 26;
 
     let mut vec = bumpalo::vec![in arena];
     vec.extend(items.iter().map(|item| {
-        let is_selected = Some(item.id) == selected;
+        let is_selected = item.id == selected;
         let fill = mq::Color::from_rgba(item.color.0, item.color.1, item.color.2, 255);
 
         PawnDesc {
@@ -115,12 +115,16 @@ const TILE_SIZE: f32 = 20.;
 struct Actions {
     move_to_pos: Option<mq::Vec2>,
     move_to_item: Option<MapItemId>,
+    change_selection: Option<MapItemId>,
 }
 
 impl Actions {
-    fn apply(self, request: &mut simulation::Request) {
+    fn apply(self, request: &mut simulation::Request, selected: &mut MapItemId) {
         request.move_to_pos = self.move_to_pos.map(|pos| (pos.x, pos.y));
         request.move_to_item = self.move_to_item;
+        if let Some(id) = self.change_selection {
+            *selected = id;
+        }
     }
 }
 
@@ -130,7 +134,7 @@ async fn amain() {
         ctx.set_pixels_per_point(1.6 * GLOBAL_SCALING as f32);
     });
 
-    let mut selected_item = None;
+    let mut selected_item = MapItemId::default();
     let mut assets = assets::Assets::start_loading("assets");
 
     let mut board = board::Board::new(
@@ -162,7 +166,7 @@ async fn amain() {
         assets.tick();
 
         let mut request = simulation::Request::new();
-        std::mem::take(&mut actions).apply(&mut request);
+        std::mem::take(&mut actions).apply(&mut request, &mut selected_item);
 
         if reload {
             let map_image = mq::load_image("assets/britain.png").await.unwrap();
@@ -204,9 +208,7 @@ async fn amain() {
 
         request.highlighted_item = selected_item;
 
-        if let Some(id) = selected_item {
-            request.view_map_item("selected_item", id)
-        }
+        request.view_map_item("selected_item", selected_item);
 
         let response = sim_actor.tick(request);
 
@@ -216,7 +218,7 @@ async fn amain() {
         let mut ui_wants_pointer = false;
         let mut ui_wants_keyboard = false;
         egui_macroquad::ui(|ctx| {
-            gui(ctx, response);
+            gui(ctx, response, &mut actions);
             ui_wants_pointer = ctx.wants_pointer_input();
             ui_wants_keyboard = ctx.wants_keyboard_input();
         });
@@ -234,7 +236,7 @@ async fn amain() {
             let hovered_item = hovered_pawn.map(|id| map_items.get_by_index(id.0).id);
 
             if mq::is_mouse_button_pressed(mq::MouseButton::Left) {
-                selected_item = hovered_item;
+                selected_item = hovered_item.unwrap_or_default();
             }
 
             let world_pos = board.coords_of(mouse_pos);
@@ -340,7 +342,7 @@ fn draw_overlay_text(
     );
 }
 
-fn gui(ctx: &egui::Context, response: &simulation::Response) {
+fn gui(ctx: &egui::Context, response: &simulation::Response, actions: &mut Actions) {
     let objs = &response.objects;
     egui::TopBottomPanel::top("top_panel").show(ctx, |ui| {
         ui.horizontal_centered(|ui| {
@@ -379,7 +381,26 @@ fn gui(ctx: &egui::Context, response: &simulation::Response) {
                             ui.end_row();
                         }
                     }
-                })
+                });
+
+            {
+                let children = objs.list(root, "contents");
+                if !children.is_empty() {
+                    ui.separator();
+                    ui.heading("Parties inside");
+                    egui::Grid::new("children-list")
+                        .striped(true)
+                        .show(ui, |ui| {
+                            for &child in children {
+                                if ui.button(objs.str(child, "name")).clicked() {
+                                    actions.change_selection =
+                                        objs.try_handle(child, "id").map(MapItemId);
+                                }
+                                ui.end_row();
+                            }
+                        });
+                }
+            }
         });
     }
 }

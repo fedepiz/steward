@@ -162,6 +162,16 @@ pub(crate) fn view(sim: &Simulation, req: &Request, response: &mut Response) {
                         "caravan_opportunity",
                         format_args!("{:1.2}", entity.get_var(Var::CaravanOpportunity)),
                     );
+
+                    ctx.list("contents", |ctx| {
+                        for child in sim.entities.children_of(Hierarchy::Container, entity.id) {
+                            ctx.spawn(|ctx| {
+                                let child = &sim.entities[child];
+                                ctx.handle("id", child.id.data().as_ffi());
+                                ctx.display("name", sim.names.resolve(child.name));
+                            });
+                        }
+                    });
                 }
             });
         }
@@ -172,10 +182,7 @@ pub(crate) fn view(sim: &Simulation, req: &Request, response: &mut Response) {
     {
         let _span = tracing::info_span!("Map Items").entered();
         let ctx = &mut response.map_items;
-        let highlighted_entity = req
-            .highlighted_item
-            .map(|id| id.as_entity())
-            .unwrap_or_default();
+        let highlighted_entity = req.highlighted_item.as_entity();
 
         // Get parties and types, sorted by layer
         let mut entities: Vec<_> = sim

@@ -57,6 +57,13 @@ impl Objects {
         self.properties.lookup(property_span, symbol)
     }
 
+    pub fn try_handle(&self, id: ObjectId, key: &str) -> Option<u64> {
+        self.get_property(id, key).and_then(|prop| match prop {
+            Property::Handle(handle) => Some(handle),
+            _ => None,
+        })
+    }
+
     pub fn try_str<'a>(&'a self, id: ObjectId, key: &str) -> Option<&'a str> {
         self.get_property(id, key).and_then(|prop| match prop {
             Property::String(span) => Some(self.text.get(span)),
@@ -124,6 +131,7 @@ impl<'a> ObjectRef<'a> {
 
 #[derive(Clone, Copy)]
 enum Property {
+    Handle(u64),
     String(SpanHandle),
     Object(ObjectId),
     List(Span),
@@ -212,6 +220,10 @@ impl ObjectsBuilder {
     fn set_property(&mut self, key: &'static str, value: Property) {
         let symbol = self.data.interner.get_or_intern_static(key);
         self.data.properties.push(symbol, value);
+    }
+
+    pub fn handle(&mut self, key: &'static str, handle: u64) {
+        self.set_property(key, Property::Handle(handle));
     }
 
     pub fn str(&mut self, key: &'static str, value: impl AsRef<str>) {
