@@ -25,6 +25,8 @@ pub(crate) struct Archetype {
 pub(crate) enum Var {
     // Generic Party
     Soldiers,
+    // Activities
+    ActivityTicks,
     // Person
     Money,
     Renown,

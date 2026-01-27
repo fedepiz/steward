@@ -227,7 +227,7 @@ pub(crate) fn init(sim: &mut Simulation, req: InitRequest) {
             party_typ: "person",
             name: "Eadwine map Owain",
             sets: &[Set::People],
-            vars: &[(Var::Renown, PERSON_RENOWN)],
+            vars: &[(Var::Renown, PERSON_RENOWN), (Var::Soldiers, 70.)],
             parents: &[(Hierarchy::FactionMembership, "rheged")],
             ..Default::default()
         },

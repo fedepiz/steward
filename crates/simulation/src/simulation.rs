@@ -140,7 +140,7 @@ fn tick(sim: &mut Simulation, mut request: Request, arena: &Bump) -> Response {
         const ACTIVITY_TICK_RATE: u64 = 100;
         if sim.turn_num % ACTIVITY_TICK_RATE == 0 {
             let _span = tracing::info_span!("Activity tick").entered();
-            tick_activities(arena, sim);
+            activities::tick_activities(arena, sim);
         }
 
         let mut movement_elements = AVec::with_capacity_in(sim.entities.len(), arena);
@@ -209,7 +209,7 @@ fn tick(sim: &mut Simulation, mut request: Request, arena: &Bump) -> Response {
                         on_arrival: OnArrival::Attack,
                         ..
                     } => {
-                        activity_start_intent.push((ActivityType::Battle, subject.id, target));
+                        activity_start_intent.push((activities::Type::Battle, subject.id, target));
                     }
                     _ => {}
                 }
@@ -269,7 +269,7 @@ fn tick(sim: &mut Simulation, mut request: Request, arena: &Bump) -> Response {
         {
             // Resolve desired beging of battle
             let _span = tracing::info_span!("Post Move State Changes").entered();
-            resolve_activity_starts(sim, &activity_start_intent);
+            activities::begin_activities(sim, &activity_start_intent);
 
             // Resolve desired changes of party container
             for subject in desire_exit {
@@ -919,106 +919,221 @@ fn calculate_power(entity: &Entity) -> f64 {
     entity.get_var(Var::Soldiers)
 }
 
-#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-enum ActivityType {
-    Battle,
-}
+mod activities {
+    use super::*;
 
-fn resolve_activity_starts<'a>(
-    sim: &mut Simulation,
-    incipits: &[(ActivityType, EntityId, EntityId)],
-) {
-    for &(activity_type, subject, target) in incipits {
-        let (
-            activity_party_type,
-            activity_set,
-            participant_flag,
-            subject_hierarchy,
-            target_hierarchy,
-        ) = match activity_type {
-            ActivityType::Battle => (
-                "battle",
-                Set::Battle,
-                Flag::IsActivityPartecipant,
-                Hierarchy::ActivitySubject,
-                Hierarchy::ActivityTarget,
-            ),
-        };
+    #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+    pub(crate) enum Type {
+        Battle,
+    }
 
-        let collides = sim
-            .detections
-            .get_for(subject)
-            .iter()
-            .any(|entry| entry.id == target && entry.distance <= 0.0);
+    pub(crate) enum Resolution {
+        Ongoing,
+        Resolved { winning_role: Option<Hierarchy> },
+    }
 
-        if !collides {
-            continue;
-        }
+    pub(crate) fn begin_activities<'a>(
+        sim: &mut Simulation,
+        incipits: &[(Type, EntityId, EntityId)],
+    ) {
+        for &(activity_type, subject, target) in incipits {
+            let (
+                activity_party_type,
+                activity_set,
+                participant_flag,
+                subject_hierarchy,
+                target_hierarchy,
+            ) = match activity_type {
+                Type::Battle => (
+                    "battle",
+                    Set::Battle,
+                    Flag::IsActivityPartecipant,
+                    Hierarchy::ActivitySubject,
+                    Hierarchy::ActivityTarget,
+                ),
+            };
 
-        // Get information necessary to spawn the battle
-        let pos = {
-            let subject = &sim.entities[subject];
-            let target = &sim.entities[target];
-            // An activitity start only works if both subject and target are not in an activity
-            let already_in_activity = [subject, target]
+            let collides = sim
+                .detections
+                .get_for(subject)
                 .iter()
-                .any(|entity| entity.flags.get(Flag::IsActivityPartecipant));
-            if already_in_activity {
+                .any(|entry| entry.id == target && entry.distance <= 0.0);
+
+            if !collides {
                 continue;
             }
-            (subject.body.pos + target.body.pos) / 2.
-        };
 
-        // Spawn the battle
-        let activity_entity = {
-            let archetype = sim.entities.find_type_by_tag(activity_party_type).unwrap();
-            let entity = sim.entities.spawn_with_type(archetype.id);
-            entity.body.pos = pos;
-            let entity = entity.id;
-            sim.entities.add_to_set(activity_set, entity);
-            entity
-        };
+            // Get information necessary to spawn the battle
+            let pos = {
+                let subject = &sim.entities[subject];
+                let target = &sim.entities[target];
+                // An activitity start only works if both subject and target are not in an activity
+                let already_in_activity = [subject, target]
+                    .iter()
+                    .any(|entity| entity.flags.get(Flag::IsActivityPartecipant));
+                if already_in_activity {
+                    continue;
+                }
+                (subject.body.pos + target.body.pos) / 2.
+            };
 
-        for (entity, hierarchy) in [(subject, subject_hierarchy), (target, target_hierarchy)] {
-            sim.entities.set_parent(hierarchy, activity_entity, entity);
-            sim.entities[entity].flags.set(participant_flag, true);
-        }
-    }
-}
+            // Spawn the battle
+            let activity_entity = {
+                let archetype = sim.entities.find_type_by_tag(activity_party_type).unwrap();
+                let entity = sim.entities.spawn_with_type(archetype.id);
+                entity.body.pos = pos;
+                let entity = entity.id;
+                sim.entities.add_to_set(activity_set, entity);
+                entity
+            };
 
-fn tick_activities(arena: &Bump, sim: &mut Simulation) {
-    let activities = AVec::from_iter_in(sim.entities.iter_set_ids(Set::Battle), arena);
-    let mut partecipants = AVec::new_in(arena);
-    for activity_id in activities {
-        // Get the members out
-        for hierarchy in [Hierarchy::ActivitySubject, Hierarchy::ActivityTarget] {
-            partecipants.extend(
-                sim.entities
-                    .children_of(hierarchy, activity_id)
-                    .map(|id| (id, hierarchy)),
-            );
-        }
-
-        // Make decisions
-        let rng = &mut rng_from_multi_seed(&[sim.turn_num, activity_id.data().as_ffi()]);
-        let is_attacker_victory = rng.gen_bool(0.5);
-        let winning_role = if is_attacker_victory {
-            Hierarchy::ActivitySubject
-        } else {
-            Hierarchy::ActivityTarget
-        };
-
-        // Despawn the activity
-        sim.entities.despawn(activity_id).unwrap();
-
-        // Process partecipants
-        for (entity, role) in partecipants.drain(..) {
-            let entity = &mut sim.entities[entity];
-            entity.flags.set(Flag::IsActivityPartecipant, false);
-            if role == winning_role {
-                println!("{} is a winner", sim.names.resolve(entity.name));
+            for (entity, hierarchy) in [(subject, subject_hierarchy), (target, target_hierarchy)] {
+                sim.entities.set_parent(hierarchy, activity_entity, entity);
+                sim.entities[entity].flags.set(participant_flag, true);
             }
         }
+    }
+
+    pub(super) fn tick_activities(arena: &Bump, sim: &mut Simulation) {
+        for activity_set in [Set::Battle] {
+            let activities = AVec::from_iter_in(sim.entities.iter_set_ids(activity_set), arena);
+
+            let mut subjects = AVec::new_in(arena);
+            let mut targets = AVec::new_in(arena);
+
+            for activity_id in activities {
+                subjects.clear();
+                targets.clear();
+
+                // Get the members out
+                for (partecipants, role) in [
+                    (&mut subjects, Hierarchy::ActivitySubject),
+                    (&mut targets, Hierarchy::ActivityTarget),
+                ] {
+                    partecipants.extend(sim.entities.children_of(role, activity_id));
+                }
+
+                let rng = &mut rng_from_multi_seed(&[sim.turn_num, activity_id.data().as_ffi()]);
+
+                // let activity_ticks = {
+                //     let current = sim.entities[activity_id].get_var(Var::ActivityTicks);
+                //     let next = (current + 1.).max(0.);
+                //     sim.entities[activity_id].set_var(Var::ActivityTicks, next);
+                //     next as u64
+                // };
+
+                // Specialise behavior for the specific activity
+                let resolution = match activity_set {
+                    Set::Battle => tick_battle(arena, sim, rng, &subjects, &targets),
+                    _ => Resolution::Ongoing,
+                };
+
+                let winning_role = match resolution {
+                    Resolution::Ongoing => {
+                        continue;
+                    }
+                    Resolution::Resolved { winning_role } => winning_role,
+                };
+
+                // Despawn the activity
+                sim.entities.despawn(activity_id).unwrap();
+
+                // Process partecipants
+                for (entities, role) in [
+                    (subjects.as_slice(), Hierarchy::ActivitySubject),
+                    (targets.as_slice(), Hierarchy::ActivityTarget),
+                ] {
+                    for &entity in entities {
+                        let entity = &mut sim.entities[entity];
+                        entity.flags.set(Flag::IsActivityPartecipant, false);
+                        if Some(role) == winning_role {
+                            println!("{} is a winner", sim.names.resolve(entity.name));
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    fn tick_battle(
+        arena: &Bump,
+        sim: &mut Simulation,
+        rng: &mut SmallRng,
+        subjects: &[EntityId],
+        targets: &[EntityId],
+    ) -> activities::Resolution {
+        struct Entry {
+            id: EntityId,
+            soldiers: f64,
+        }
+
+        let sides = [subjects, targets].map(|entities| {
+            let iter = entities.iter().map(|&id| {
+                let entity = &sim.entities[id];
+                let soldiers = entity.get_var(Var::Soldiers);
+                Entry { id, soldiers }
+            });
+            AVec::from_iter_in(iter, arena)
+        });
+        const BASE_CASUALTY_RATE: f64 = 0.04;
+        const MAX_CASUALTY_RATE: f64 = 0.18;
+
+        const ROLES: [Hierarchy; 2] = [Hierarchy::ActivitySubject, Hierarchy::ActivityTarget];
+
+        let initial_soldiers =
+            [&sides[0], &sides[1]].map(|entries| entries.iter().map(|x| x.soldiers).sum::<f64>());
+
+        let total_power = initial_soldiers[0] + initial_soldiers[1];
+        if total_power == 0.0 {
+            return Resolution::Resolved { winning_role: None };
+        }
+
+        let mut loss_rate = |opponent_power: f64| {
+            let ratio = (opponent_power / total_power).clamp(0.0, 1.0);
+            let variability = rng.gen_range(0.85..1.15);
+            (BASE_CASUALTY_RATE * (1.0 + ratio) * variability).clamp(0.0, MAX_CASUALTY_RATE)
+        };
+
+        let losses = [
+            initial_soldiers[0] * loss_rate(initial_soldiers[1]),
+            initial_soldiers[1] * loss_rate(initial_soldiers[0]),
+        ];
+
+        for side_idx in 0..2 {
+            let side_total = initial_soldiers[side_idx];
+            let total_loss = losses[side_idx];
+
+            if side_total <= 0.0 || total_loss <= 0.0 {
+                continue;
+            }
+
+            for entry in &sides[side_idx] {
+                if entry.soldiers <= 0.0 {
+                    continue;
+                }
+                let share = entry.soldiers / side_total;
+                let entity = &mut sim.entities[entry.id];
+                let next = {
+                    let loss = total_loss * share;
+                    let next = (entity.get_var(Var::Soldiers) - loss).max(0.0);
+                    let fractional = next.fract();
+                    let adjusted = if rng.gen_bool(fractional) { 1. } else { 0. };
+                    next - next.fract() + adjusted
+                };
+                entity.vars_mut().with(Var::Soldiers, next);
+            }
+        }
+
+        for side_idx in 0..2 {
+            let soldiers = initial_soldiers[side_idx] - losses[side_idx];
+            if soldiers <= 0. {
+                return Resolution::Resolved {
+                    winning_role: Some(ROLES[1 - side_idx]),
+                };
+            }
+        }
+
+        Resolution::Ongoing
     }
 }
 
@@ -1038,6 +1153,7 @@ struct DiploMap<'a> {
 #[derive(Clone, Copy, Default)]
 struct DiploEntry {
     parent: EntityId,
+    // Span of entities that are fixed to be hostile
     hostile_entities: Span,
     generally_hostile: bool,
 }
