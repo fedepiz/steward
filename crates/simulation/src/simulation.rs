@@ -1,6 +1,7 @@
 use bumpalo::Bump;
 use rand::{Rng, SeedableRng, rngs::SmallRng};
 use slotmap::{Key, KeyData, SecondaryMap};
+use strum::IntoEnumIterator;
 use util::{span::Span, string_pool::*};
 
 use crate::{
@@ -143,6 +144,22 @@ fn tick(sim: &mut Simulation, mut request: Request, arena: &Bump) -> Response {
             activities::tick_activities(arena, sim);
         }
 
+        {
+            const HEADCOUNT_VARS: &[Var] = &[Var::Civilians, Var::Soldiers];
+            let iter = sim
+                .entities
+                .iter()
+                .filter(|entity| {
+                    entity.get_flag(Flag::IsEphemeral)
+                        && HEADCOUNT_VARS.iter().all(|&var| entity.get_var(var) <= 0.)
+                })
+                .map(|entity| entity.id);
+
+            for id in AVec::from_iter_in(iter, arena) {
+                sim.entities.despawn(id);
+            }
+        }
+
         let mut movement_elements = AVec::with_capacity_in(sim.entities.len(), arena);
 
         let mut desire_exit = AVec::with_capacity_in(sim.entities.len(), arena);
@@ -219,7 +236,13 @@ fn tick(sim: &mut Simulation, mut request: Request, arena: &Bump) -> Response {
             let (destination, direct) = match movement_target {
                 MovementTarget::Immobile => (subject.body.pos, false),
                 MovementTarget::FixedPos { pos, direct } => (pos, direct),
-                MovementTarget::Entity(id) => (sim.entities[id].body.pos, false),
+                MovementTarget::Entity(id) => (
+                    sim.entities
+                        .get(id)
+                        .map(|entity| entity.body.pos)
+                        .unwrap_or(subject.body.pos),
+                    false,
+                ),
             };
 
             // If the party is inside another party, their speed is 0
@@ -499,26 +522,31 @@ fn spawn_with_opportunity(sim: &mut Simulation, arena: &Bump) {
     let mut updates = AVec::new_in(arena);
 
     #[derive(Clone, Copy)]
-    struct SpawnInfo {
-        party_type: &'static str,
+    struct SpawnInfo<'a> {
+        party_type: &'a str,
         flags: Flags,
         name_contains_of_parent: bool,
+        vars: &'a [(Var, f64)],
     }
 
     const FARMER_SPAWN_INFO: SpawnInfo = SpawnInfo {
         party_type: "farmers",
         flags: Flags::new().with(Flag::IsFarmer),
         name_contains_of_parent: false,
+        vars: &[(Var::Civilians, 10.)],
     };
     const MINER_SPAWN_INFO: SpawnInfo = SpawnInfo {
         party_type: "miners",
         flags: Flags::new().with(Flag::IsMiner),
         name_contains_of_parent: false,
+        vars: &[(Var::Civilians, 10.)],
     };
+
     const CARAVAN_SPAWN_INFO: SpawnInfo = SpawnInfo {
         party_type: "caravan",
         flags: Flags::new().with(Flag::IsCaravan),
         name_contains_of_parent: true,
+        vars: &[(Var::Civilians, 10.), (Var::Soldiers, 20.)],
     };
 
     #[derive(Clone, Copy, PartialEq, PartialOrd)]
@@ -628,12 +656,13 @@ fn spawn_with_opportunity(sim: &mut Simulation, arena: &Bump) {
             if spawn.name_contains_of_parent {
                 name.set(NamePart::OfX, entity.name.get(NamePart::Main));
             }
+            let flags = spawn.flags.with(Flag::IsEphemeral);
             spawns.push(SpawnSubentity {
                 typ: party_type.id,
                 parent: entity.id,
                 name,
-                flags: spawn.flags,
-                vars: &[],
+                flags,
+                vars: spawn.vars,
                 parents: parents.into_bump_slice(),
             });
         }
@@ -920,6 +949,8 @@ fn calculate_power(entity: &Entity) -> f64 {
 }
 
 mod activities {
+    use strum::{EnumCount, EnumIter};
+
     use super::*;
 
     #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -1062,71 +1093,166 @@ mod activities {
         subjects: &[EntityId],
         targets: &[EntityId],
     ) -> activities::Resolution {
-        struct Entry {
-            id: EntityId,
-            soldiers: f64,
+        struct TroopKind<'a> {
+            /// Variable from which the troop value is extracted/written to
+            var: Var,
+            stats: &'a [(Stat, f64)],
         }
 
-        let sides = [subjects, targets].map(|entities| {
-            let iter = entities.iter().map(|&id| {
-                let entity = &sim.entities[id];
-                let soldiers = entity.get_var(Var::Soldiers);
-                Entry { id, soldiers }
-            });
-            AVec::from_iter_in(iter, arena)
-        });
+        #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, EnumIter, EnumCount)]
+        enum Stat {
+            /// Shuld always be 1.
+            Heads,
+            /// Scales the amount of combat power provided by this type of troop
+            Power,
+            /// Scales the share of casualties taken by this type of troop
+            CasualtyWeight,
+        }
+
+        #[derive(Clone, Copy, Default)]
+        struct Stats([f64; Stat::COUNT]);
+
+        impl Stats {
+            fn get(&self, s: Stat) -> f64 {
+                self.0[s as usize]
+            }
+
+            fn set(&mut self, s: Stat, v: f64) {
+                self.0[s as usize] = v;
+            }
+
+            fn sum(it: impl Iterator<Item = Stats>) -> Self {
+                let mut accum = Self::default();
+                for item in it {
+                    for stat in Stat::iter() {
+                        let x = accum.get(stat) + item.get(stat);
+                        accum.set(stat, x);
+                    }
+                }
+                accum
+            }
+        }
+
+        const SOLDIERS: TroopKind = TroopKind {
+            var: Var::Soldiers,
+            stats: &[
+                (Stat::Heads, 1.),
+                (Stat::Power, 1.),
+                (Stat::CasualtyWeight, 1.),
+            ],
+        };
+
+        const CIVILIANS: TroopKind = TroopKind {
+            var: Var::Civilians,
+            stats: &[
+                (Stat::Heads, 1.),
+                (Stat::Power, 0.1),
+                (Stat::CasualtyWeight, 0.5),
+            ],
+        };
+
+        const ALL_TROOPS_KINDS: [TroopKind; 2] = [SOLDIERS, CIVILIANS];
+
         const BASE_CASUALTY_RATE: f64 = 0.04;
         const MAX_CASUALTY_RATE: f64 = 0.18;
 
         const ROLES: [Hierarchy; 2] = [Hierarchy::ActivitySubject, Hierarchy::ActivityTarget];
 
-        let initial_soldiers =
-            [&sides[0], &sides[1]].map(|entries| entries.iter().map(|x| x.soldiers).sum::<f64>());
-
-        let total_power = initial_soldiers[0] + initial_soldiers[1];
-        if total_power == 0.0 {
-            return Resolution::Resolved { winning_role: None };
+        struct Troop<'a> {
+            entity: EntityId,
+            kind: &'a TroopKind<'a>,
+            stats: Stats,
         }
 
-        let mut loss_rate = |opponent_power: f64| {
-            let ratio = (opponent_power / total_power).clamp(0.0, 1.0);
+        struct Side<'a> {
+            troops: AVec<'a, Troop<'a>>,
+            totals: Stats,
+        }
+
+        let sides = [subjects, targets].map(|entities| {
+            let mut troops = AVec::new_in(arena);
+            for &id in entities {
+                let entity = &sim.entities[id];
+                for kind in &ALL_TROOPS_KINDS {
+                    let amount = entity.get_var(kind.var);
+                    if amount > 0.0 {
+                        let mut stats = Stats::default();
+                        for &(stat, k) in kind.stats {
+                            stats.set(stat, k * amount);
+                        }
+                        troops.push(Troop {
+                            entity: id,
+                            kind,
+                            stats,
+                        });
+                    }
+                }
+            }
+
+            let totals = Stats::sum(troops.iter().map(|t| t.stats));
+
+            Side { troops, totals }
+        });
+
+        let overall = Stats::sum(sides.iter().map(|x| x.totals));
+        let total_power = overall.get(Stat::Power);
+
+        let mut losses = |headcount: f64, opponent_strength: f64| {
+            let ratio = if total_power > 0.0 {
+                opponent_strength / total_power
+            } else {
+                0.0
+            };
+            let ratio = ratio.clamp(0.0, 1.0);
             let variability = rng.gen_range(0.85..1.15);
-            (BASE_CASUALTY_RATE * (1.0 + ratio) * variability).clamp(0.0, MAX_CASUALTY_RATE)
+            let proportion =
+                (BASE_CASUALTY_RATE * (1.0 + ratio) * variability).clamp(0.0, MAX_CASUALTY_RATE);
+
+            let fixed_party = opponent_strength / 20.;
+
+            (fixed_party + headcount * proportion).clamp(0., headcount)
         };
 
-        let losses = [
-            initial_soldiers[0] * loss_rate(initial_soldiers[1]),
-            initial_soldiers[1] * loss_rate(initial_soldiers[0]),
-        ];
+        let losses = [0, 1].map(|sidx| {
+            losses(
+                sides[sidx].totals.get(Stat::Heads),
+                sides[1 - sidx].totals.get(Stat::Power),
+            )
+        });
 
         for side_idx in 0..2 {
-            let side_total = initial_soldiers[side_idx];
+            let side_total = sides[side_idx].totals.get(Stat::CasualtyWeight);
             let total_loss = losses[side_idx];
 
             if side_total <= 0.0 || total_loss <= 0.0 {
                 continue;
             }
 
-            for entry in &sides[side_idx] {
-                if entry.soldiers <= 0.0 {
+            for entry in &sides[side_idx].troops {
+                let entry_weight = entry.stats.get(Stat::CasualtyWeight);
+                if entry_weight <= 0.0 {
                     continue;
                 }
-                let share = entry.soldiers / side_total;
-                let entity = &mut sim.entities[entry.id];
+                let share = entry_weight / side_total;
+                let entity = &mut sim.entities[entry.entity];
                 let next = {
-                    let loss = total_loss * share;
-                    let next = (entity.get_var(Var::Soldiers) - loss).max(0.0);
+                    let loss_amount = total_loss * share;
+                    let next = (entity.get_var(entry.kind.var) - loss_amount).max(0.0);
                     let fractional = next.fract();
                     let adjusted = if rng.gen_bool(fractional) { 1. } else { 0. };
                     next - next.fract() + adjusted
                 };
-                entity.vars_mut().with(Var::Soldiers, next);
+                entity.vars_mut().with(entry.kind.var, next);
             }
         }
 
         for side_idx in 0..2 {
-            let soldiers = initial_soldiers[side_idx] - losses[side_idx];
-            if soldiers <= 0. {
+            let remaining_headcount = sides[side_idx]
+                .troops
+                .iter()
+                .map(|troop| sim.entities[troop.entity].get_var(troop.kind.var))
+                .sum::<f64>();
+            if remaining_headcount <= 0.0 {
                 return Resolution::Resolved {
                     winning_role: Some(ROLES[1 - side_idx]),
                 };

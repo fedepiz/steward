@@ -360,6 +360,7 @@ fn gui(ctx: &egui::Context, response: &simulation::Response) {
 
                     let vars = [
                         ("location", "Location"),
+                        ("civilians", "Civilians"),
                         ("soldiers", "Soldiers"),
                         ("renown", "Renown"),
                         ("population", "Population"),

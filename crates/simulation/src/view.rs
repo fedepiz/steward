@@ -110,8 +110,13 @@ pub(crate) fn view(sim: &Simulation, req: &Request, response: &mut Response) {
                 for (key, var) in [
                     ("minerals", Var::Minerals),
                     ("goods", Var::Goods),
+                    ("civilians", Var::Civilians),
                     ("soldiers", Var::Soldiers),
                 ] {
+                    let value = entity.get_var(var);
+                    if value == 0. {
+                        continue;
+                    }
                     ctx.display(key, entity.get_var(var));
                 }
 

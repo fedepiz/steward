@@ -24,6 +24,7 @@ pub(crate) struct Archetype {
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, EnumCount, EnumIter, Debug)]
 pub(crate) enum Var {
     // Generic Party
+    Civilians,
     Soldiers,
     // Activities
     ActivityTicks,
@@ -66,6 +67,9 @@ pub(crate) enum Flag {
     IsFarmer,
     IsMiner,
     IsCaravan,
+    // An ephemeral agent is an agent that despawns if
+    // it becomes "empty"
+    IsEphemeral,
     // Status flag
     IsDisembodied,
     IsInside,
