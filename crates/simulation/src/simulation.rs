@@ -121,6 +121,8 @@ fn tick(sim: &mut Simulation, mut request: Request, arena: &Bump) -> Response {
     for _ in 0..request.advance_ticks {
         sim.turn_num = sim.turn_num.wrapping_add(1);
 
+        // Tick timers
+        tick_timers(sim);
         tick_opportunities(sim);
         spawn_with_opportunity(sim, arena);
 
@@ -190,50 +192,73 @@ fn tick(sim: &mut Simulation, mut request: Request, arena: &Bump) -> Response {
 
         // Parties logical update
         for subject in sim.entities.iter() {
-            let (goal, avoid_area) = determine_party_goal_and_avoidance(sim, subject);
-
-            let detection = sim.detections.get_for(subject.id);
-
-            let movement_target = determine_party_movement_target(detection, goal);
-
-            {
-                let container = sim.entities.parent_of(Hierarchy::Container, subject.id);
-                // Enqueue desire to enter a container
-                let target = match goal {
-                    Goal::Idle => container,
-                    Goal::ToEntity {
-                        target,
-                        on_arrival: OnArrival::Enter,
-                        ..
-                    } => target,
-                    _ => EntityId::null(),
-                };
-
-                if target != container {
-                    if target.is_null() {
-                        desire_exit.push(subject.id);
-                    } else {
-                        desire_entry.push((subject.id, target, true));
-                    }
-                }
+            #[derive(Default)]
+            struct Intent {
+                movement_target: MovementTarget,
+                avoid_area: movement::Area,
+                target: EntityId,
+                desire_exit: bool,
+                desire_entry: bool,
+                start_activity: Option<activities::Type>,
             }
 
+            let mut intent = Intent::default();
             {
-                // Enqueue desire to begin a battle
-                match goal {
-                    Goal::ToEntity {
-                        target,
-                        on_arrival: OnArrival::Attack,
-                        ..
-                    } => {
-                        activity_start_intent.push((activities::Type::Battle, subject.id, target));
+                let (goal, avoid_area) = determine_party_goal_and_avoidance(sim, subject);
+
+                let detection = sim.detections.get_for(subject.id);
+
+                let movement_target = determine_party_movement_target(detection, goal);
+
+                intent.movement_target = movement_target;
+                intent.avoid_area = avoid_area;
+
+                {
+                    let container = sim.entities.parent_of(Hierarchy::Container, subject.id);
+                    // Enqueue desire to enter a container
+                    let target = match goal {
+                        Goal::Idle => container,
+                        Goal::ToEntity {
+                            target,
+                            on_arrival: OnArrival::Enter,
+                            ..
+                        } => target,
+                        _ => EntityId::null(),
+                    };
+
+                    if target != container {
+                        if target.is_null() {
+                            intent.desire_exit = true;
+                        } else {
+                            intent.desire_entry = true;
+                        }
                     }
-                    _ => {}
+                    intent.target = target;
                 }
+
+                {
+                    // Enqueue desire to begin a battle
+                    match goal {
+                        Goal::ToEntity {
+                            target,
+                            on_arrival: OnArrival::Attack,
+                            ..
+                        } => {
+                            intent.target = target;
+                            intent.start_activity = Some(activities::Type::Battle);
+                        }
+                        _ => {}
+                    }
+                }
+            };
+
+            let is_frozen = subject.get_var(Var::FrozenTimer) > 0.;
+            if is_frozen {
+                intent = Intent::default();
             }
 
             // Resolve movement target
-            let (destination, direct) = match movement_target {
+            let (destination, direct) = match intent.movement_target {
                 MovementTarget::Immobile => (subject.body.pos, false),
                 MovementTarget::FixedPos { pos, direct } => (pos, direct),
                 MovementTarget::Entity(id) => (
@@ -253,14 +278,29 @@ fn tick(sim: &mut Simulation, mut request: Request, arena: &Bump) -> Response {
             };
 
             // Actual movement element
-            movement_elements.push(movement::Element {
+            let element = movement::Element {
                 id: subject.id,
                 speed,
                 pos: subject.body.pos,
                 destination,
                 direct,
-                avoid_area,
-            });
+                avoid_area: intent.avoid_area,
+            };
+
+            if intent.desire_exit {
+                desire_exit.push(subject.id);
+            }
+
+            if !intent.target.is_null() {
+                if intent.desire_entry {
+                    desire_entry.push((subject.id, intent.target, true));
+                }
+                if let Some(activity_type) = intent.start_activity {
+                    activity_start_intent.push((activity_type, subject.id, intent.target));
+                }
+            }
+
+            movement_elements.push(element);
         }
 
         // Apply movement results back to parties
@@ -1046,13 +1086,6 @@ mod activities {
 
                 let rng = &mut rng_from_multi_seed(&[sim.turn_num, activity_id.data().as_ffi()]);
 
-                // let activity_ticks = {
-                //     let current = sim.entities[activity_id].get_var(Var::ActivityTicks);
-                //     let next = (current + 1.).max(0.);
-                //     sim.entities[activity_id].set_var(Var::ActivityTicks, next);
-                //     next as u64
-                // };
-
                 // Specialise behavior for the specific activity
                 let resolution = match activity_set {
                     Set::Battle => tick_battle(arena, sim, rng, &subjects, &targets),
@@ -1078,7 +1111,7 @@ mod activities {
                         let entity = &mut sim.entities[entity];
                         entity.flags.set(Flag::IsActivityPartecipant, false);
                         if Some(role) == winning_role {
-                            println!("{} is a winner", sim.names.resolve(entity.name));
+                            entity.inc_var(Var::FrozenTimer, 100.);
                         }
                     }
                 }
@@ -1208,9 +1241,12 @@ mod activities {
             let proportion =
                 (BASE_CASUALTY_RATE * (1.0 + ratio) * variability).clamp(0.0, MAX_CASUALTY_RATE);
 
-            let fixed_party = opponent_strength / 20.;
+            // The proportional part is good when the parties are large. However, when the parties are small, we would like
+            // an acceleration of the casualties. For this, we add 1/4 of each size as casualties, capped to 20.
 
-            (fixed_party + headcount * proportion).clamp(0., headcount)
+            let fixed_part = (opponent_strength / 4.).min(20.);
+
+            (fixed_part + headcount * proportion).clamp(0., headcount)
         };
 
         let losses = [0, 1].map(|sidx| {
@@ -1242,7 +1278,7 @@ mod activities {
                     let adjusted = if rng.gen_bool(fractional) { 1. } else { 0. };
                     next - next.fract() + adjusted
                 };
-                entity.vars_mut().with(entry.kind.var, next);
+                entity.set_var(entry.kind.var, next);
             }
         }
 
@@ -1437,5 +1473,17 @@ mod detection {
 
         // Distance net of sizes. 0 or lower means collision
         center_to_center_distance - collision_range
+    }
+}
+
+fn tick_timers(sim: &mut Simulation) {
+    const TIMERS: [Var; 1] = [Var::FrozenTimer];
+    for entity in sim.entities.iter_mut() {
+        for var in TIMERS {
+            let value = entity.get_var(var);
+            if value > 0.0 {
+                entity.set_var(var, (value - 1.).max(0.));
+            }
+        }
     }
 }

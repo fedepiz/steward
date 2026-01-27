@@ -26,11 +26,11 @@ pub(crate) enum Var {
     // Generic Party
     Civilians,
     Soldiers,
-    // Activities
-    ActivityTicks,
     // Person
     Money,
     Renown,
+    // Timers
+    FrozenTimer,
     // Settlement
     Population,
     Prosperity,
@@ -578,18 +578,32 @@ impl Entity {
         VarsMut(&mut self.vars)
     }
 
+    #[inline]
     pub(crate) fn get_var(&self, var: Var) -> f64 {
         self.vars[var as usize]
     }
 
+    #[inline]
     pub(crate) fn set_var(&mut self, var: Var, value: f64) {
         self.vars[var as usize] = value;
     }
 
+    #[inline]
+    pub(crate) fn inc_var(&mut self, var: Var, value: f64) {
+        self.vars[var as usize] += value;
+    }
+
+    #[inline]
+    pub(crate) fn modify_var(&mut self, var: Var, f: impl FnOnce(f64) -> f64) {
+        self.vars[var as usize] = f(self.vars[var as usize]);
+    }
+
+    #[inline]
     pub(crate) fn get_flag(&self, flag: Flag) -> bool {
         self.flags.get(flag)
     }
 
+    #[inline]
     pub(crate) fn set_flag(&mut self, flag: Flag, value: bool) {
         self.flags.set(flag, value);
     }
