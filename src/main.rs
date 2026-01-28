@@ -351,6 +351,18 @@ fn gui(ctx: &egui::Context, response: &simulation::Response, actions: &mut Actio
             }
         });
     });
+
+    if let Some(root) = response.objects.lookup_by_tag("interaction") {
+        egui::Window::new("Interaction")
+            .anchor(egui::Align2::CENTER_CENTER, (0., 0.))
+            .show(ctx, |ui| {
+                ui.label(objs.str(root, "description"));
+                for &child in objs.list(root, "options") {
+                    if ui.small_button(objs.str(child, "text")).clicked() {}
+                }
+            });
+    }
+
     if let Some(root) = response.objects.lookup_by_tag("selected_item") {
         egui::Window::new("Selected Item").show(ctx, |ui| {
             egui::Grid::new("overview-grid")

@@ -3,10 +3,7 @@ use rand::rngs::SmallRng;
 use rand::{Rng, SeedableRng};
 use slotmap::Key;
 
-use crate::entities::{
-    self, Behavior, Entity, EntityId, Flag, Hierarchy, Interaction, Location, Set, Task,
-    TaskDestination, TaskInteraction, TaskKind, Var,
-};
+use crate::entities::{self, *};
 use crate::geom::V2;
 use crate::simulation::*;
 
@@ -65,14 +62,17 @@ fn farmer_tasking(kind: TaskKind) -> Task {
         TaskKind::ReturnToBase => Task {
             kind: TaskKind::Load,
             destination: TaskDestination::Base,
-            interaction: TaskInteraction::new(&[Interaction::LoadFood, Interaction::UnloadGoods]),
+            interaction: TaskInteraction::new(&[
+                InteractionKind::LoadFood,
+                InteractionKind::UnloadGoods,
+            ]),
             arrival_wait: SHORT_WAIT,
             ..Default::default()
         },
         TaskKind::Load => Task {
             kind: TaskKind::Deliver,
             destination: TaskDestination::MarketOfHome,
-            interaction: TaskInteraction::with(Interaction::SellFood),
+            interaction: TaskInteraction::with(InteractionKind::SellFood),
             arrival_wait: SHORT_WAIT,
             ..Default::default()
         },
@@ -95,14 +95,14 @@ fn miner_tasking(kind: TaskKind) -> Task {
         TaskKind::ReturnToBase => Task {
             kind: TaskKind::Load,
             destination: TaskDestination::WorkArea,
-            interaction: TaskInteraction::with(Interaction::LoadMinerals),
+            interaction: TaskInteraction::with(InteractionKind::LoadMinerals),
             arrival_wait: LONG_WAIT,
             ..Default::default()
         },
         TaskKind::Load => Task {
             kind: TaskKind::Deliver,
             destination: TaskDestination::Base,
-            interaction: TaskInteraction::with(Interaction::UnloadMinerals),
+            interaction: TaskInteraction::with(InteractionKind::UnloadMinerals),
             arrival_wait: SHORT_WAIT,
             ..Default::default()
         },
@@ -126,14 +126,14 @@ fn caravan_tasking(kind: TaskKind) -> Task {
         TaskKind::ReturnToBase => Task {
             kind: TaskKind::Load,
             destination: TaskDestination::Base,
-            interaction: TaskInteraction::with(Interaction::CaravanVisit),
+            interaction: TaskInteraction::with(InteractionKind::CaravanVisit),
             arrival_wait: SHORT_WAIT,
             ..Default::default()
         },
         TaskKind::Load => Task {
             kind: TaskKind::Deliver,
             destination: TaskDestination::TradingDestination,
-            interaction: TaskInteraction::with(Interaction::CaravanVisit),
+            interaction: TaskInteraction::with(InteractionKind::CaravanVisit),
             arrival_wait: SHORT_WAIT,
             ..Default::default()
         },
@@ -148,8 +148,7 @@ fn caravan_tasking(kind: TaskKind) -> Task {
 }
 
 const BANDIT_MIN_SOLDIERS: f64 = 30.;
-const BANDIT_IDEAL_SOLDIERS: f64 = 50.;
-
+//
 fn bandit_tasking(sim: &Simulation, subject: &Entity) -> Task {
     // If homeless, suicide
     let home = sim.entities.parent_of(Hierarchy::Attachment, subject.id);
@@ -161,6 +160,7 @@ fn bandit_tasking(sim: &Simulation, subject: &Entity) -> Task {
     }
 
     let soldiers = subject.get_var(Var::Soldiers);
+    // If not enough soldiers, go home and pick up more
     if soldiers < BANDIT_MIN_SOLDIERS {
         Task {
             kind: TaskKind::ReturnToBase,
@@ -170,6 +170,7 @@ fn bandit_tasking(sim: &Simulation, subject: &Entity) -> Task {
             ..Default::default()
         }
     } else {
+        // Roam and hunt
         let rng = &mut SmallRng::seed_from_u64(
             sim.turn_num
                 .wrapping_mul(13)
@@ -375,12 +376,12 @@ fn resolve_task_effects(
 
 fn handle_interaction(
     sim: &mut Simulation,
-    interaction: Interaction,
+    interaction: InteractionKind,
     subject_id: EntityId,
     target_id: EntityId,
 ) -> bool {
     match interaction {
-        Interaction::SellFood => {
+        InteractionKind::SellFood => {
             let subject = &sim.entities[subject_id];
             let target = &sim.entities[target_id];
             let on_farmer = subject.get_var(Var::FoodStored) as i64;
@@ -400,7 +401,7 @@ fn handle_interaction(
                 .with(Var::FoodStored, new_at_settlement as f64);
             true
         }
-        Interaction::LoadFood => {
+        InteractionKind::LoadFood => {
             const MIN_CARRIED_FOOD: i64 = 50;
             const MAX_CARRIED_FOOD: i64 = 500;
             const MAX_CARRIED_PROP: f64 = 0.5;
@@ -438,7 +439,7 @@ fn handle_interaction(
                 false
             }
         }
-        Interaction::UnloadMinerals => {
+        InteractionKind::UnloadMinerals => {
             let subject = &sim.entities[subject_id];
             let target = &sim.entities[target_id];
             let on_miner = subject.get_var(Var::Minerals) as i64;
@@ -453,13 +454,13 @@ fn handle_interaction(
 
             true
         }
-        Interaction::LoadMinerals => {
+        InteractionKind::LoadMinerals => {
             sim.entities[subject_id]
                 .vars_mut()
                 .modify(Var::Minerals, |x| x + MINERALS_PER_LOAD);
             true
         }
-        Interaction::UnloadGoods => {
+        InteractionKind::UnloadGoods => {
             let subject = &sim.entities[subject_id];
             let target = &sim.entities[target_id];
             let on_farmer = subject.get_var(Var::Goods) as i64;
@@ -474,7 +475,7 @@ fn handle_interaction(
 
             true
         }
-        Interaction::CaravanVisit => {
+        InteractionKind::CaravanVisit => {
             let mut on_caravan = sim.entities[subject_id].get_var(Var::Goods);
             let target = &sim.entities[target_id];
             let mut in_town = target.get_var(Var::Goods);

@@ -2,6 +2,7 @@ mod actor;
 mod entities;
 mod geom;
 mod init;
+mod interaction;
 mod movement;
 mod names;
 pub mod objects;

@@ -520,7 +520,7 @@ impl Default for TaskDestination {
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, EnumCount, EnumIter)]
-pub(crate) enum Interaction {
+pub(crate) enum InteractionKind {
     SellFood,
     LoadFood,
     LoadMinerals,
@@ -529,7 +529,7 @@ pub(crate) enum Interaction {
     CaravanVisit,
 }
 
-const INTERACTION_BITSET_SIZE: usize = (Interaction::COUNT + 63) / 64;
+const INTERACTION_BITSET_SIZE: usize = (InteractionKind::COUNT + 63) / 64;
 
 #[derive(Default, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) struct TaskInteraction {
@@ -537,7 +537,7 @@ pub(crate) struct TaskInteraction {
 }
 
 impl TaskInteraction {
-    pub(crate) fn new(to_set: &[Interaction]) -> Self {
+    pub(crate) fn new(to_set: &[InteractionKind]) -> Self {
         let mut this = Self::default();
         for &x in to_set {
             this.set(x, true);
@@ -545,17 +545,17 @@ impl TaskInteraction {
         this
     }
 
-    pub(crate) fn with(interaction: Interaction) -> Self {
+    pub(crate) fn with(interaction: InteractionKind) -> Self {
         let mut this = Self::default();
         this.set(interaction, true);
         this
     }
 
-    pub(crate) fn get(&self, interaction: Interaction) -> bool {
+    pub(crate) fn get(&self, interaction: InteractionKind) -> bool {
         self.flags.get(interaction as usize)
     }
 
-    pub(crate) fn set(&mut self, interaction: Interaction, value: bool) {
+    pub(crate) fn set(&mut self, interaction: InteractionKind, value: bool) {
         self.flags.set(interaction as usize, value);
     }
 
@@ -563,8 +563,8 @@ impl TaskInteraction {
         self.flags.iter().next().is_some()
     }
 
-    pub(crate) fn iter_active(self) -> impl Iterator<Item = Interaction> {
-        Interaction::iter().filter(move |&x| self.get(x))
+    pub(crate) fn iter_active(self) -> impl Iterator<Item = InteractionKind> {
+        InteractionKind::iter().filter(move |&x| self.get(x))
     }
 }
 

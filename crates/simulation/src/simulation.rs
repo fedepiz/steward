@@ -7,6 +7,7 @@ use util::{span::Span, string_pool::*};
 use crate::{
     entities::{self, *},
     geom::V2,
+    interaction::Interactions,
     movement::{self, SpatialMap},
     names::{Name, NamePart, Names},
     objects::*,
@@ -42,6 +43,7 @@ pub(crate) struct Simulation {
     pub faction_colors: SecondaryMap<EntityId, Color>,
     player_goal: Goal,
     detections: Detections,
+    pub(crate) interactions: Interactions,
 }
 
 impl Simulation {
@@ -56,6 +58,7 @@ pub(crate) enum OnArrival {
     Nothing,
     Enter,
     Attack,
+    Interact,
 }
 
 impl Default for OnArrival {
@@ -80,28 +83,38 @@ impl Default for MovementTarget {
 fn tick(sim: &mut Simulation, mut request: Request, arena: &Bump) -> Response {
     if let Some(req) = request.init.take() {
         *sim = Simulation::default();
+        sim.interactions = Interactions::new();
         crate::init::init(sim, req);
     }
 
-    // Input handling
-    {
-        // From move pos
-        if let Some((x, y)) = request.move_to_pos.take() {
-            sim.player_goal = Goal::MoveTo(V2::new(x, y));
-        }
+    let process_input = !sim.interactions.has_interaction();
+    let mut num_ticks = request.advance_ticks;
 
-        // From move to target
-        if let Some(item_id) = request.move_to_item.take() {
-            let target = EntityId::from(KeyData::from_ffi(item_id.0));
-            sim.player_goal = Goal::ToEntity {
-                target,
-                distance: 0.,
-                on_arrival: OnArrival::Attack,
-            };
+    if sim.interactions.has_interaction() {
+        num_ticks = 0;
+    }
+
+    if process_input {
+        // Input handling
+        {
+            // From move pos
+            if let Some((x, y)) = request.move_to_pos.take() {
+                sim.player_goal = Goal::MoveTo(V2::new(x, y));
+            }
+
+            // From move to target
+            if let Some(item_id) = request.move_to_item.take() {
+                let target = EntityId::from(KeyData::from_ffi(item_id.0));
+                sim.player_goal = Goal::ToEntity {
+                    target,
+                    distance: 0.,
+                    on_arrival: OnArrival::Interact,
+                };
+            }
         }
     }
 
-    for _ in 0..request.advance_ticks {
+    for _ in 0..num_ticks {
         sim.turn_num = sim.turn_num.wrapping_add(1);
 
         // Tick timers
@@ -154,6 +167,8 @@ fn tick(sim: &mut Simulation, mut request: Request, arena: &Bump) -> Response {
 
         let mut activity_start_intent = AVec::with_capacity_in(sim.entities.len(), arena);
 
+        let mut interaction_start_intent: Option<(EntityId, EntityId)> = None;
+
         let diplo_map = DiploMap::calculate(arena, sim);
 
         // Parties logical update
@@ -166,6 +181,7 @@ fn tick(sim: &mut Simulation, mut request: Request, arena: &Bump) -> Response {
                 desire_exit: bool,
                 desire_entry: bool,
                 start_activity: Option<activities::Type>,
+                start_interaction: bool,
             }
 
             let mut intent = Intent::default();
@@ -207,12 +223,18 @@ fn tick(sim: &mut Simulation, mut request: Request, arena: &Bump) -> Response {
                     // Enqueue desire to begin a battle
                     match goal {
                         Goal::ToEntity {
-                            target,
-                            on_arrival: OnArrival::Attack,
-                            ..
+                            target, on_arrival, ..
                         } => {
                             intent.target = target;
-                            intent.start_activity = Some(activities::Type::Battle);
+                            match on_arrival {
+                                OnArrival::Attack => {
+                                    intent.start_activity = Some(activities::Type::Battle);
+                                }
+                                OnArrival::Interact => {
+                                    intent.start_interaction = true;
+                                }
+                                _ => {}
+                            }
                         }
                         _ => {}
                     }
@@ -267,6 +289,12 @@ fn tick(sim: &mut Simulation, mut request: Request, arena: &Bump) -> Response {
                 }
             }
 
+            if intent.start_interaction {
+                // Only players begin interactions
+                assert!(subject.is_player);
+                interaction_start_intent = Some((subject.id, intent.target));
+            }
+
             movement_elements.push(element);
         }
 
@@ -319,6 +347,19 @@ fn tick(sim: &mut Simulation, mut request: Request, arena: &Bump) -> Response {
                 sim.entities
                     .set_parent(Hierarchy::Container, container, subject);
                 sim.entities[subject].flags.set(Flag::IsInside, allowed);
+            }
+        }
+
+        // Resolve interacton beginning
+        if let Some((initiator, receiver)) = interaction_start_intent {
+            // Check for collision
+            if sim.detections.collides(initiator, receiver) {
+                let mut interactions = std::mem::take(&mut sim.interactions);
+                // We flip the order, as the initiator is usually the player..
+                interactions.begin_interaction(arena, sim, receiver, initiator);
+                sim.interactions = interactions;
+                // This is started by the player, so let's clear their goal
+                sim.player_goal = Goal::Idle;
             }
         }
 
@@ -896,6 +937,7 @@ fn determine_party_goal_and_avoidance(
                 OnArrival::Enter => true,
                 OnArrival::Nothing => false,
                 OnArrival::Attack => false,
+                OnArrival::Interact => false,
             };
 
             let distance = if must_get_same_position {
@@ -1043,11 +1085,7 @@ mod activities {
                 ),
             };
 
-            let collides = sim
-                .detections
-                .get_for(subject)
-                .iter()
-                .any(|entry| entry.id == target && entry.distance <= 0.0);
+            let collides = sim.detections.collides(subject, target);
 
             if !collides {
                 continue;
@@ -1452,6 +1490,12 @@ mod detection {
                 .get(id)
                 .map(|span| span.view(&self.data))
                 .unwrap_or_default()
+        }
+
+        pub(crate) fn collides(&self, id: EntityId, target: EntityId) -> bool {
+            self.get_for(id)
+                .iter()
+                .any(|entry| entry.id == target && entry.distance <= 0.0)
         }
     }
 

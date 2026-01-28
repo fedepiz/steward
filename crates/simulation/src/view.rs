@@ -83,6 +83,10 @@ pub(crate) fn view(sim: &Simulation, req: &Request, response: &mut Response) {
             ctx.fmt("tick_num", format_args!("Turn number: {}", sim.turn_num));
         });
 
+        if sim.interactions.has_interaction() {
+            sim.interactions.as_object(&mut ctx);
+        }
+
         // Create requested objects
         for &view_entity in &req.view_entities {
             let entity = match sim.entities.get(view_entity.entity) {
