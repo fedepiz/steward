@@ -164,7 +164,7 @@ fn bandit_tasking(sim: &Simulation, subject: &Entity) -> Task {
     if soldiers < BANDIT_MIN_SOLDIERS {
         Task {
             kind: TaskKind::ReturnToBase,
-            destination: TaskDestination::Home,
+            destination: TaskDestination::Base,
             interaction: TaskInteraction::default(),
             arrival_wait: SHORT_WAIT,
             ..Default::default()

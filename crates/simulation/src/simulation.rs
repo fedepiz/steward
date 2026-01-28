@@ -137,6 +137,25 @@ impl Default for MovementTarget {
     }
 }
 
+struct Intents<'a> {
+    exit: AVec<'a, EntityId>,
+    entry: AVec<'a, (EntityId, EntityId, bool)>,
+    begin_activity: AVec<'a, (activities::Type, EntityId, EntityId)>,
+    begin_interaction: Option<(EntityId, EntityId)>,
+}
+
+impl<'a> Intents<'a> {
+    fn new(arena: &'a Bump, sim: &Simulation) -> Self {
+        let capacity = (sim.entities.len() / 10).max(10);
+        Self {
+            entry: AVec::with_capacity_in(capacity, arena),
+            exit: AVec::with_capacity_in(capacity, arena),
+            begin_activity: AVec::with_capacity_in(capacity, arena),
+            begin_interaction: None,
+        }
+    }
+}
+
 fn tick(sim: &mut Simulation, mut request: Request, arena: &Bump) -> Response {
     if let Some(req) = request.init.take() {
         *sim = Simulation::default();
@@ -177,280 +196,244 @@ fn tick(sim: &mut Simulation, mut request: Request, arena: &Bump) -> Response {
         }
     }
 
+    let mut intents = Intents::new(arena, sim);
+
     for _ in 0..num_ticks {
-        sim.turn_num = sim.turn_num.wrapping_add(1);
-
-        // Tick timers
-        tick_timers(sim);
-        tick_opportunities(sim);
-        spawn_with_opportunity(sim, arena);
-
-        crate::tasking::entity_tasking(sim, arena);
-
-        const ECONOMY_TICK_RATE: u64 = 200;
-        if sim.turn_num % ECONOMY_TICK_RATE == 0 {
-            let _span = tracing::info_span!("Economic tick").entered();
-            food_production_and_consumption(sim, arena);
-            // Food stock sets the target population; this nudges population toward that target.
-            population_from_food(sim, arena);
-            // Consumables are converted into prosperity in small increments.
-            consumables_into_prosperity(sim, arena);
-            // Prosperity drifts toward a baseline over time.
-            prosperity_towards_equilibrium(sim, arena);
-            // Recruiting for settlements that do that
-            increase_recruits(sim);
-        }
-
-        const ACTIVITY_TICK_RATE: u64 = 100;
-        if sim.turn_num % ACTIVITY_TICK_RATE == 0 {
-            let _span = tracing::info_span!("Activity tick").entered();
-            activities::tick_activities(arena, sim);
-        }
-
-        {
-            const HEADCOUNT_VARS: &[Var] = &[Var::Civilians, Var::Soldiers];
-            let iter = sim
-                .entities
-                .iter()
-                .filter(|entity| {
-                    entity.get_flag(Flag::IsEphemeral)
-                        && HEADCOUNT_VARS.iter().all(|&var| entity.get_var(var) <= 0.)
-                })
-                .map(|entity| entity.id);
-
-            for id in AVec::from_iter_in(iter, arena) {
-                sim.entities.despawn(id);
-            }
-        }
-
-        let mut movement_elements = AVec::with_capacity_in(sim.entities.len(), arena);
-
-        let mut desire_exit = AVec::with_capacity_in(sim.entities.len(), arena);
-        let mut desire_entry = AVec::with_capacity_in(sim.entities.len(), arena);
-
-        let mut activity_start_intent = AVec::with_capacity_in(sim.entities.len(), arena);
-
-        let mut interaction_start_intent: Option<(EntityId, EntityId)> = None;
-
-        let diplo_map = DiploMap::calculate(arena, sim);
-
-        // Parties logical update
-        for subject in sim.entities.iter() {
-            #[derive(Default)]
-            struct Intent {
-                movement_target: MovementTarget,
-                avoid_area: movement::Area,
-                target: EntityId,
-                desire_exit: bool,
-                desire_entry: bool,
-                start_activity: Option<activities::Type>,
-                start_interaction: bool,
-            }
-
-            let mut intent = Intent::default();
-            {
-                let (goal, avoid_area) =
-                    determine_party_goal_and_avoidance(sim, &diplo_map, subject);
-
-                let detection = sim.detections.get_for(subject.id);
-
-                let movement_target = determine_party_movement_target(detection, goal);
-
-                intent.movement_target = movement_target;
-                intent.avoid_area = avoid_area;
-
-                {
-                    let container = sim.entities.parent_of(Hierarchy::Container, subject.id);
-                    // Enqueue desire to enter a container
-                    let target = match goal {
-                        Goal::Idle => container,
-                        Goal::ToEntity {
-                            target,
-                            on_arrival: OnArrival::Enter,
-                            ..
-                        } => target,
-                        _ => EntityId::null(),
-                    };
-
-                    if target != container {
-                        if target.is_null() {
-                            intent.desire_exit = true;
-                        } else {
-                            intent.desire_entry = true;
-                        }
-                    }
-                    intent.target = target;
-                }
-
-                {
-                    // Enqueue desire to begin a battle
-                    match goal {
-                        Goal::ToEntity {
-                            target, on_arrival, ..
-                        } => {
-                            intent.target = target;
-                            match on_arrival {
-                                OnArrival::Attack => {
-                                    intent.start_activity = Some(activities::Type::Battle);
-                                }
-                                OnArrival::Interact => {
-                                    intent.start_interaction = true;
-                                }
-                                _ => {}
-                            }
-                        }
-                        _ => {}
-                    }
-                }
-            };
-
-            let is_frozen = subject.get_var(Var::FrozenTimer) > 0.;
-            if is_frozen {
-                intent = Intent::default();
-            }
-
-            // Resolve movement target
-            let (destination, direct) = match intent.movement_target {
-                MovementTarget::Immobile => (subject.body.pos, false),
-                MovementTarget::FixedPos { pos, direct } => (pos, direct),
-                MovementTarget::Entity(id) => (
-                    sim.entities
-                        .get(id)
-                        .map(|entity| entity.body.pos)
-                        .unwrap_or(subject.body.pos),
-                    false,
-                ),
-            };
-
-            // If the party is inside another party, their speed is 0
-            let speed = if !subject.get_flag(Flag::IsInside) {
-                subject.speed
-            } else {
-                0.
-            };
-
-            // Actual movement element
-            let element = movement::Element {
-                id: subject.id,
-                speed,
-                pos: subject.body.pos,
-                destination,
-                direct,
-                avoid_area: intent.avoid_area,
-            };
-
-            if intent.desire_exit {
-                desire_exit.push(subject.id);
-            }
-
-            if !intent.target.is_null() {
-                if intent.desire_entry {
-                    desire_entry.push((subject.id, intent.target, true));
-                }
-                if let Some(activity_type) = intent.start_activity {
-                    activity_start_intent.push((activity_type, subject.id, intent.target));
-                }
-            }
-
-            if intent.start_interaction {
-                // Only players begin interactions
-                assert!(subject.is_player);
-                interaction_start_intent = Some((subject.id, intent.target));
-            }
-
-            movement_elements.push(element);
-        }
-
-        // Apply movement results back to parties
-        let movement_result = movement::tick_movement(
-            &mut sim.movement_cache,
-            &movement_elements,
-            &sim.terrain_map,
-        );
-
-        // Party detection check
-        let spatial_map = &movement_result.spatial_map;
-        {
-            let _span = tracing::info_span!("Detections").entered();
-            let mut detections = std::mem::take(&mut sim.detections);
-            self::detection::calculate(&mut detections, sim, spatial_map, &diplo_map);
-            sim.detections = detections;
-        }
-
-        // Iterate writeback
-        {
-            let _span = tracing::info_span!("Update positions").entered();
-            let positions = movement_result.positions.into_iter();
-
-            for (id, pos) in positions {
-                sim.entities[id].body.pos = pos;
-            }
-        }
-
-        {
-            // Resolve desired beging of battle
-            let _span = tracing::info_span!("Post Move State Changes").entered();
-            activities::begin_activities(sim, &activity_start_intent);
-
-            // Resolve desired changes of party container
-            for subject in desire_exit {
-                sim.entities.remove_parent(Hierarchy::Container, subject);
-                sim.entities[subject].flags.set(Flag::IsInside, false);
-            }
-
-            for (subject, target, check) in desire_entry {
-                let allowed = {
-                    let subject = &sim.entities[subject];
-                    let target = &sim.entities[target];
-                    !check || subject.body.pos == target.body.pos
-                };
-
-                let container = if allowed { target } else { EntityId::null() };
-
-                sim.entities
-                    .set_parent(Hierarchy::Container, container, subject);
-                sim.entities[subject].flags.set(Flag::IsInside, allowed);
-            }
-        }
-
-        // Resolve interacton beginning
-        if let Some((initiator, receiver)) = interaction_start_intent {
-            // Check for collision
-            if sim.detections.collides(initiator, receiver) {
-                let mut interactions = std::mem::take(&mut sim.interactions);
-                // We flip the order, as the initiator is usually the player..
-                interactions.begin_interaction(arena, sim, receiver, initiator);
-                sim.interactions = interactions;
-                // This is started by the player, so let's clear their goal
-                sim.player_goal = Goal::Idle;
-            }
-        }
-
-        // Determine entity location
-        {
-            let _span = tracing::info_span!("Entity Locations").entered();
-            let mut scratch = vec![];
-
-            let output: Vec<_> = sim
-                .entities
-                .iter()
-                .map(|entity| {
-                    let location = location_of_entity(sim, entity, &mut scratch);
-                    (entity.id, location)
-                })
-                .collect();
-
-            // Writeback
-            for (id, location) in output {
-                sim.entities[id].location = location;
-            }
-        }
-
-        sim.entities.garbage_collect();
+        advance_time(sim, arena, &mut intents);
     }
+
+    resolve_intents(sim, arena, intents);
+
+    sim.entities.garbage_collect();
+
     let mut response = Response::default();
     crate::view::view(sim, &request, &mut response);
     response
+}
+
+fn advance_time(sim: &mut Simulation, arena: &Bump, intents: &mut Intents) {
+    sim.turn_num = sim.turn_num.wrapping_add(1);
+
+    // Tick timers
+    tick_timers(sim);
+    tick_opportunities(sim);
+    spawn_with_opportunity(sim, arena);
+
+    crate::tasking::entity_tasking(sim, arena);
+
+    const ECONOMY_TICK_RATE: u64 = 200;
+    if sim.turn_num % ECONOMY_TICK_RATE == 0 {
+        let _span = tracing::info_span!("Economic tick").entered();
+        food_production_and_consumption(sim, arena);
+        // Food stock sets the target population; this nudges population toward that target.
+        population_from_food(sim, arena);
+        // Consumables are converted into prosperity in small increments.
+        consumables_into_prosperity(sim, arena);
+        // Prosperity drifts toward a baseline over time.
+        prosperity_towards_equilibrium(sim, arena);
+        // Recruiting for settlements that do that
+        increase_recruits(sim);
+    }
+
+    const ACTIVITY_TICK_RATE: u64 = 100;
+    if sim.turn_num % ACTIVITY_TICK_RATE == 0 {
+        let _span = tracing::info_span!("Activity tick").entered();
+        activities::tick_activities(arena, sim);
+    }
+
+    {
+        const HEADCOUNT_VARS: &[Var] = &[Var::Civilians, Var::Soldiers];
+        let iter = sim
+            .entities
+            .iter()
+            .filter(|entity| {
+                entity.get_flag(Flag::IsEphemeral)
+                    && HEADCOUNT_VARS.iter().all(|&var| entity.get_var(var) <= 0.)
+            })
+            .map(|entity| entity.id);
+
+        for id in AVec::from_iter_in(iter, arena) {
+            sim.entities.despawn(id);
+        }
+    }
+
+    let mut movement_elements = AVec::with_capacity_in(sim.entities.len(), arena);
+
+    let diplo_map = DiploMap::calculate(arena, sim);
+
+    // Parties logical update
+    for subject in sim.entities.iter() {
+        #[derive(Default)]
+        struct Intent {
+            movement_target: MovementTarget,
+            avoid_area: movement::Area,
+            target: EntityId,
+            desire_exit: bool,
+            desire_entry: bool,
+            start_activity: Option<activities::Type>,
+            start_interaction: bool,
+        }
+
+        let mut intent = Intent::default();
+        {
+            let (goal, avoid_area) = determine_party_goal_and_avoidance(sim, &diplo_map, subject);
+
+            let detection = sim.detections.get_for(subject.id);
+
+            let movement_target = determine_party_movement_target(detection, goal);
+
+            intent.movement_target = movement_target;
+            intent.avoid_area = avoid_area;
+
+            {
+                let container = sim.entities.parent_of(Hierarchy::Container, subject.id);
+                // Enqueue desire to enter a container
+                let target = match goal {
+                    Goal::Idle => container,
+                    Goal::ToEntity {
+                        target,
+                        on_arrival: OnArrival::Enter,
+                        ..
+                    } => target,
+                    _ => EntityId::null(),
+                };
+
+                if target != container {
+                    if target.is_null() {
+                        intent.desire_exit = true;
+                    } else {
+                        intent.desire_entry = true;
+                    }
+                }
+                intent.target = target;
+            }
+
+            {
+                // Enqueue desire to begin a battle
+                match goal {
+                    Goal::ToEntity {
+                        target, on_arrival, ..
+                    } => {
+                        intent.target = target;
+                        match on_arrival {
+                            OnArrival::Attack => {
+                                intent.start_activity = Some(activities::Type::Battle);
+                            }
+                            OnArrival::Interact => {
+                                intent.start_interaction = true;
+                            }
+                            _ => {}
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        };
+
+        let is_frozen = subject.get_var(Var::FrozenTimer) > 0.;
+        if is_frozen {
+            intent = Intent::default();
+        }
+
+        // Resolve movement target
+        let (destination, direct) = match intent.movement_target {
+            MovementTarget::Immobile => (subject.body.pos, false),
+            MovementTarget::FixedPos { pos, direct } => (pos, direct),
+            MovementTarget::Entity(id) => (
+                sim.entities
+                    .get(id)
+                    .map(|entity| entity.body.pos)
+                    .unwrap_or(subject.body.pos),
+                false,
+            ),
+        };
+
+        // If the party is inside another party, their speed is 0
+        let speed = if !subject.get_flag(Flag::IsInside) {
+            subject.speed
+        } else {
+            0.
+        };
+
+        // Actual movement element
+        let element = movement::Element {
+            id: subject.id,
+            speed,
+            pos: subject.body.pos,
+            destination,
+            direct,
+            avoid_area: intent.avoid_area,
+        };
+
+        if intent.desire_exit {
+            intents.exit.push(subject.id);
+        }
+
+        if !intent.target.is_null() {
+            if intent.desire_entry {
+                intents.entry.push((subject.id, intent.target, true));
+            }
+            if let Some(activity_type) = intent.start_activity {
+                intents
+                    .begin_activity
+                    .push((activity_type, subject.id, intent.target));
+            }
+        }
+
+        if intent.start_interaction {
+            // Only players begin interactions
+            assert!(subject.is_player);
+            intents.begin_interaction = Some((subject.id, intent.target));
+        }
+
+        movement_elements.push(element);
+    }
+
+    // Apply movement results back to parties
+    let movement_result = movement::tick_movement(
+        &mut sim.movement_cache,
+        &movement_elements,
+        &sim.terrain_map,
+    );
+
+    // Party detection check
+    let spatial_map = &movement_result.spatial_map;
+    {
+        let _span = tracing::info_span!("Detections").entered();
+        let mut detections = std::mem::take(&mut sim.detections);
+        self::detection::calculate(&mut detections, sim, spatial_map, &diplo_map);
+        sim.detections = detections;
+    }
+
+    // Determine entity location
+    {
+        let _span = tracing::info_span!("Entity Locations").entered();
+        let mut scratch = vec![];
+
+        let output: Vec<_> = sim
+            .entities
+            .iter()
+            .map(|entity| {
+                let location = location_of_entity(sim, entity, &mut scratch);
+                (entity.id, location)
+            })
+            .collect();
+
+        // Writeback
+        for (id, location) in output {
+            sim.entities[id].location = location;
+        }
+    }
+
+    // Iterate writeback
+    {
+        let _span = tracing::info_span!("Update positions").entered();
+        let positions = movement_result.positions.into_iter();
+
+        for (id, pos) in positions {
+            sim.entities[id].body.pos = pos;
+        }
+    }
 }
 
 fn location_of_entity(
@@ -730,9 +713,6 @@ fn spawn_with_opportunity(sim: &mut Simulation, arena: &Bump) {
     }
 
     for spawn in spawns {
-        let parent = sim.names.resolve(sim.entities[spawn.parent].name);
-        let child = sim.names.resolve(sim.entities[spawn.typ].name);
-        println!("Spawning {child} at {parent}");
         spawn_subentity(sim, spawn);
     }
 
@@ -1588,5 +1568,48 @@ fn increase_recruits(sim: &mut Simulation) {
         let soldiers = entity.get_var(Var::Soldiers);
         let recruited = (target - soldiers).clamp(0., AUTO_RECRUIT_AMOUNT);
         entity.set_var(Var::Soldiers, soldiers + recruited);
+    }
+}
+
+fn resolve_intents(sim: &mut Simulation, arena: &Bump, intents: Intents) {
+    {
+        // Resolve desired beging of battle
+        let _span = tracing::info_span!("Post Move State Changes").entered();
+        activities::begin_activities(sim, &intents.begin_activity);
+
+        // Resolve desired changes of party container
+        for subject in intents.exit {
+            sim.entities.remove_parent(Hierarchy::Container, subject);
+            sim.entities[subject].flags.set(Flag::IsInside, false);
+        }
+
+        for (subject, target, check) in intents.entry {
+            let allowed = {
+                let subject = &sim.entities[subject];
+                let target = &sim.entities[target];
+                !check || subject.body.pos == target.body.pos
+            };
+
+            let container = if allowed { target } else { EntityId::null() };
+
+            sim.entities
+                .set_parent(Hierarchy::Container, container, subject);
+            sim.entities[subject]
+                .flags
+                .set(Flag::IsInside, container != EntityId::null());
+        }
+    }
+
+    // Resolve interacton beginning
+    if let Some((initiator, receiver)) = intents.begin_interaction {
+        // Check for collision
+        if sim.detections.collides(initiator, receiver) {
+            let mut interactions = std::mem::take(&mut sim.interactions);
+            // We flip the order, as the initiator is usually the player..
+            interactions.begin_interaction(arena, sim, receiver, initiator);
+            sim.interactions = interactions;
+            // This is started by the player, so let's clear their goal
+            sim.player_goal = Goal::Idle;
+        }
     }
 }

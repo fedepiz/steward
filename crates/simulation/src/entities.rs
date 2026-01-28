@@ -84,7 +84,7 @@ pub(crate) enum Flag {
     IsGenerallyHostile,
 }
 
-#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, EnumCount, EnumIter)]
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, EnumCount, EnumIter, Debug)]
 pub(crate) enum Hierarchy {
     Container,
     // Economy
@@ -704,8 +704,8 @@ impl HierarchyData {
         }
         .unwrap_or_default();
 
-        // Remove previous parent -> child
-        if !previous_parent.is_null() {
+        // Remove previous parent -> child if it changed
+        if !previous_parent.is_null() && previous_parent != parent {
             self.parent_to_child
                 .remove(&(previous_parent, child.data().as_ffi()));
         }
