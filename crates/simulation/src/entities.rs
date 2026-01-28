@@ -27,6 +27,8 @@ pub(crate) enum Var {
     // Generic Party
     Civilians,
     Soldiers,
+    Courage,
+    Aggressiveness,
     // Person
     Money,
     Renown,
@@ -578,6 +580,23 @@ pub enum Behavior {
 }
 
 impl Default for Behavior {
+    fn default() -> Self {
+        Self::Idle
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, PartialOrd)]
+pub(crate) enum Goal {
+    Idle,
+    MoveTo(V2),
+    ToEntity {
+        target: EntityId,
+        distance: f32,
+        on_arrival: OnArrival,
+    },
+}
+
+impl Default for Goal {
     fn default() -> Self {
         Self::Idle
     }

@@ -51,23 +51,6 @@ impl Simulation {
     }
 }
 
-#[derive(Clone, Copy, PartialEq, PartialOrd)]
-enum Goal {
-    Idle,
-    MoveTo(V2),
-    ToEntity {
-        target: EntityId,
-        distance: f32,
-        on_arrival: OnArrival,
-    },
-}
-
-impl Default for Goal {
-    fn default() -> Self {
-        Self::Idle
-    }
-}
-
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug)]
 pub(crate) enum OnArrival {
     Nothing,
@@ -187,7 +170,8 @@ fn tick(sim: &mut Simulation, mut request: Request, arena: &Bump) -> Response {
 
             let mut intent = Intent::default();
             {
-                let (goal, avoid_area) = determine_party_goal_and_avoidance(sim, subject);
+                let (goal, avoid_area) =
+                    determine_party_goal_and_avoidance(sim, &diplo_map, subject);
 
                 let detection = sim.detections.get_for(subject.id);
 
@@ -890,7 +874,11 @@ fn prosperity_towards_equilibrium(sim: &mut Simulation, arena: &Bump) {
     }
 }
 
-fn determine_party_goal_and_avoidance(sim: &Simulation, entity: &Entity) -> (Goal, movement::Area) {
+fn determine_party_goal_and_avoidance(
+    sim: &Simulation,
+    diplo_map: &DiploMap,
+    entity: &Entity,
+) -> (Goal, movement::Area) {
     if entity.speed == 0.0 {
         return Default::default();
     }
@@ -899,7 +887,7 @@ fn determine_party_goal_and_avoidance(sim: &Simulation, entity: &Entity) -> (Goa
         return Default::default();
     }
 
-    let goal = match entity.behavior {
+    let mut goal = match entity.behavior {
         Behavior::Idle => Goal::Idle,
         Behavior::ToPos(pos) => Goal::MoveTo(pos),
         Behavior::Player => sim.player_goal,
@@ -932,22 +920,63 @@ fn determine_party_goal_and_avoidance(sim: &Simulation, entity: &Entity) -> (Goa
     // Outer avoid range is the range of consideration
     const OUTER_AVOID_RANGE: f32 = INNER_AVOID_RANGE * 1.2;
 
+    let is_player = matches!(entity.behavior, Behavior::Player);
+    if is_player {
+        return (goal, movement::Area::default());
+    }
+
     // Do we detect a threat?
     let detections = sim.detections.get_for(entity.id);
-    let primary_threat = detections
-        .iter()
-        .filter(|det| det.threat > 0. && det.distance <= OUTER_AVOID_RANGE)
-        .min_by_key(|det| (det.distance * 10.).round().max(0.) as u32);
+    let own_power = calculate_power(entity);
+    let courage = entity.get_var(Var::Courage).max(0.0);
+    let aggressiveness = entity.get_var(Var::Aggressiveness).max(0.0);
 
-    let avoidance = primary_threat
-        .map(|det| {
-            let pos = sim.entities[det.id].body.pos;
-            movement::Area {
-                pos,
-                range: INNER_AVOID_RANGE,
+    let mut primary_threat = EntityId::null();
+    let mut primary_target = EntityId::null();
+    let mut primary_threat_distance = f32::INFINITY;
+    let mut primary_target_distance = f32::INFINITY;
+
+    for det in detections {
+        if det.distance > OUTER_AVOID_RANGE {
+            continue;
+        }
+
+        if det.threat > 0. && det.threat > own_power * courage {
+            if det.distance < primary_threat_distance {
+                primary_threat_distance = det.distance;
+                primary_threat = det.id;
             }
-        })
-        .unwrap_or_default();
+        }
+
+        if !det.is_location
+            && diplo_map.is_hostile(entity.id, det.id)
+            && own_power * aggressiveness > calculate_power(&sim.entities[det.id])
+            && det.distance < primary_target_distance
+        {
+            primary_target_distance = det.distance;
+            primary_target = det.id;
+        }
+    }
+
+    let avoidance = if !primary_threat.is_null() {
+        let pos = sim.entities[primary_threat].body.pos;
+        movement::Area {
+            pos,
+            range: INNER_AVOID_RANGE,
+        }
+    } else {
+        movement::Area::default()
+    };
+
+    let is_fleeing = !primary_threat.is_null();
+
+    if !is_fleeing && !primary_target.is_null() {
+        goal = Goal::ToEntity {
+            target: primary_target,
+            distance: 0.,
+            on_arrival: OnArrival::Attack,
+        };
+    }
 
     (goal, avoidance)
 }

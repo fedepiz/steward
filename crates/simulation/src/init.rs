@@ -93,7 +93,7 @@ pub(crate) fn init(sim: &mut Simulation, req: InitRequest) {
         typ.speed = WALK_SPEED * 1.25;
         typ.size = 2.;
         typ.layer = 0;
-        typ.vars = &[];
+        typ.vars = &[(Var::Aggressiveness, 1.), (Var::Courage, 1.)];
     }
 
     {
