@@ -116,12 +116,14 @@ struct Actions {
     move_to_pos: Option<mq::Vec2>,
     move_to_item: Option<MapItemId>,
     change_selection: Option<MapItemId>,
+    interaction_pick_option: Option<usize>,
 }
 
 impl Actions {
     fn apply(self, request: &mut simulation::Request, selected: &mut MapItemId) {
         request.move_to_pos = self.move_to_pos.map(|pos| (pos.x, pos.y));
         request.move_to_item = self.move_to_item;
+        request.interaction_pick_option = self.interaction_pick_option;
         if let Some(id) = self.change_selection {
             *selected = id;
         }
@@ -357,8 +359,10 @@ fn gui(ctx: &egui::Context, response: &simulation::Response, actions: &mut Actio
             .anchor(egui::Align2::CENTER_CENTER, (0., 0.))
             .show(ctx, |ui| {
                 ui.label(objs.str(root, "description"));
-                for &child in objs.list(root, "options") {
-                    if ui.small_button(objs.str(child, "text")).clicked() {}
+                for (idx, &child) in objs.list(root, "options").iter().enumerate() {
+                    if ui.small_button(objs.str(child, "text")).clicked() {
+                        actions.interaction_pick_option = Some(idx);
+                    }
                 }
             });
     }

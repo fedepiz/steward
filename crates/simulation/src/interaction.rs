@@ -58,6 +58,10 @@ impl Interactions {
     }
 
     pub(crate) fn pick_choice(&mut self, arena: &Bump, sim: &mut Simulation, choice: usize) {
+        if !self.has_interaction() {
+            return;
+        }
+
         let choice = self
             .options
             .get(choice)
@@ -65,74 +69,81 @@ impl Interactions {
             .unwrap_or_default();
 
         if let Some(choice) = self.choice_defs.get(choice) {
-            let (next_state, speaker) = (choice.execute)(sim, arena, self.subject, self.target);
-
+            let next_state = (choice.execute)(sim, arena, self.subject, self.target);
             self.state.clear();
             self.state.push_str(next_state);
-            if matches!(speaker, Speaker::Flip) {
-                std::mem::swap(&mut self.subject, &mut self.target);
-            }
         }
+
+        if self.state.as_str() == OVER {
+            self.mark_as_over();
+        }
+
         // If the picked choice is out of bounds, we'll just advance the interaction
         // This will happen if say we have no valid choices
+        std::mem::swap(&mut self.subject, &mut self.target);
         self.advance_interaction(arena, sim);
+    }
+
+    fn mark_as_over(&mut self) {
+        self.state.clear();
+        self.subject = EntityId::null();
+        self.target = EntityId::null();
     }
 
     fn advance_interaction(&mut self, arena: &Bump, sim: &mut Simulation) {
         if !self.has_interaction() {
             return;
         }
-        let is_player = sim.entities[self.subject].is_player;
 
-        let max_choices = if is_player { usize::MAX } else { 1 };
-        let valid_choices = self
-            .choice_defs
-            .iter()
-            .enumerate()
-            .filter(|(_, choice)| {
-                choice.id.starts_with(&self.state)
-                    && (choice.filter)(
-                        &sim,
-                        arena,
-                        &sim.entities[self.subject],
-                        &sim.entities[self.target],
-                    )
-            })
-            .take(max_choices);
-        let valid_choices = AVec::from_iter_in(valid_choices, arena);
+        {
+            // At first, the subject is not the player
+            assert!(!sim.entities[self.subject].is_player);
 
-        if valid_choices.is_empty() {
-            self.subject = EntityId::null();
-            self.target = EntityId::null();
-            return;
-        }
-
-        if !is_player {
-            // Reset the output
             self.string_pool.clear();
             self.description = SpanHandle::default();
             self.options.clear();
-            self.state.clear();
 
-            // SAFETY: We have a valid_choice check earlier against empty
-            let (_, choice) = valid_choices.get(0).unwrap();
-            let (next_state, speaker) = (choice.execute)(sim, arena, self.subject, self.target);
+            let first_valid_choice = self
+                .get_valid_choices(arena, sim, self.subject, self.target, Speaker::NPC)
+                .next();
+
+            let (_, choice) = match first_valid_choice {
+                Some(x) => x,
+                None => {
+                    self.mark_as_over();
+                    return;
+                }
+            };
+
+            let next_state = (choice.execute)(sim, arena, self.subject, self.target);
+            self.state.clear();
+            self.state.push_str(next_state);
 
             self.description = (choice.describe)(
-                &sim,
+                sim,
                 arena,
                 &sim.entities[self.subject],
                 &sim.entities[self.target],
                 &mut self.string_pool,
             );
-            self.state.push_str(next_state);
-            if matches!(speaker, Speaker::Flip) {
-                std::mem::swap(&mut self.subject, &mut self.target);
-            }
-        } else {
+        }
+
+        std::mem::swap(&mut self.subject, &mut self.target);
+
+        // Player side
+        {
+            // Then it must be the player's turn
+            assert!(sim.entities[self.subject].is_player);
+
+            let choices = {
+                let iter =
+                    self.get_valid_choices(arena, sim, self.subject, self.target, Speaker::Player);
+                AVec::from_iter_in(iter, arena)
+            };
+
             self.options.clear();
             self.options
-                .extend(valid_choices.into_iter().map(|(index, choice)| {
+                .extend(choices.into_iter().map(|(index, choice)| {
                     let text = (choice.describe)(
                         &sim,
                         arena,
@@ -143,6 +154,24 @@ impl Interactions {
                     ChoiceOption { index, text }
                 }));
         }
+    }
+
+    fn get_valid_choices(
+        &self,
+        arena: &Bump,
+        sim: &Simulation,
+        subject: EntityId,
+        target: EntityId,
+        speaker_type: Speaker,
+    ) -> impl Iterator<Item = (usize, &'static Choice<'static>)> {
+        self.choice_defs
+            .iter()
+            .enumerate()
+            .filter(move |(_, choice)| {
+                choice.speaker == speaker_type
+                    && choice.id.starts_with(&self.state)
+                    && (choice.filter)(sim, arena, &sim.entities[subject], &sim.entities[target])
+            })
     }
 
     pub(crate) fn as_object(&self, ctx: &mut ObjectsBuilder) {
@@ -156,8 +185,10 @@ impl Interactions {
                     });
                 } else {
                     for option in &self.options {
-                        let text = self.string_pool.get(option.text);
-                        ctx.str("text", text);
+                        ctx.spawn(|ctx| {
+                            let text = self.string_pool.get(option.text);
+                            ctx.str("text", text);
+                        });
                     }
                 }
             });
@@ -165,16 +196,17 @@ impl Interactions {
     }
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 enum Speaker {
-    Keep,
-    Flip,
+    Player,
+    NPC,
 }
 
 struct Choice<'a> {
     id: &'a str,
+    speaker: Speaker,
     filter: fn(&Simulation, &Bump, &Entity, &Entity) -> bool,
-    execute: fn(&mut Simulation, &Bump, EntityId, EntityId) -> (&'a str, Speaker),
+    execute: fn(&mut Simulation, &Bump, EntityId, EntityId) -> &'a str,
     describe: fn(&Simulation, &Bump, &Entity, &Entity, &mut StringPool) -> SpanHandle,
 }
 
@@ -182,21 +214,31 @@ fn init_choices() -> &'static [Choice<'static>] {
     &[
         Choice {
             id: ENTRY_POINT,
+            speaker: Speaker::NPC,
             filter: |_, _, _, _| true,
-            execute: |_, _, _, _| ("test", Speaker::Flip),
-            describe: |_, _, _, _, pool| pool.push_str("Test"),
+            execute: |_, _, _, _| "test",
+            describe: |_, _, _, _, pool| pool.push_str("This is a test interaction"),
         },
         Choice {
             id: "test_a",
+            speaker: Speaker::Player,
             filter: |_, _, _, _| true,
-            execute: |_, _, _, _| (OVER, Speaker::Keep),
+            execute: |_, _, _, _| OVER,
             describe: |_, _, _, _, pool| pool.push_str("Choice A"),
         },
         Choice {
             id: "test_a",
+            speaker: Speaker::Player,
             filter: |_, _, _, _| true,
-            execute: |_, _, _, _| (OVER, Speaker::Keep),
+            execute: |_, _, _, _| "test_b_1",
             describe: |_, _, _, _, pool| pool.push_str("Choice B"),
+        },
+        Choice {
+            id: "test_b_1",
+            speaker: Speaker::NPC,
+            filter: |_, _, _, _| true,
+            execute: |_, _, _, _| "test_a",
+            describe: |_, _, _, _, pool| pool.push_str("And then what?"),
         },
     ]
 }

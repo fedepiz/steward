@@ -53,6 +53,63 @@ impl Simulation {
     }
 }
 
+#[derive(Default)]
+pub struct Request {
+    pub init: Option<InitRequest>,
+    pub advance_ticks: u32,
+    pub move_to_pos: Option<(f32, f32)>,
+    pub move_to_item: Option<MapItemId>,
+    pub interaction_pick_option: Option<usize>,
+    pub highlighted_item: MapItemId,
+    pub extract_terrain: bool,
+    pub(crate) strings: StringPool,
+    pub(crate) view_entities: Vec<ViewEntity>,
+}
+
+impl Request {
+    pub(crate) fn entity_tag(&self, view: ViewEntity) -> &'_ str {
+        self.strings.get(view.tag)
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub struct MapItemId(pub u64);
+
+impl Default for MapItemId {
+    fn default() -> Self {
+        Self(EntityId::default().data().as_ffi())
+    }
+}
+
+#[derive(Clone, Copy)]
+pub(crate) struct ViewEntity {
+    tag: SpanHandle,
+    pub(crate) entity: EntityId,
+}
+
+#[derive(Default)]
+pub struct InitRequest {
+    pub map_width: usize,
+    pub map_height: usize,
+    pub elevations: Vec<u8>,
+}
+
+impl Request {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn view_map_item(&mut self, key: &str, id: MapItemId) {
+        let entity = EntityId::from(KeyData::from_ffi(id.0));
+        self.view_entity(key, entity);
+    }
+
+    fn view_entity(&mut self, key: &str, entity: EntityId) {
+        let key = self.strings.push_str(key);
+        self.view_entities.push(ViewEntity { tag: key, entity });
+    }
+}
+
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug)]
 pub(crate) enum OnArrival {
     Nothing,
@@ -85,6 +142,12 @@ fn tick(sim: &mut Simulation, mut request: Request, arena: &Bump) -> Response {
         *sim = Simulation::default();
         sim.interactions = Interactions::new();
         crate::init::init(sim, req);
+    }
+
+    if let Some(choice) = request.interaction_pick_option.take() {
+        let mut interactions = std::mem::take(&mut sim.interactions);
+        interactions.pick_choice(arena, sim, choice);
+        sim.interactions = interactions;
     }
 
     let process_input = !sim.interactions.has_interaction();
@@ -451,62 +514,6 @@ impl movement::MovementGraph for TerrainMap {
         let y = y.max(0) as usize;
         let terrain = self.terrain_at(x, y);
         terrain.movement_speed_multiplier
-    }
-}
-
-#[derive(Default)]
-pub struct Request {
-    pub init: Option<InitRequest>,
-    pub advance_ticks: u32,
-    pub move_to_pos: Option<(f32, f32)>,
-    pub move_to_item: Option<MapItemId>,
-    pub highlighted_item: MapItemId,
-    pub extract_terrain: bool,
-    pub(crate) strings: StringPool,
-    pub(crate) view_entities: Vec<ViewEntity>,
-}
-
-impl Request {
-    pub(crate) fn entity_tag(&self, view: ViewEntity) -> &'_ str {
-        self.strings.get(view.tag)
-    }
-}
-
-#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-pub struct MapItemId(pub u64);
-
-impl Default for MapItemId {
-    fn default() -> Self {
-        Self(EntityId::default().data().as_ffi())
-    }
-}
-
-#[derive(Clone, Copy)]
-pub(crate) struct ViewEntity {
-    tag: SpanHandle,
-    pub(crate) entity: EntityId,
-}
-
-#[derive(Default)]
-pub struct InitRequest {
-    pub map_width: usize,
-    pub map_height: usize,
-    pub elevations: Vec<u8>,
-}
-
-impl Request {
-    pub fn new() -> Self {
-        Self::default()
-    }
-
-    pub fn view_map_item(&mut self, key: &str, id: MapItemId) {
-        let entity = EntityId::from(KeyData::from_ffi(id.0));
-        self.view_entity(key, entity);
-    }
-
-    fn view_entity(&mut self, key: &str, entity: EntityId) {
-        let key = self.strings.push_str(key);
-        self.view_entities.push(ViewEntity { tag: key, entity });
     }
 }
 
