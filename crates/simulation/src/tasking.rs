@@ -1,10 +1,13 @@
 use bumpalo::Bump;
+use rand::rngs::SmallRng;
+use rand::{Rng, SeedableRng};
 use slotmap::Key;
 
 use crate::entities::{
-    self, Entity, EntityId, Behavior, Flag, Hierarchy, Interaction, Location, Set, Task,
+    self, Behavior, Entity, EntityId, Flag, Hierarchy, Interaction, Location, Set, Task,
     TaskDestination, TaskInteraction, TaskKind, Var,
 };
+use crate::geom::V2;
 use crate::simulation::*;
 
 type AVec<'a, T> = bumpalo::collections::Vec<'a, T>;
@@ -21,9 +24,13 @@ pub(crate) fn entity_tasking(sim: &mut Simulation, arena: &Bump) {
 
     // Determine task, destination, and desired behavior for each entity.
     let mut results = AVec::with_capacity_in(tasks.len(), arena);
+    let mut despawns = AVec::new_in(arena);
     for (subject, task) in sim.entities.iter().zip(tasks) {
-        let (task, destination, behavior) = task_for_entity(sim, subject, task);
+        let (task, destination, behavior, despawn) = task_for_entity(sim, subject, task);
         results.push((subject.id, task, destination, behavior));
+        if despawn {
+            despawns.push(subject.id);
+        }
     }
 
     // Resolve task effects once entities are at their destinations.
@@ -35,6 +42,10 @@ pub(crate) fn entity_tasking(sim: &mut Simulation, arena: &Bump) {
     for (entity, (_, task, _, behavior)) in sim.entities.iter_mut().zip(results) {
         entity.task = task;
         entity.behavior = entity.fixed_behavior.unwrap_or(behavior);
+    }
+
+    for id in despawns {
+        sim.entities.despawn(id);
     }
 }
 
@@ -136,6 +147,57 @@ fn caravan_tasking(kind: TaskKind) -> Task {
     }
 }
 
+const BANDIT_MIN_SOLDIERS: f64 = 30.;
+const BANDIT_IDEAL_SOLDIERS: f64 = 50.;
+
+fn bandit_tasking(sim: &Simulation, subject: &Entity) -> Task {
+    // If homeless, suicide
+    let home = sim.entities.parent_of(Hierarchy::Attachment, subject.id);
+    if home.is_null() {
+        return Task {
+            despawn_on_choice: true,
+            ..Default::default()
+        };
+    }
+
+    let soldiers = subject.get_var(Var::Soldiers);
+    if soldiers < BANDIT_MIN_SOLDIERS {
+        Task {
+            kind: TaskKind::ReturnToBase,
+            destination: TaskDestination::Home,
+            interaction: TaskInteraction::default(),
+            arrival_wait: SHORT_WAIT,
+            ..Default::default()
+        }
+    } else {
+        let rng = &mut SmallRng::seed_from_u64(
+            sim.turn_num
+                .wrapping_mul(13)
+                .wrapping_add(subject.id.data().as_ffi()),
+        );
+
+        let radius = 20.;
+        let dx = rng.gen_range(-radius..radius);
+        let dy = rng.gen_range(-radius..radius);
+
+        let designated_pos = sim.entities[home].body.pos + V2::new(dx, dy);
+
+        let destination = if sim.terrain_map.is_pos_traversable(designated_pos) {
+            TaskDestination::DesignatedPos
+        } else {
+            TaskDestination::Nothing
+        };
+
+        Task {
+            kind: TaskKind::Hunt,
+            destination,
+            designated_pos,
+            interaction: TaskInteraction::default(),
+            ..Default::default()
+        }
+    }
+}
+
 fn person_tasking() -> Task {
     Task {
         kind: TaskKind::Generic,
@@ -149,37 +211,81 @@ fn person_tasking() -> Task {
 struct Destination {
     target: EntityId,
     enter: bool,
+    has_pos: bool,
+    pos: V2,
 }
 
 fn task_for_entity(
     sim: &Simulation,
     subject: &Entity,
     mut task: Task,
-) -> (Task, Destination, Behavior) {
+) -> (Task, Destination, Behavior, bool) {
     // Retask when initializing or once the current task is complete.
     let retask = task.kind == TaskKind::Init || task.is_complete;
+
     if retask {
         task = if subject.in_set(Set::People) {
             person_tasking()
-        } else if subject.flags.get(Flag::IsFarmer) {
+        } else if subject.get_flag(Flag::IsFarmer) {
             farmer_tasking(task.kind)
-        } else if subject.flags.get(Flag::IsMiner) {
+        } else if subject.get_flag(Flag::IsMiner) {
             miner_tasking(task.kind)
-        } else if subject.flags.get(Flag::IsCaravan) {
+        } else if subject.get_flag(Flag::IsCaravan) {
             caravan_tasking(task.kind)
+        } else if subject.get_flag(Flag::IsBandit) {
+            bandit_tasking(sim, subject)
         } else {
             Task::default()
         };
+
+        if task.despawn_on_choice {
+            return (task, Destination::default(), Behavior::default(), true);
+        }
     }
 
     // Resolve the concrete target for the task's symbolic destination.
-    let destination = match task.destination {
+    let destination = resolve_task_destination(sim, subject, &task);
+
+    // Reset task if destination is not valid
+    let is_valid = !destination.target.is_null() || destination.has_pos;
+    if !is_valid {
+        return (Task::default(), destination, Behavior::Idle, false);
+    }
+
+    // Behavior is driven by the task destination.
+    let mut behavior = subject.behavior;
+    if !destination.target.is_null() {
+        behavior = Behavior::ToEntity {
+            target: destination.target,
+            on_arrival: if destination.enter {
+                OnArrival::Enter
+            } else {
+                OnArrival::Nothing
+            },
+        };
+    }
+
+    if destination.has_pos {
+        behavior = Behavior::ToPos(destination.pos);
+    }
+
+    (task, destination, behavior, false)
+}
+
+fn resolve_task_destination(sim: &Simulation, subject: &Entity, task: &Task) -> Destination {
+    match task.destination {
         TaskDestination::Nothing => Destination::default(),
+        TaskDestination::DesignatedPos => Destination {
+            pos: task.designated_pos,
+            has_pos: true,
+            ..Default::default()
+        },
         TaskDestination::Base => {
             let target = sim.entities.parent_of(Hierarchy::Attachment, subject.id);
             Destination {
                 target,
                 enter: true,
+                ..Default::default()
             }
         }
         TaskDestination::Home => {
@@ -187,6 +293,7 @@ fn task_for_entity(
             Destination {
                 target,
                 enter: true,
+                ..Default::default()
             }
         }
         TaskDestination::MarketOfHome => {
@@ -195,6 +302,7 @@ fn task_for_entity(
             Destination {
                 target,
                 enter: true,
+                ..Default::default()
             }
         }
         TaskDestination::WorkArea => {
@@ -202,6 +310,7 @@ fn task_for_entity(
             Destination {
                 target,
                 enter: false,
+                ..Default::default()
             }
         }
         TaskDestination::TradingDestination => {
@@ -216,31 +325,10 @@ fn task_for_entity(
             Destination {
                 target,
                 enter: true,
+                ..Default::default()
             }
         }
-    };
-
-    // Reset task if destination is not valid
-    let is_valid = !destination.target.is_null();
-    if !is_valid {
-        return (Task::default(), destination, Behavior::Idle);
     }
-
-    // Behavior is driven by the task destination.
-    let behavior = if destination.target.is_null() {
-        subject.behavior
-    } else {
-        Behavior::GoTo {
-            target: destination.target,
-            on_arrival: if destination.enter {
-                OnArrival::Enter
-            } else {
-                OnArrival::Nothing
-            },
-        }
-    };
-
-    (task, destination, behavior)
 }
 
 fn resolve_task_effects(
@@ -249,18 +337,25 @@ fn resolve_task_effects(
     destination: Destination,
     task: &mut Task,
 ) {
-    let target = destination.target;
-    let at_destination = !target.is_null() && {
-        let location = sim.entities[subject].location;
-        if destination.enter {
-            location == Location::Inside(target)
-        } else {
-            location.is_at(target)
+    {
+        let subject = &sim.entities[subject];
+        let mut at_destination = false;
+        if !destination.target.is_null() {
+            let location = subject.location;
+            at_destination = if destination.enter {
+                location == Location::Inside(destination.target)
+            } else {
+                location.is_at(destination.target)
+            };
         }
-    };
 
-    if !at_destination {
-        return;
+        if destination.has_pos {
+            at_destination = subject.body.pos == destination.pos;
+        }
+
+        if !at_destination {
+            return;
+        }
     }
 
     if task.arrival_wait > 0 {
@@ -275,7 +370,7 @@ fn resolve_task_effects(
         }
     }
 
-    task.is_complete = at_destination && !task.interaction.any();
+    task.is_complete = !task.interaction.any();
 }
 
 fn handle_interaction(

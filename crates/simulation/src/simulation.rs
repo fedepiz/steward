@@ -138,6 +138,8 @@ fn tick(sim: &mut Simulation, mut request: Request, arena: &Bump) -> Response {
             consumables_into_prosperity(sim, arena);
             // Prosperity drifts toward a baseline over time.
             prosperity_towards_equilibrium(sim, arena);
+            // Recruiting for settlements that do that
+            increase_recruits(sim);
         }
 
         const ACTIVITY_TICK_RATE: u64 = 100;
@@ -496,7 +498,7 @@ fn tick_opportunities(sim: &mut Simulation) {
         change: f64,
         min: f64,
         max: f64,
-        var_gt: &'a [(Var, f64)],
+        var_gte: &'a [(Var, f64)],
     }
 
     const RULES: &[Rule] = &[
@@ -505,21 +507,21 @@ fn tick_opportunities(sim: &mut Simulation) {
             change: FARMER_OPPORTUNITY_CHANGE_PER_TICK,
             min: FARMER_OPPORTUNITY_MIN,
             max: 0.,
-            var_gt: &[],
+            var_gte: &[],
         },
         Rule {
             variable: Var::MinerOpportunity,
             change: MINER_OPPORTUNITY_CHANGE_PER_TICK,
             min: MINER_OPPORTUNITY_MIN,
             max: 0.,
-            var_gt: &[],
+            var_gte: &[],
         },
         Rule {
             variable: Var::MinerOpportunity,
             change: MINER_OPPORTUNITY_CHANGE_PER_TICK * -2.,
             min: MINER_OPPORTUNITY_MIN,
             max: 0.,
-            var_gt: &[(Var::Minerals, 10.)],
+            var_gte: &[(Var::Minerals, 10.)],
         },
     ];
 
@@ -530,7 +532,7 @@ fn tick_opportunities(sim: &mut Simulation) {
         }
         for rule in RULES {
             let passes_thresholds = rule
-                .var_gt
+                .var_gte
                 .iter()
                 .all(|&(var, threshold)| entity.get_var(var) >= threshold);
             if !passes_thresholds {
@@ -899,8 +901,9 @@ fn determine_party_goal_and_avoidance(sim: &Simulation, entity: &Entity) -> (Goa
 
     let goal = match entity.behavior {
         Behavior::Idle => Goal::Idle,
+        Behavior::ToPos(pos) => Goal::MoveTo(pos),
         Behavior::Player => sim.player_goal,
-        Behavior::GoTo { target, on_arrival } => {
+        Behavior::ToEntity { target, on_arrival } => {
             let must_get_same_position = match on_arrival {
                 OnArrival::Enter => true,
                 OnArrival::Nothing => false,
@@ -1495,5 +1498,15 @@ fn tick_timers(sim: &mut Simulation) {
                 entity.set_var(var, (value - 1.).max(0.));
             }
         }
+    }
+}
+
+fn increase_recruits(sim: &mut Simulation) {
+    const AUTO_RECRUIT_AMOUNT: f64 = 5.;
+    for entity in sim.entities.iter_mut() {
+        let target = entity.get_var(Var::AutoRecruitBase);
+        let soldiers = entity.get_var(Var::Soldiers);
+        let recruited = (target - soldiers).clamp(0., AUTO_RECRUIT_AMOUNT);
+        entity.set_var(Var::Soldiers, soldiers + recruited);
     }
 }

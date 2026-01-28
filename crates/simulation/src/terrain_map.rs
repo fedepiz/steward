@@ -1,5 +1,7 @@
 use std::hash::{DefaultHasher, Hash, Hasher};
 
+use crate::geom::V2;
+
 #[derive(Default)]
 pub(crate) struct TerrainMap {
     terrain_types: Vec<TerrainType>,
@@ -23,6 +25,13 @@ impl TerrainMap {
             .get(idx)
             .and_then(|cell| self.terrain_types.get(cell.type_idx))
             .unwrap_or(&Self::EMPTY_TERRAIN)
+    }
+
+    pub fn is_pos_traversable(&self, pos: V2) -> bool {
+        let x = pos.x.round().max(0.) as usize;
+        let y = pos.y.round().max(0.) as usize;
+        let terrain = self.terrain_at(x, y);
+        terrain.movement_speed_multiplier > 0.
     }
 
     pub fn size(&self) -> (usize, usize) {

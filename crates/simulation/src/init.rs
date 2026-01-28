@@ -8,8 +8,8 @@ use crate::{geom::*, terrain_map};
 pub(crate) fn init(sim: &mut Simulation, req: InitRequest) {
     sim.terrain_map = terrain_map::init(&req.elevations, req.map_width, req.map_height);
 
-    const BASE_SPEED: f32 = 2.;
     const WALK_SPEED: f32 = 1.;
+    const BASE_SPEED: f32 = 2.;
 
     const LOCATION_SETS: &[Set] = &[Set::Settlements, Set::Mines];
 
@@ -82,6 +82,18 @@ pub(crate) fn init(sim: &mut Simulation, req: InitRequest) {
         typ.speed = 0.;
         typ.size = 2.5;
         typ.layer = 0;
+        typ.vars = &[(Var::AutoRecruitBase, 30.)];
+    }
+
+    {
+        let typ = sim.entities.add_type();
+        typ.tag = "bandits";
+        typ.image = "bandit";
+        typ.name = Name::simple(sim.names.define("Bandits"));
+        typ.speed = WALK_SPEED * 1.25;
+        typ.size = 2.;
+        typ.layer = 0;
+        typ.vars = &[];
     }
 
     {
@@ -100,6 +112,10 @@ pub(crate) fn init(sim: &mut Simulation, req: InitRequest) {
         typ.name = Name::simple(sim.names.define("Hillfort"));
         typ.size = 3.;
         typ.always_show_name = true;
+        typ.vars = &[
+            (Var::FoodCapacity, HILLFORT_FOOD_CAPACITY),
+            (Var::AutoRecruitBase, HILLFORT_AUTORECRUIT_BASE),
+        ]
     }
 
     {
@@ -109,6 +125,10 @@ pub(crate) fn init(sim: &mut Simulation, req: InitRequest) {
         typ.name = Name::simple(sim.names.define("Town"));
         typ.size = 4.;
         typ.always_show_name = true;
+        typ.vars = &[
+            (Var::FoodCapacity, TOWN_FOOD_CAPACITY),
+            (Var::AutoRecruitBase, TOWN_AUTORECRUIT_BASE),
+        ]
     }
 
     {
@@ -166,7 +186,9 @@ pub(crate) fn init(sim: &mut Simulation, req: InitRequest) {
     const HILLFORT_POPULATION: f64 = 1000.;
     const VILLAGE_FOOD_CAPACITY: f64 = 1000.;
     const HILLFORT_FOOD_CAPACITY: f64 = 10_000.;
+    const HILLFORT_AUTORECRUIT_BASE: f64 = 150.;
     const TOWN_FOOD_CAPACITY: f64 = 10_000.;
+    const TOWN_AUTORECRUIT_BASE: f64 = 200.;
     const PERSON_RENOWN: f64 = 10.;
 
     let entities = [
@@ -182,6 +204,19 @@ pub(crate) fn init(sim: &mut Simulation, req: InitRequest) {
             ..Default::default()
         },
         EntityDesc {
+            pos: (610., 540.),
+            party_typ: "bandits",
+            sets: &[],
+            vars: &[(Var::Soldiers, 30.)],
+            flags: &[Flag::IsBandit, Flag::IsGenerallyHostile, Flag::IsEphemeral],
+            parents: &[
+                (Hierarchy::FactionMembership, "bandits"),
+                (Hierarchy::Attachment, "bandit_camp1"),
+            ],
+            ..Default::default()
+        },
+        EntityDesc {
+            key: "bandit_camp1",
             pos: (620., 545.),
             party_typ: "bandit_camp",
             sets: &[Set::Settlements, Set::Locations],
@@ -269,7 +304,6 @@ pub(crate) fn init(sim: &mut Simulation, req: InitRequest) {
             vars: &[
                 (Var::Prosperity, SETTLEMENT_PROSPERITY),
                 (Var::Population, HILLFORT_POPULATION),
-                (Var::FoodCapacity, HILLFORT_FOOD_CAPACITY),
             ],
             sets: &[Set::Settlements, Set::Hillforts],
             parents: &[(Hierarchy::FactionMembership, "rheged")],
@@ -282,7 +316,6 @@ pub(crate) fn init(sim: &mut Simulation, req: InitRequest) {
             vars: &[
                 (Var::Prosperity, SETTLEMENT_PROSPERITY),
                 (Var::Population, HILLFORT_POPULATION),
-                (Var::FoodCapacity, HILLFORT_FOOD_CAPACITY),
             ],
             sets: &[Set::Settlements, Set::Hillforts],
             parents: &[(Hierarchy::FactionMembership, "rheged")],
@@ -345,7 +378,6 @@ pub(crate) fn init(sim: &mut Simulation, req: InitRequest) {
             vars: &[
                 (Var::Prosperity, SETTLEMENT_PROSPERITY),
                 (Var::Population, HILLFORT_POPULATION),
-                (Var::FoodCapacity, HILLFORT_FOOD_CAPACITY),
             ],
             sets: &[Set::Settlements],
             parents: &[(Hierarchy::FactionMembership, "rheged")],

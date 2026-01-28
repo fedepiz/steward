@@ -16,6 +16,7 @@ pub(crate) struct Archetype {
     pub name: Name,
     pub size: f32,
     pub speed: f32,
+    pub vars: &'static [(Var, f64)],
     pub always_show_name: bool,
     pub layer: usize,
     pub is_disembodied: bool,
@@ -42,6 +43,8 @@ pub(crate) enum Var {
     FarmerOpportunity,
     MinerOpportunity,
     CaravanOpportunity,
+    // Autorecruiting
+    AutoRecruitBase,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, EnumCount, EnumIter)]
@@ -67,6 +70,7 @@ pub(crate) enum Flag {
     IsFarmer,
     IsMiner,
     IsCaravan,
+    IsBandit,
     // An ephemeral agent is an agent that despawns if
     // it becomes "empty"
     IsEphemeral,
@@ -172,6 +176,9 @@ impl Entities {
         entity.body.size = typ.size;
         entity.speed = typ.speed;
         entity.flags.set(Flag::IsDisembodied, typ.is_disembodied);
+        for &(var, value) in typ.vars {
+            entity.set_var(var, value);
+        }
     }
 
     pub(crate) fn add_type(&mut self) -> &mut Archetype {
@@ -471,6 +478,10 @@ pub(crate) struct Task {
     pub arrival_wait: u32,
     /// Has the task actually been accomplished?
     pub is_complete: bool,
+    /// Some tasks carry a designated position
+    pub designated_pos: V2,
+    /// Despawn if this task is chosen
+    pub despawn_on_choice: bool,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug)]
@@ -480,6 +491,7 @@ pub(crate) enum TaskKind {
     Deliver,
     Load,
     ReturnToBase,
+    Hunt,
 }
 
 impl Default for TaskKind {
@@ -488,9 +500,10 @@ impl Default for TaskKind {
     }
 }
 
-#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Clone, Copy, PartialEq, PartialOrd)]
 pub(crate) enum TaskDestination {
     Nothing,
+    DesignatedPos,
     Home,
     Base,
     WorkArea,
@@ -556,7 +569,8 @@ impl TaskInteraction {
 #[derive(Clone, Copy, Debug)]
 pub enum Behavior {
     Idle,
-    GoTo {
+    ToPos(V2),
+    ToEntity {
         target: EntityId,
         on_arrival: OnArrival,
     },
