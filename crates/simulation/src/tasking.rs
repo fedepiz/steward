@@ -147,8 +147,6 @@ fn caravan_tasking(kind: TaskKind) -> Task {
     }
 }
 
-const BANDIT_MIN_SOLDIERS: f64 = 30.;
-//
 fn bandit_tasking(sim: &Simulation, subject: &Entity) -> Task {
     // If homeless, suicide
     let home = sim.entities.parent_of(Hierarchy::Attachment, subject.id);
@@ -160,12 +158,13 @@ fn bandit_tasking(sim: &Simulation, subject: &Entity) -> Task {
     }
 
     let soldiers = subject.get_var(Var::Soldiers);
+    let desired_soldiers = subject.get_var(Var::DesiredSoldiers);
     // If not enough soldiers, go home and pick up more
-    if soldiers < BANDIT_MIN_SOLDIERS {
+    if desired_soldiers > 0.0 && soldiers < desired_soldiers {
         Task {
             kind: TaskKind::ReturnToBase,
             destination: TaskDestination::Base,
-            interaction: TaskInteraction::default(),
+            interaction: TaskInteraction::with(InteractionKind::LoadSoldiers),
             arrival_wait: SHORT_WAIT,
             ..Default::default()
         }
@@ -491,6 +490,32 @@ fn handle_interaction(
                 .set(Var::Goods, on_caravan);
 
             sim.entities[target_id].vars_mut().set(Var::Goods, in_town);
+
+            true
+        }
+        InteractionKind::LoadSoldiers => {
+            let subject = &sim.entities[subject_id];
+            let target = &sim.entities[target_id];
+            let desired = subject.get_var(Var::DesiredSoldiers);
+            if desired <= 0.0 {
+                return true;
+            }
+
+            let on_subject = subject.get_var(Var::Soldiers);
+            if on_subject >= desired {
+                return true;
+            }
+
+            let at_base = target.get_var(Var::Soldiers);
+            let needed = (desired - on_subject).max(0.0);
+            let transferred = needed.min(at_base);
+
+            sim.entities[subject_id]
+                .vars_mut()
+                .with(Var::Soldiers, on_subject + transferred);
+            sim.entities[target_id]
+                .vars_mut()
+                .with(Var::Soldiers, at_base - transferred);
 
             true
         }

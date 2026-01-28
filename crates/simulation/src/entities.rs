@@ -27,6 +27,7 @@ pub(crate) enum Var {
     // Generic Party
     Civilians,
     Soldiers,
+    DesiredSoldiers,
     Courage,
     Aggressiveness,
     // Person
@@ -527,6 +528,7 @@ pub(crate) enum InteractionKind {
     UnloadMinerals,
     UnloadGoods,
     CaravanVisit,
+    LoadSoldiers,
 }
 
 const INTERACTION_BITSET_SIZE: usize = (InteractionKind::COUNT + 63) / 64;
