@@ -9,7 +9,7 @@ use crate::{
 };
 
 #[derive(Default)]
-pub(crate) struct Interactions {
+pub(crate) struct Dialog {
     choice_defs: &'static [Choice<'static>],
     subject: EntityId,
     target: EntityId,
@@ -31,7 +31,7 @@ const OVER: &'static str = "";
 
 type AVec<'a, T> = bumpalo::collections::Vec<'a, T>;
 
-impl Interactions {
+impl Dialog {
     pub fn new() -> Self {
         let mut this = Self::default();
         this.choice_defs = init_choices();
@@ -42,7 +42,7 @@ impl Interactions {
         !self.subject.is_null() || !self.target.is_null()
     }
 
-    pub(crate) fn begin_interaction(
+    pub(crate) fn begin(
         &mut self,
         arena: &Bump,
         sim: &mut Simulation,

@@ -1,6 +1,6 @@
 use std::collections::{BTreeMap, BTreeSet};
 
-use crate::{OnArrival, geom::V2, names::Name};
+use crate::{geom::V2, names::Name};
 use slotmap::*;
 use strum::*;
 use util::bitset::BitSet;
@@ -601,6 +601,20 @@ pub(crate) enum Goal {
 impl Default for Goal {
     fn default() -> Self {
         Self::Idle
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug)]
+pub(crate) enum OnArrival {
+    Nothing,
+    Enter,
+    Attack,
+    Interact,
+}
+
+impl Default for OnArrival {
+    fn default() -> Self {
+        Self::Nothing
     }
 }
 

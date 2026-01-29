@@ -496,19 +496,19 @@ fn handle_interaction(
         InteractionKind::LoadSoldiers => {
             let subject = &sim.entities[subject_id];
             let target = &sim.entities[target_id];
-            let desired = subject.get_var(Var::DesiredSoldiers);
-            if desired <= 0.0 {
-                return true;
-            }
 
             let on_subject = subject.get_var(Var::Soldiers);
-            if on_subject >= desired {
+            let desired = subject.get_var(Var::DesiredSoldiers);
+
+            let at_base = target.get_var(Var::Soldiers);
+            let can_be_taken = (at_base - target.get_var(Var::DesiredSoldiers)).max(0.);
+
+            if on_subject >= desired || desired <= 0.0 || can_be_taken <= 0. {
                 return true;
             }
 
-            let at_base = target.get_var(Var::Soldiers);
             let needed = (desired - on_subject).max(0.0);
-            let transferred = needed.min(at_base);
+            let transferred = needed.min(can_be_taken);
 
             sim.entities[subject_id]
                 .vars_mut()

@@ -1,8 +1,9 @@
+mod activities;
 mod actor;
+mod dialog;
 mod entities;
 mod geom;
 mod init;
-mod interaction;
 mod movement;
 mod names;
 pub mod objects;
