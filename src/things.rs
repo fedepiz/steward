@@ -36,6 +36,7 @@ pub(crate) enum Flag {
     IsSettlement,
     IsPerson,
     IsPath,
+    Teleport,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug, EnumIter, EnumCount)]
