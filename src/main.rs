@@ -4,6 +4,8 @@ mod csv;
 mod terrain;
 mod things;
 
+use std::collections::btree_map::Values;
+
 use crate::{assets::*, terrain::TerrainRenderer, things::*};
 use board::*;
 use macroquad::prelude as mq;
@@ -254,7 +256,90 @@ fn setup(scratch: &Arena) -> Things {
         }
     }
 
+    let mut nav_grah = NavGraphBuilder::new();
+    ctx.readonly_pass(|_, this| {
+        if this.flag(Flag::IsPath) {
+            let a = this.link(Link::A);
+            let b = this.link(Link::B);
+            nav_grah.push(a, b, 1);
+        }
+    });
+    let nav_graph = nav_grah.build();
+    ctx.readonly_pass(|_, this| {
+        let neighbours = nav_graph.get_neighbours(this.id());
+        for &(nid, _) in neighbours {
+            println!("{} -> {}", this.name(), ctx[nid].name());
+        }
+    });
+
     ctx
+}
+
+#[derive(Clone, Copy, Default)]
+struct NavStep {
+    id: ThingId,
+    cost: i32,
+}
+
+struct NavGraphBuilder {
+    bins: Vec<usize>,
+    entries: Vec<(ThingId, ThingId, i32)>,
+    max_slot: usize,
+}
+
+impl NavGraphBuilder {
+    fn new() -> Self {
+        Self {
+            bins: vec![0; things::NUM_THINGS],
+            entries: vec![],
+            max_slot: 0,
+        }
+    }
+
+    fn push(&mut self, from: ThingId, to: ThingId, cost: i32) {
+        self.bins[from.slot()] += 1;
+        self.entries.push((from, to, cost));
+        self.max_slot = from.slot().max(self.max_slot);
+    }
+
+    fn build(self) -> NavGraph {
+        let mut offsets = vec![0; self.max_slot + 1];
+        // Prefix sum to calculate offsets
+        for i in 0..self.bins.len() {
+            offsets[i + 1] = offsets[i] + self.bins[i];
+        }
+        let mut counts = self.bins;
+        counts.clear();
+        counts.resize(self.max_slot, 0);
+
+        let mut values = vec![Default::default(); self.entries.len()];
+
+        for (key, target, cost) in self.entries {
+            let idx = offsets[key.slot()] + counts[key.slot()];
+            counts[key.slot()] += 1;
+            values[idx] = (target, cost);
+        }
+
+        NavGraph { offsets, values }
+    }
+}
+
+#[derive(Default)]
+struct NavGraph {
+    offsets: Vec<usize>,
+    values: Vec<(ThingId, i32)>,
+}
+
+impl NavGraph {
+    fn get_neighbours(&self, id: ThingId) -> &[(ThingId, i32)] {
+        let idx = id.slot();
+        if idx + 1 >= self.offsets.len() {
+            return &[];
+        }
+        let start = self.offsets[idx];
+        let end = self.offsets[idx + 1];
+        &self.values[start..=end]
+    }
 }
 
 fn tick(ctx: &mut Things) {

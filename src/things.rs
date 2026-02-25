@@ -32,8 +32,8 @@ impl ThingId {
     }
 
     #[inline]
-    pub(crate) fn slot(self) -> u32 {
-        self.slot
+    pub(crate) fn slot(self) -> usize {
+        self.slot as usize
     }
 }
 

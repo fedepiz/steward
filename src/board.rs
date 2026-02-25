@@ -197,6 +197,7 @@ impl Board {
         }
 
         for layer in 0..=max_layer {
+            // Draw labels
             for label in &draw_data.labels {
                 if label.layer != layer {
                     continue;
@@ -230,6 +231,7 @@ impl Board {
                 );
             }
 
+            // Draw sprites
             {
                 self.sprite_shader.set_uniform("time", time);
                 self.sprite_shader
