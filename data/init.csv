@@ -15,8 +15,8 @@ connect_path,llan_heledd,way_llan_heledd_mid
 spawn_waypoint,way_llan_heledd_mid, 592, 517
 spawn_settlement,anava,"Anava",celtic_village,574,504
 connect_path,way_caer_ligualid_north,din_drust
-connect_path,way_din_drust_west, anava
-
+connect_path,way_din_drust_west,anava
 spawn_person,test,"Callum",soldier,llan_heledd
 spawn_person,test2,"Einar",soldier,caer_ligualid
 spawn_person,test3,"Oswiu",soldier,caer_wenddoleu
+spawn_person,test4,"Oswiu",soldier,caer_ligualid

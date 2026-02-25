@@ -23,6 +23,7 @@ pub(crate) struct Label<'a> {
     pub pos: mq::Vec2,
     pub font_size: u16,
     pub color: mq::Color,
+    pub layer: u8,
 }
 
 #[derive(Clone, Copy, Default)]
@@ -145,6 +146,14 @@ impl Board {
         sprite_atlas: &TextureAtlas,
         font: &mq::Font,
     ) {
+        let max_layer = draw_data
+            .sprites
+            .iter()
+            .map(|sprite| sprite.layer)
+            .chain(draw_data.labels.iter().map(|label| label.layer))
+            .max()
+            .unwrap_or(0);
+
         mq::push_camera_state();
         mq::set_camera(&self.camera);
 
@@ -187,61 +196,71 @@ impl Board {
             mq::gl_use_default_material();
         }
 
-        {
-            self.sprite_shader.set_uniform("time", time);
-            self.sprite_shader
-                .set_texture("atlas_texture", sprite_atlas.texture().clone());
-            mq::gl_use_material(&self.sprite_shader);
+        for layer in 0..=max_layer {
+            for label in &draw_data.labels {
+                if label.layer != layer {
+                    continue;
+                }
 
-            for sprite in &draw_data.sprites {
-                self.sprite_shader
-                    .set_uniform("border_highlight", (sprite.border_highlight,));
-                self.sprite_shader
-                    .set_uniform("pulse_intensity", sprite.pulse_intensity);
+                let font = Some(font);
+                let scale = 2. / (self.camera.zoom.x * mq::screen_width());
+                let measure = mq::measure_text(label.text, font, label.font_size, scale);
+                let pad = 4. * scale;
+                let vspace = pad;
 
-                let source = sprite_atlas.get(sprite.image);
-                mq::draw_texture_ex(
-                    sprite_atlas.texture(),
-                    sprite.bounds.x,
-                    sprite.bounds.y,
-                    mq::WHITE,
-                    mq::DrawTextureParams {
-                        source: Some(source),
-                        dest_size: Some(sprite.bounds.size()),
+                let pos = label.pos + mq::vec2(-measure.width / 2., measure.height);
+                mq::draw_rectangle(
+                    pos.x - pad,
+                    pos.y - pad + vspace - measure.offset_y,
+                    measure.width + pad * 2.,
+                    measure.height + pad * 2.,
+                    mq::BLACK.with_alpha(0.5),
+                );
+                mq::draw_text_ex(
+                    label.text,
+                    pos.x,
+                    pos.y + vspace,
+                    mq::TextParams {
+                        font,
+                        font_size: label.font_size,
+                        color: label.color,
+                        font_scale: scale,
                         ..Default::default()
                     },
                 );
             }
-            mq::gl_use_default_material();
-        }
 
-        for label in &draw_data.labels {
-            let font = Some(font);
-            let scale = 2. / (self.camera.zoom.x * mq::screen_width());
-            let measure = mq::measure_text(label.text, font, label.font_size, scale);
-            let pad = 4. * scale;
-            let vspace = pad;
+            {
+                self.sprite_shader.set_uniform("time", time);
+                self.sprite_shader
+                    .set_texture("atlas_texture", sprite_atlas.texture().clone());
+                mq::gl_use_material(&self.sprite_shader);
 
-            let pos = label.pos + mq::vec2(-measure.width / 2., measure.height);
-            mq::draw_rectangle(
-                pos.x - pad,
-                pos.y - pad + vspace - measure.offset_y,
-                measure.width + pad * 2.,
-                measure.height + pad * 2.,
-                mq::BLACK.with_alpha(0.5),
-            );
-            mq::draw_text_ex(
-                label.text,
-                pos.x,
-                pos.y + vspace,
-                mq::TextParams {
-                    font,
-                    font_size: label.font_size,
-                    color: label.color,
-                    font_scale: scale,
-                    ..Default::default()
-                },
-            );
+                for sprite in &draw_data.sprites {
+                    if sprite.layer != layer {
+                        continue;
+                    }
+
+                    self.sprite_shader
+                        .set_uniform("border_highlight", (sprite.border_highlight,));
+                    self.sprite_shader
+                        .set_uniform("pulse_intensity", sprite.pulse_intensity);
+
+                    let source = sprite_atlas.get(sprite.image);
+                    mq::draw_texture_ex(
+                        sprite_atlas.texture(),
+                        sprite.bounds.x,
+                        sprite.bounds.y,
+                        mq::WHITE,
+                        mq::DrawTextureParams {
+                            source: Some(source),
+                            dest_size: Some(sprite.bounds.size()),
+                            ..Default::default()
+                        },
+                    );
+                }
+                mq::gl_use_default_material();
+            }
         }
         mq::pop_camera_state();
 

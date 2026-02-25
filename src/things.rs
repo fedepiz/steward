@@ -1,3 +1,5 @@
+use std::hash::{Hash, Hasher};
+
 use strum::{EnumCount, EnumIter};
 
 use util::bitset::BitSet;
@@ -28,6 +30,11 @@ impl ThingId {
     pub(crate) fn as_valid(self) -> Option<ThingId> {
         if self.is_valid() { Some(self) } else { None }
     }
+
+    #[inline]
+    pub(crate) fn slot(self) -> u32 {
+        self.slot
+    }
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug, EnumIter, EnumCount)]
@@ -37,6 +44,8 @@ pub(crate) enum Flag {
     IsPerson,
     IsPath,
     Teleport,
+    IsVisible,
+    IsInside,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug, EnumIter, EnumCount)]
@@ -74,6 +83,8 @@ const NUM_LISTS: usize = List::COUNT;
 pub(crate) struct Thing {
     id: ThingId,
     next_free: ThingId,
+    tag: &'static str,
+    tag_chain_next: ThingId,
     name: &'static str,
     sprite: &'static str,
     flags: BitSet<NUM_FLAGS>,
@@ -171,6 +182,7 @@ struct MetaData {
 pub(crate) struct Things {
     entries: Vec<Thing>,
     write_buffer: Vec<Thing>,
+    tag_hash_buckets: Vec<ThingId>,
     meta: MetaData,
 }
 
@@ -201,9 +213,12 @@ impl Things {
             generation: 0,
         };
 
+        let tag_hash_heads = vec![ThingId::default(); 256];
+
         Self {
             entries,
             write_buffer,
+            tag_hash_buckets: tag_hash_heads,
             meta,
         }
     }
@@ -221,17 +236,70 @@ impl Things {
         thing
     }
 
+    pub(crate) fn spawn_with_tag(&mut self, tag: &'static str) -> &mut Thing {
+        let id = self.spawn().id();
+        self.set_tag(tag, id);
+        &mut self[id]
+    }
+
     pub(crate) fn despawn(&mut self, id: ThingId) {
         if !id.is_valid() {
             return;
         }
         let thing = &mut self.entries[id.slot as usize];
+        // Only untagged things can be removed
+        assert!(thing.tag.is_empty());
+
         assert!(thing.id == id);
         thing.id.generation += 1;
         assert!(thing.id.generation % 2 == 0);
         let end = &mut self.entries[self.meta.free_list_tail.slot as usize];
         end.next_free = id;
         self.meta.free_list_tail = id;
+    }
+
+    pub(crate) fn set_tag(&mut self, tag: &'static str, id: ThingId) {
+        // Cannot already have a tag, tag can't be free
+        assert!(self[id].tag.is_empty() && !tag.is_empty());
+        self[id].tag = tag;
+
+        let hash = {
+            let mut hasher = std::hash::DefaultHasher::new();
+            tag.hash(&mut hasher);
+            hasher.finish()
+        } as usize;
+        let bucket_idx = hash % self.tag_hash_buckets.len();
+        let bucket_first = self.tag_hash_buckets[bucket_idx];
+        if bucket_first.is_null() {
+            self.tag_hash_buckets[bucket_idx] = id;
+        } else {
+            // Find the end of the tag list
+            let mut cursor = self.tag_hash_buckets[bucket_idx];
+            while self[cursor].tag_chain_next.is_valid() {
+                cursor = self[cursor].tag_chain_next;
+            }
+            // We now point at the end of the list
+            self[cursor].tag_chain_next = id;
+        }
+    }
+
+    pub(crate) fn lookup_tag(&self, tag: &str) -> ThingId {
+        let hash = {
+            let mut hasher = std::hash::DefaultHasher::new();
+            tag.hash(&mut hasher);
+            hasher.finish()
+        } as usize;
+        let bucket_idx = hash % self.tag_hash_buckets.len();
+
+        let mut cursor = self.tag_hash_buckets[bucket_idx];
+        while cursor.is_valid() {
+            let thing = &self[cursor];
+            if thing.tag == tag {
+                return cursor;
+            }
+            cursor = thing.tag_chain_next;
+        }
+        ThingId::default()
     }
 
     pub(crate) fn iter_list(&self, list: List, id: ThingId) -> ListChildrenIter<'_> {
@@ -344,32 +412,6 @@ impl Things {
             idx: 1,
         }
     }
-
-    pub(crate) fn pass(
-        &mut self,
-        mut filter: impl FnMut(&Things, &Thing) -> bool,
-        mut body: impl FnMut(&Things, &mut Thing),
-    ) {
-        let mut write_buffer = std::mem::take(&mut self.write_buffer);
-
-        for (thing, target) in self.entries.iter().zip(write_buffer.iter_mut()) {
-            if thing.id.is_valid() && filter(self, thing) {
-                *target = *thing;
-                body(self, target);
-            }
-        }
-
-        self.write_buffer = write_buffer;
-        std::mem::swap(&mut self.entries, &mut self.write_buffer);
-    }
-
-    pub(crate) fn pass_readonly(&self, mut body: impl FnMut(&Things, &Thing)) {
-        for thing in &self.entries {
-            if thing.id.is_valid() {
-                body(self, thing);
-            }
-        }
-    }
 }
 
 impl std::ops::Index<ThingId> for Things {
@@ -446,4 +488,79 @@ impl<'a> Iterator for ThingsIterator<'a> {
 
         None
     }
+}
+
+impl Things {
+    pub(crate) fn write_pass(
+        &mut self,
+        mut filter: impl FnMut(&Things, &Thing) -> bool,
+        mut body: impl FnMut(&Things, &mut Thing, &mut Commands),
+    ) {
+        let mut write_buffer = std::mem::take(&mut self.write_buffer);
+        let mut commands = Commands::new();
+
+        for (thing, target) in self.entries.iter().zip(write_buffer.iter_mut()) {
+            if thing.id.is_valid() && filter(self, thing) {
+                *target = *thing;
+                body(self, target, &mut commands);
+            }
+        }
+
+        self.write_buffer = write_buffer;
+        std::mem::swap(&mut self.entries, &mut self.write_buffer);
+        self.appy_commands(commands);
+    }
+
+    pub(crate) fn readonly_pass(&self, mut body: impl FnMut(&Things, &Thing)) {
+        for thing in &self.entries {
+            if thing.id.is_valid() {
+                body(self, thing);
+            }
+        }
+    }
+
+    fn appy_commands(&mut self, commands: Commands) {
+        for ListMutation {
+            list,
+            parent,
+            child,
+        } in commands.list_mutations
+        {
+            self.add_to_list(list, parent, child);
+        }
+    }
+}
+
+pub(crate) struct Commands {
+    list_mutations: Vec<ListMutation>,
+}
+
+impl Commands {
+    fn new() -> Self {
+        Self {
+            list_mutations: vec![],
+        }
+    }
+    pub fn add_to_list(&mut self, list: List, parent: ThingId, child: ThingId) {
+        self.list_mutations.push(ListMutation {
+            list,
+            parent,
+            child,
+        });
+    }
+
+    pub fn remove_from_list(&mut self, list: List, child: ThingId) {
+        self.list_mutations.push(ListMutation {
+            list,
+            parent: ThingId::null(),
+            child,
+        });
+    }
+}
+
+#[derive(Clone, Copy)]
+struct ListMutation {
+    list: List,
+    parent: ThingId,
+    child: ThingId,
 }

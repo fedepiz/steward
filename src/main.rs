@@ -4,8 +4,6 @@ mod csv;
 mod terrain;
 mod things;
 
-use std::collections::HashMap;
-
 use crate::{assets::*, terrain::TerrainRenderer, things::*};
 use board::*;
 use macroquad::prelude as mq;
@@ -18,78 +16,6 @@ fn main() {
         ..Default::default()
     };
     macroquad::Window::from_config(config, amain());
-}
-
-fn setup(scratch: &Arena) -> Things {
-    let mut ctx = Things::new();
-
-    let csv = csv::parse_file(scratch, "data/init.csv");
-    let mut tag_map = HashMap::new();
-    for row in csv.rows() {
-        match row[0].as_str() {
-            "spawn_settlement" => {
-                let this = ctx.spawn();
-                tag_map.insert(row[1].as_str(), this.id());
-                this.set_name(row[2].as_str().to_string().leak());
-                this.set_sprite(row[3].as_str().to_string().leak());
-                this.body = Body {
-                    x: row[4].as_num(),
-                    y: row[5].as_num(),
-                    size: 4,
-                    layer: 0,
-                };
-                this.set_flag(Flag::IsLocation, true);
-                this.set_flag(Flag::IsSettlement, true);
-            }
-            "spawn_waypoint" => {
-                let this = ctx.spawn();
-                tag_map.insert(row[1].as_str(), this.id());
-                this.set_sprite("way_5");
-                this.body = Body {
-                    x: row[2].as_num(),
-                    y: row[3].as_num(),
-                    size: 2,
-                    layer: 0,
-                };
-                this.set_flag(Flag::IsLocation, true);
-            }
-            "spawn_person" => {
-                let this = ctx.spawn();
-                tag_map.insert(row[1].as_str(), this.id());
-                this.set_name(row[2].as_str().to_string().leak());
-                this.set_sprite(row[3].as_str().to_string().leak());
-                this.body = Body {
-                    size: 2,
-                    layer: 1,
-                    ..Default::default()
-                }
-            }
-            _ => {}
-        }
-    }
-
-    let find_id = |tag: &str| tag_map.get(tag).copied().unwrap_or_default();
-
-    for row in csv.rows() {
-        match row[0].as_str() {
-            "spawn_person" => {
-                let my_id = find_id(row[1].as_str());
-                let location = find_id(row[4].as_str());
-                ctx.add_to_list(List::AtLocation, location, my_id);
-                ctx[my_id].set_flag(Flag::Teleport, true);
-            }
-            "connect_path" => {
-                let this = ctx.spawn();
-                let [a, b] = [1, 2].map(|i| find_id(row[i].as_str()));
-                this.set_link(Link::A, a);
-                this.set_link(Link::B, b);
-                this.set_flag(Flag::IsPath, true);
-            }
-            _ => {}
-        }
-    }
-
-    ctx
 }
 
 async fn amain() {
@@ -105,7 +31,7 @@ async fn amain() {
     let mut things = setup(&frame_arena);
 
     let mut board = Board::new();
-    board.set_camera(mq::vec2(600., 500.), 8.);
+    board.set_camera(mq::vec2(600., 500.), 20.);
     let board_font = mq::load_ttf_font("assets/fonts/board.ttf").await.unwrap();
     let terrain_renderer = TerrainRenderer::new(&eternal_arena);
 
@@ -148,7 +74,10 @@ async fn amain() {
         let mut draw_data = DrawData::new(&frame_arena);
 
         // "Render" entities
-        things.pass_readonly(|_, this| {
+        things.readonly_pass(|_, this| {
+            if !this.flag(Flag::IsVisible) {
+                return;
+            }
             if this.body.size > 0 && !this.sprite().is_empty() {
                 let is_selected = this.id() == selected_id;
 
@@ -174,11 +103,13 @@ async fn amain() {
                     let name = this.name();
                     if !name.is_empty() {
                         let color = if is_selected { mq::YELLOW } else { mq::WHITE };
+                        let layer = this.body.layer.max(if is_selected { 3 } else { 0 });
                         draw_data.labels.push(Label {
                             text: name,
                             pos: xy + mq::vec2(size / 2., size),
                             font_size: 24,
                             color,
+                            layer,
                         });
                     }
                 }
@@ -214,32 +145,169 @@ async fn amain() {
     }
 }
 
+#[derive(Clone, Copy, Default)]
+struct V2 {
+    x: f32,
+    y: f32,
+}
+
+impl V2 {
+    fn new(x: f32, y: f32) -> Self {
+        Self { x, y }
+    }
+
+    fn magnitude(self) -> f32 {
+        (self.x.powi(2) + self.y.powi(2)).sqrt()
+    }
+}
+
+impl std::ops::Add for V2 {
+    type Output = V2;
+    fn add(self, rhs: Self) -> Self::Output {
+        Self::new(self.x + rhs.x, self.y + rhs.y)
+    }
+}
+
+impl std::ops::Sub for V2 {
+    type Output = V2;
+    fn sub(self, rhs: Self) -> Self::Output {
+        Self::new(self.x - rhs.x, self.y - rhs.y)
+    }
+}
+
+impl std::ops::Mul<f32> for V2 {
+    type Output = V2;
+
+    fn mul(self, rhs: f32) -> Self::Output {
+        V2::new(self.x * rhs, self.y * rhs)
+    }
+}
+
+fn setup(scratch: &Arena) -> Things {
+    let mut ctx = Things::new();
+
+    let csv = csv::parse_file(scratch, "data/init.csv");
+    for row in csv.rows() {
+        match row[0].as_str() {
+            "spawn_settlement" => {
+                let tag = row[1].as_str().to_string().leak();
+                let this = ctx.spawn_with_tag(tag);
+                this.set_name(row[2].as_str().to_string().leak());
+                this.set_sprite(row[3].as_str().to_string().leak());
+                this.body = Body {
+                    x: row[4].as_num(),
+                    y: row[5].as_num(),
+                    size: 4,
+                    layer: 0,
+                };
+                this.set_flag(Flag::IsLocation, true);
+                this.set_flag(Flag::IsSettlement, true);
+                this.set_flag(Flag::IsVisible, true);
+            }
+            "spawn_waypoint" => {
+                let tag = row[1].as_str().to_string().leak();
+                let this = ctx.spawn_with_tag(tag);
+                this.set_sprite("way_5");
+                this.body = Body {
+                    x: row[2].as_num(),
+                    y: row[3].as_num(),
+                    size: 2,
+                    layer: 0,
+                };
+                this.set_flag(Flag::IsLocation, true);
+                this.set_flag(Flag::IsVisible, true);
+            }
+            "spawn_person" => {
+                let tag = row[1].as_str().to_string().leak();
+                let this = ctx.spawn_with_tag(tag);
+                this.set_name(row[2].as_str().to_string().leak());
+                this.set_sprite(row[3].as_str().to_string().leak());
+                this.body = Body {
+                    size: 2,
+                    layer: 1,
+                    ..Default::default()
+                };
+                this.set_flag(Flag::IsPerson, true);
+                this.set_flag(Flag::IsVisible, true);
+            }
+            _ => {}
+        }
+    }
+
+    for row in csv.rows() {
+        match row[0].as_str() {
+            "spawn_person" => {
+                let my_id = ctx.lookup_tag(row[1].as_str());
+                let location = ctx.lookup_tag(row[4].as_str());
+                ctx.add_to_list(List::AtLocation, location, my_id);
+                ctx[my_id].set_flag(Flag::Teleport, true);
+            }
+            "connect_path" => {
+                let [a, b] = [1, 2].map(|i| ctx.lookup_tag(row[i].as_str()));
+                let this = ctx.spawn();
+                this.set_link(Link::A, a);
+                this.set_link(Link::B, b);
+                this.set_flag(Flag::IsPath, true);
+                this.set_flag(Flag::IsVisible, true);
+            }
+            _ => {}
+        }
+    }
+
+    ctx
+}
+
 fn tick(ctx: &mut Things) {
-    ctx.pass(
+    ctx.write_pass(
         |_, _| true,
-        |ctx, this| {
+        |ctx, this, commands| {
+            // Update body position for entities that are in a 'dependent' location
             if let Some(location) = this.parent(List::AtLocation).as_valid() {
+                const MOVEMENT_SPEED: f32 = 2.0;
                 let location = &ctx[location];
                 // Find my position around the target
-                let angle = {
+                let target = if this.flag(Flag::IsInside) {
+                    V2::new(location.body.x, location.body.y)
+                } else {
                     let idx = ctx
                         .iter_list(List::AtLocation, location.id())
                         .position(|x| this.id() == x)
                         .unwrap_or(0);
                     let len = location.list_len(List::AtLocation);
-                    std::f32::consts::TAU * (idx as f32 / len as f32)
+                    pos_around(location.body, idx, len)
                 };
 
-                let radius = location.body.size as f32 * 0.75;
+                // Caculate next immediate position
+                let next_pos = if this.flag(Flag::Teleport) {
+                    this.set_flag(Flag::Teleport, false);
+                    target
+                } else {
+                    let current_pos = V2::new(this.body.x, this.body.y);
+                    let dv = target - current_pos;
+                    if dv.magnitude() < 0.1 {
+                        target
+                    } else {
+                        current_pos + dv * mq::get_frame_time() * MOVEMENT_SPEED
+                    }
+                };
 
-                let cx = location.body.x + angle.cos() * radius;
-                let cy = location.body.y + angle.sin() * radius;
+                // Update body
+                this.body.x = next_pos.x;
+                this.body.y = next_pos.y;
 
-                if this.flag(Flag::Teleport) {
-                    this.body.x = cx;
-                    this.body.y = cy;
-                }
+                // Temporary: travel to a new place!
+                let new_location = ctx.lookup_tag("din_drust");
+                commands.add_to_list(List::AtLocation, new_location, this.id());
             }
         },
     );
+}
+
+fn pos_around(body: Body, idx: usize, len: usize) -> V2 {
+    // Find my position around the target
+    let angle = std::f32::consts::TAU * (idx as f32 / len as f32);
+    let radius = body.size as f32 * 0.75;
+    let cx = body.x + angle.cos() * radius;
+    let cy = body.y + angle.sin() * radius;
+    V2::new(cx, cy)
 }
