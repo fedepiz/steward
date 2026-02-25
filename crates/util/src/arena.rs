@@ -3,12 +3,29 @@ use bumpalo::*;
 pub struct Arena(Bump);
 
 impl Arena {
+    #[inline]
     pub fn new() -> Self {
         Self(Bump::new())
     }
 
+    #[inline]
     pub fn reset(&mut self) {
         self.0.reset();
+    }
+
+    #[inline]
+    pub fn new_vec<T>(&self) -> AVec<'_, T> {
+        AVec::new_in(&self.0)
+    }
+
+    #[inline]
+    pub fn new_vec_with_capacity<T>(&self, capacity: usize) -> AVec<'_, T> {
+        AVec::with_capacity_in(capacity, &self.0)
+    }
+
+    #[inline]
+    pub fn alloc_str(&self, src: &str) -> &str {
+        self.0.alloc_str(src)
     }
 }
 

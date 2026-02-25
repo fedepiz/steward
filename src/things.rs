@@ -30,47 +30,25 @@ impl ThingId {
     }
 }
 
-#[derive(Clone, Copy)]
-struct StringBuf([u8; 128]);
-
-impl Default for StringBuf {
-    fn default() -> Self {
-        Self([0; 128])
-    }
-}
-
-impl StringBuf {
-    fn as_str(&self) -> &str {
-        str::from_utf8(&self.0).unwrap()
-    }
-
-    fn set(&mut self, source: &str) {
-        self.0.fill(0);
-
-        let mut copy_len = source.len().min(self.0.len());
-        while !source.is_char_boundary(copy_len) {
-            copy_len -= 1;
-        }
-
-        self.0[..copy_len].copy_from_slice(&source.as_bytes()[..copy_len]);
-    }
-}
-
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug, EnumIter, EnumCount)]
 pub(crate) enum Flag {
+    IsLocation,
+    IsSettlement,
     IsPerson,
+    IsPath,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug, EnumIter, EnumCount)]
 pub(crate) enum Var {
     Dummy,
-    PosX,
-    PosY,
-    Size,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug, EnumIter, EnumCount)]
-pub(crate) enum Link {}
+pub(crate) enum Link {
+    // Generic A -> B links
+    A,
+    B,
+}
 
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug, EnumIter, EnumCount)]
 pub(crate) enum List {
@@ -95,11 +73,13 @@ const NUM_LISTS: usize = List::COUNT;
 pub(crate) struct Thing {
     id: ThingId,
     next_free: ThingId,
-    name_buf: StringBuf,
+    name: &'static str,
+    sprite: &'static str,
     flags: BitSet<NUM_FLAGS>,
     vars: [f32; NUM_VARS],
     links: [ThingId; NUM_LINKS],
     lists: [ListThingData; NUM_LISTS],
+    pub(crate) body: Body,
 }
 
 impl Thing {
@@ -109,13 +89,23 @@ impl Thing {
     }
 
     #[inline]
-    pub(crate) fn name(&self) -> &str {
-        self.name_buf.as_str()
+    pub(crate) fn name(&self) -> &'static str {
+        self.name
     }
 
     #[inline]
-    pub(crate) fn set_name(&mut self, name: &str) {
-        self.name_buf.set(name);
+    pub(crate) fn set_name(&mut self, name: &'static str) {
+        self.name = name;
+    }
+
+    #[inline]
+    pub(crate) fn sprite(&self) -> &'static str {
+        self.sprite
+    }
+
+    #[inline]
+    pub(crate) fn set_sprite(&mut self, sprite: &'static str) {
+        self.sprite = sprite;
     }
 
     #[inline]
@@ -159,6 +149,14 @@ impl Thing {
     }
 }
 
+#[derive(Default, Clone, Copy)]
+pub(crate) struct Body {
+    pub x: f32,
+    pub y: f32,
+    pub size: u8,
+    pub layer: u8,
+}
+
 pub(crate) const NUM_THINGS: usize = 32000;
 const LAST_IDX_THING: usize = NUM_THINGS - 1;
 
@@ -176,11 +174,11 @@ pub(crate) struct Things {
 }
 
 impl Things {
-    pub(crate) fn init(&mut self) {
-        self.entries.resize(NUM_THINGS, Thing::default());
-        self.write_buffer = self.entries.clone();
+    pub(crate) fn new() -> Self {
+        let mut entries = Vec::from_iter((0..NUM_THINGS).map(|_| Thing::default()));
+        let write_buffer = entries.clone();
         // Create a 'chain' of next_free pointing at each other, with the last pointing to "the null"
-        for (idx, thing) in self.entries.iter_mut().enumerate() {
+        for (idx, thing) in entries.iter_mut().enumerate() {
             let slot = if idx != LAST_IDX_THING { idx + 1 } else { 0 };
             // Set up my index
             thing.id.slot = idx as u32;
@@ -190,16 +188,23 @@ impl Things {
                 generation: 0,
             }
         }
+        let mut meta = MetaData::default();
         // First element in the free list has index 1
-        self.meta.free_list_head = ThingId {
+        meta.free_list_head = ThingId {
             slot: 1,
             generation: 0,
         };
         // Last has index last index
-        self.meta.free_list_tail = ThingId {
+        meta.free_list_tail = ThingId {
             slot: LAST_IDX_THING as u32,
             generation: 0,
         };
+
+        Self {
+            entries,
+            write_buffer,
+            meta,
+        }
     }
 
     pub(crate) fn spawn(&mut self) -> &mut Thing {
@@ -339,11 +344,15 @@ impl Things {
         }
     }
 
-    pub(crate) fn pass(&mut self, mut body: impl FnMut(&Things, &mut Thing)) {
+    pub(crate) fn pass(
+        &mut self,
+        mut filter: impl FnMut(&Things, &Thing) -> bool,
+        mut body: impl FnMut(&Things, &mut Thing),
+    ) {
         let mut write_buffer = std::mem::take(&mut self.write_buffer);
 
         for (thing, target) in self.entries.iter().zip(write_buffer.iter_mut()) {
-            if thing.id.is_valid() {
+            if thing.id.is_valid() && filter(self, thing) {
                 *target = *thing;
                 body(self, target);
             }
@@ -394,7 +403,7 @@ impl<'a> IntoIterator for &'a Things {
     }
 }
 
-struct ListChildrenIter<'a> {
+pub(crate) struct ListChildrenIter<'a> {
     things: &'a Things,
     list: List,
     next: ThingId,

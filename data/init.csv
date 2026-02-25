@@ -1,0 +1,22 @@
+spawn_settlement,caer_ligualid,"Caer Ligualid",celtic_town,598,510
+connect_path,caer_ligualid,way_caer_wenddoleu_west
+connect_path,caer_ligualid,way_caer_ligualid_north
+connect_path,caer_ligualid,way_llan_heledd_mid
+spawn_waypoint,way_caer_ligualid_north,601, 502
+connect_path,way_caer_ligualid_north,way_caer_wenddoleu_west
+spawn_settlement,din_drust,"Din Drust",celtic_castle,590,498
+connect_path,din_drust,way_din_drust_west
+spawn_waypoint,way_din_drust_west,579,499
+spawn_settlement,caer_wenddoleu,"Caer Wenddoleu",celtic_castle,624,507
+spawn_waypoint,way_caer_wenddoleu_west, 611, 507
+connect_path,caer_wenddoleu,way_caer_wenddoleu_west
+spawn_settlement,llan_heledd,"Llan Heledd",celtic_village,580, 520
+connect_path,llan_heledd,way_llan_heledd_mid
+spawn_waypoint,way_llan_heledd_mid, 592, 517
+spawn_settlement,anava,"Anava",celtic_village,574,504
+connect_path,way_caer_ligualid_north,din_drust
+connect_path,way_din_drust_west, anava
+
+spawn_person,test,"Callum",soldier,llan_heledd
+spawn_person,test2,"Einar",soldier,caer_ligualid
+spawn_person,test3,"Oswiu",soldier,caer_wenddoleu
