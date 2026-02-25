@@ -1,0 +1,28 @@
+[package]
+name = "steward"
+version = "0.1.0"
+edition = "2024"
+
+[profile.dev]
+opt-level = 2
+
+[workspace]
+members = ["crates/*"]
+
+[workspace.dependencies]
+macroquad = { version = "0.4.4" }
+default-boxed = { version = "*"}
+num_enum = { version = "*" }
+strum = { version = "*", features = ["derive"] }
+rayon = { version = "*" }
+
+util = { path = "crates/util" }
+
+[dependencies]
+default-boxed = { workspace = true }
+macroquad = { workspace = true }
+num_enum = { workspace = true }
+strum = { workspace = true }
+rayon = { workspace = true }
+
+util = { workspace = true }
