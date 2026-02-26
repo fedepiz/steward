@@ -1,15 +1,18 @@
 mod assets;
 mod board;
 mod csv;
+mod gui;
 mod terrain;
 mod things;
 
 use std::marker::PhantomData;
 
+use crate::gui::Gui;
 use crate::{assets::*, terrain::TerrainRenderer, things::*};
 use board::*;
 use macroquad::prelude as mq;
 use util::arena::Arena;
+use util::geom::*;
 
 fn main() {
     let config = mq::Conf {
@@ -41,13 +44,78 @@ async fn amain() {
     let sprite_atlas =
         load_texture_atlas(&eternal_arena, &frame_arena, "assets/atlas/out/pawns").await;
 
+    let mut gui = Gui::default();
+
     loop {
         frame_arena.reset();
         if mq::is_key_pressed(mq::KeyCode::Escape) {
             return;
         }
 
-        if mq::is_mouse_button_pressed(mq::MouseButton::Left) {
+        let gui_output = gui.frame(
+            &frame_arena,
+            gui::Input {
+                screen_size: V2::new(mq::screen_width(), mq::screen_height()),
+                mouse_pos: mq::mouse_position().into(),
+                mouse_down: mq::is_mouse_button_down(mq::MouseButton::Left),
+            },
+            |gui| {
+                const MARGIN: V2 = V2 { x: 5., y: 5. };
+                const BORDER: gui::RGBA = gui::RGBA {
+                    r: 0.5,
+                    g: 0.5,
+                    b: 0.5,
+                    a: 1.,
+                };
+                gui.widget(|gui| {
+                    gui.vertical_growing();
+                    gui.fill(gui::RGBA::RED);
+                    gui.stroke(BORDER, 4.);
+                    gui.pad(MARGIN);
+
+                    gui.widget(|gui| {
+                        gui.fingerprint(1);
+                        gui.pixel_size(V2::new(80., 40.));
+                        gui.margin(MARGIN);
+                        let color = if gui.interaction().pressed {
+                            BORDER
+                        } else if !gui.interaction().hovered {
+                            gui::RGBA::BLUE
+                        } else {
+                            gui::RGBA::GREEN
+                        };
+                        if gui.interaction().clicked {
+                            println!("A")
+                        }
+                        gui.fill(color);
+                    });
+
+                    gui.widget(|gui| {
+                        gui.fingerprint(2);
+                        gui.pixel_size(V2::new(80., 40.));
+                        gui.margin(MARGIN);
+                        let color = if gui.interaction().pressed {
+                            gui::RGBA {
+                                r: 0.5,
+                                g: 0.5,
+                                b: 0.5,
+                                a: 1.,
+                            }
+                        } else if !gui.interaction().hovered {
+                            gui::RGBA::BLUE
+                        } else {
+                            gui::RGBA::GREEN
+                        };
+                        if gui.interaction().clicked {
+                            println!("B")
+                        }
+                        gui.fill(color);
+                    });
+                });
+            },
+        );
+
+        if !gui_output.is_mouse_over_ui && mq::is_mouse_button_pressed(mq::MouseButton::Left) {
             selected_id = board.hovered_id();
         }
 
@@ -73,72 +141,13 @@ async fn amain() {
         }
 
         let mut draw_data = DrawData::new(&frame_arena);
-
-        // "Render" entities
-        sim.things.readonly_pass(|ctx, this| {
-            if !this.flag(Flag::IsVisible) {
-                return;
-            }
-            if this.body.size > 0 && !this.sprite().is_empty() {
-                let is_selected = this.id() == selected_id;
-
-                let size = this.body.size as f32;
-                let xy = mq::Vec2::new(this.body.x, this.body.y) - size / 2.;
-                let bounds = mq::Rect::new(xy.x, xy.y, size, size);
-
-                let sprite = Sprite {
-                    image: this.sprite(),
-                    bounds,
-                    layer: this.body.layer,
-                    border_highlight: if is_selected {
-                        mq::YELLOW.with_alpha(0.9)
-                    } else {
-                        mq::Color::new(0., 0., 0., 0.)
-                    },
-                    pulse_intensity: if is_selected { 1.0 } else { 0.0 },
-                };
-                draw_data.sprites.push(sprite);
-
-                let show_name = is_selected || this.flag(Flag::IsLocation);
-                if show_name {
-                    let name = this.name();
-                    if !name.is_empty() {
-                        let color = if is_selected { mq::YELLOW } else { mq::WHITE };
-                        let layer = this.body.layer.max(if is_selected { 3 } else { 0 });
-                        draw_data.labels.push(Label {
-                            text: name,
-                            pos: xy + mq::vec2(size / 2., size),
-                            font_size: 24,
-                            color,
-                            layer,
-                        });
-                    }
-                }
-
-                draw_data.clickboxes.push(Clickbox {
-                    id: this.id(),
-                    bounds,
-                });
-            }
-            if this.flag(Flag::IsPath) {
-                let a = this.link(self::Link::A);
-                let b = this.link(self::Link::B);
-                if a.is_valid() && b.is_valid() {
-                    let a_pos = mq::vec2(ctx[a].body.x, ctx[a].body.y);
-                    let b_pos = mq::vec2(ctx[b].body.x, ctx[b].body.y);
-                    draw_data.paths.push(Path {
-                        start: a_pos,
-                        end: b_pos,
-                    });
-                }
-            }
-        });
-
+        render_things(&mut draw_data, &sim.things, selected_id);
         draw_data.prepare();
 
         // Actuall draw to screen
         mq::clear_background(mq::LIGHTGRAY);
         board.draw(&draw_data, &terrain_renderer, &sprite_atlas, &board_font);
+        draw_gui(gui_output.draw_list);
 
         tick(&mut sim, &frame_arena);
 
@@ -146,42 +155,94 @@ async fn amain() {
     }
 }
 
-#[derive(Clone, Copy, Default)]
-struct V2 {
-    x: f32,
-    y: f32,
-}
+fn draw_gui(draw_list: &[gui::Draw]) {
+    for item in draw_list {
+        if item.fill.a != 0. {
+            let color = mq::Color::new(item.fill.r, item.fill.g, item.fill.b, item.fill.a);
+            mq::draw_rectangle(
+                item.bounds.x,
+                item.bounds.y,
+                item.bounds.w,
+                item.bounds.h,
+                color,
+            );
+        }
 
-impl V2 {
-    fn new(x: f32, y: f32) -> Self {
-        Self { x, y }
-    }
-
-    fn magnitude(self) -> f32 {
-        (self.x.powi(2) + self.y.powi(2)).sqrt()
-    }
-}
-
-impl std::ops::Add for V2 {
-    type Output = V2;
-    fn add(self, rhs: Self) -> Self::Output {
-        Self::new(self.x + rhs.x, self.y + rhs.y)
-    }
-}
-
-impl std::ops::Sub for V2 {
-    type Output = V2;
-    fn sub(self, rhs: Self) -> Self::Output {
-        Self::new(self.x - rhs.x, self.y - rhs.y)
+        let (color, thickness) = item.stroke;
+        if color.a != 0. && thickness > 0. {
+            let color = mq::Color::new(color.r, color.g, color.b, color.a);
+            mq::draw_rectangle_lines(
+                item.bounds.x,
+                item.bounds.y,
+                item.bounds.w,
+                item.bounds.h,
+                thickness,
+                color,
+            );
+        }
     }
 }
 
-impl std::ops::Mul<f32> for V2 {
-    type Output = V2;
+fn render_things(draw_data: &mut DrawData, things: &Things, selected_id: ThingId) {
+    // "Render" entities
+    things.readonly_pass(|ctx, this| {
+        if !this.flag(Flag::IsVisible) {
+            return;
+        }
+        if this.body.size > 0 && !this.sprite().is_empty() {
+            let is_selected = this.id() == selected_id;
 
-    fn mul(self, rhs: f32) -> Self::Output {
-        V2::new(self.x * rhs, self.y * rhs)
-    }
+            let size = this.body.size as f32;
+            let xy = mq::Vec2::new(this.body.x, this.body.y) - size / 2.;
+            let bounds = mq::Rect::new(xy.x, xy.y, size, size);
+
+            let sprite = Sprite {
+                image: this.sprite(),
+                bounds,
+                layer: this.body.layer,
+                border_highlight: if is_selected {
+                    mq::YELLOW.with_alpha(0.9)
+                } else {
+                    mq::Color::new(0., 0., 0., 0.)
+                },
+                pulse_intensity: if is_selected { 1.0 } else { 0.0 },
+            };
+            draw_data.sprites.push(sprite);
+
+            let show_name = is_selected || this.flag(Flag::IsLocation);
+            if show_name {
+                let name = this.name();
+                if !name.is_empty() {
+                    let color = if is_selected { mq::YELLOW } else { mq::WHITE };
+                    let layer = this.body.layer.max(if is_selected { 3 } else { 0 });
+                    draw_data.labels.push(Label {
+                        text: name,
+                        pos: xy + mq::vec2(size / 2., size),
+                        font_size: 24,
+                        color,
+                        layer,
+                    });
+                }
+            }
+
+            draw_data.clickboxes.push(Clickbox {
+                id: this.id(),
+                bounds,
+            });
+        }
+        if this.flag(Flag::IsPath) {
+            let a = this.link(self::Link::A);
+            let b = this.link(self::Link::B);
+            if a.is_valid() && b.is_valid() {
+                let a_pos = mq::vec2(ctx[a].body.x, ctx[a].body.y);
+                let b_pos = mq::vec2(ctx[b].body.x, ctx[b].body.y);
+                draw_data.paths.push(Path {
+                    start: a_pos,
+                    end: b_pos,
+                });
+            }
+        }
+    });
 }
 
 struct Simulation {
@@ -518,11 +579,14 @@ fn tick(sim: &mut Simulation, scratch: &Arena) {
                             this.set_var(Var::MovementTime, 0.);
                             commands.add_to_list(List::AtLocation, next_step, this.id());
 
-                            let message =
-                                commands.spawn_and_append_to_list(List::Messages, this.id());
-                            message.set_name("#0 has arrived at #1");
-                            message.set_link(Link::A, this.id());
-                            message.set_link(Link::B, destination);
+                            // If we have arrived at the destination
+                            if next_step == destination {
+                                let message =
+                                    commands.spawn_and_append_to_list(List::Messages, this.id());
+                                message.set_name("#0 has arrived at #1");
+                                message.set_link(Link::A, this.id());
+                                message.set_link(Link::B, next_step);
+                            }
                         } else {
                             this.set_var(Var::MovementTime, mov_time + 1.);
                         }

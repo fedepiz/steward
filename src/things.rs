@@ -279,6 +279,14 @@ impl Things {
             self.remove_from_list(list, id);
         }
 
+        // Check for tag
+        {
+            let tag = self.entries[id.slot as usize].tag;
+            if !tag.is_empty() {
+                self.untag(tag);
+            }
+        }
+
         let thing = &mut self.entries[id.slot as usize];
         // Only untagged things can be removed
         assert!(thing.tag.is_empty());
@@ -317,7 +325,8 @@ impl Things {
         }
     }
 
-    pub(crate) fn lookup_tag(&self, tag: &str) -> ThingId {
+    #[inline]
+    fn interal_lookup_tag(&self, tag: &str) -> (usize, ThingId, ThingId) {
         let hash = {
             let mut hasher = std::hash::DefaultHasher::new();
             tag.hash(&mut hasher);
@@ -325,15 +334,37 @@ impl Things {
         } as usize;
         let bucket_idx = hash % self.tag_hash_buckets.len();
 
+        let mut precursor = ThingId::null();
         let mut cursor = self.tag_hash_buckets[bucket_idx];
         while cursor.is_valid() {
             let thing = &self[cursor];
             if thing.tag == tag {
-                return cursor;
+                return (bucket_idx, precursor, cursor);
             }
+            precursor = cursor;
             cursor = thing.tag_chain_next;
         }
-        ThingId::default()
+        Default::default()
+    }
+
+    pub(crate) fn lookup_tag(&self, tag: &str) -> ThingId {
+        self.interal_lookup_tag(tag).2
+    }
+
+    pub(crate) fn untag(&mut self, tag: &str) {
+        if tag.is_empty() {
+            return;
+        }
+        let (bucket_idx, precursor, cursor) = self.interal_lookup_tag(tag);
+        // Reset my tag and extract my next reference
+        let my_next = std::mem::take(&mut self[cursor].tag_chain_next);
+        if precursor.is_null() {
+            // This was the head of a tag chain, we update the bin
+            self.tag_hash_buckets[bucket_idx] = my_next
+        } else {
+            // This is not the end of the tag chain: set the precusor's next to my next
+            self[precursor].tag_chain_next = my_next;
+        }
     }
 
     pub(crate) fn iter_list(&self, list: List, id: ThingId) -> ListChildrenIter<'_> {

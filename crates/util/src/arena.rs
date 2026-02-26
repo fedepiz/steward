@@ -29,7 +29,22 @@ impl Arena {
     }
 
     #[inline]
+    pub fn alloc_default<T: Default>(&self) -> &mut T {
+        self.0.alloc(T::default())
+    }
+
+    #[inline]
+    pub fn alloc_slice_copy<T: Copy>(&self, src: &[T]) -> &mut [T] {
+        self.0.alloc_slice_copy(src)
+    }
+
+    #[inline]
     pub fn alloc_str(&self, src: &str) -> &str {
+        self.0.alloc_str(src)
+    }
+
+    #[inline]
+    pub fn alloc_str_mut(&self, src: &str) -> &mut str {
         self.0.alloc_str(src)
     }
 }
