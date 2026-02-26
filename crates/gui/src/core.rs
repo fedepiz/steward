@@ -12,8 +12,8 @@ type Fingerprint = u64;
 
 #[derive(Default)]
 pub struct Gui {
-    active_cache: HashMap<Fingerprint, Interaction>,
-    passive_cache: HashMap<Fingerprint, Interaction>,
+    write_cache: HashMap<Fingerprint, Interaction>,
+    read_cache: HashMap<Fingerprint, Interaction>,
 }
 
 #[derive(Clone, Copy)]
@@ -31,25 +31,25 @@ pub struct Output<'a> {
 
 impl Gui {
     pub fn frame<'a>(
-        &mut self,
+        &'a mut self,
         arena: &'a Arena,
         input: Input,
-        build: impl for<'b> FnOnce(&mut Frame<'a, 'b>),
+        build: impl for<'b> FnOnce(&'b mut Frame<'a>),
     ) -> Output<'a> {
+        std::mem::swap(&mut self.write_cache, &mut self.read_cache);
+        self.write_cache.clear();
+
         let (widgets, draw_list) = {
-            let mut frame = Frame::new(arena, &self.active_cache);
+            let mut frame = Frame::new(&arena, &self.read_cache);
             build(&mut frame);
             frame.draw(input.screen_size)
         };
-
-        // Update widget cache status
-        self.passive_cache.clear();
 
         // Going backwards over widget
         let mut is_mouse_over_ui = false;
         for widget in widgets.iter().rev() {
             let prev_interaction = self
-                .active_cache
+                .read_cache
                 .get(&widget.fingerprint)
                 .copied()
                 .unwrap_or_default();
@@ -65,12 +65,9 @@ impl Gui {
             }
 
             if widget.fingerprint != 0 {
-                self.passive_cache.insert(widget.fingerprint, interaction);
+                self.write_cache.insert(widget.fingerprint, interaction);
             }
         }
-
-        // Flip active and passive cache
-        std::mem::swap(&mut self.active_cache, &mut self.passive_cache);
 
         Output {
             draw_list,
@@ -143,16 +140,16 @@ struct ActiveWidget {
     children_begin_offset: usize,
 }
 
-pub struct Frame<'a, 'b> {
-    arena: &'a Arena,
-    cache: &'b HashMap<Fingerprint, Interaction>,
+pub struct Frame<'a> {
+    pub(crate) arena: &'a Arena,
+    cache: &'a HashMap<Fingerprint, Interaction>,
     widgets: AVec<'a, Widget<'a>>,
     children_stack: AVec<'a, WidgetId>,
     active_stack: AVec<'a, ActiveWidget>,
 }
 
-impl<'a, 'b> Frame<'a, 'b> {
-    fn new(arena: &'a Arena, cache: &'b HashMap<Fingerprint, Interaction>) -> Self {
+impl<'a> Frame<'a> {
+    fn new(arena: &'a Arena, cache: &'a HashMap<Fingerprint, Interaction>) -> Self {
         let mut widgets = arena.new_vec_with_capacity(100);
         widgets.push(Widget::default());
         Self {
@@ -164,7 +161,7 @@ impl<'a, 'b> Frame<'a, 'b> {
         }
     }
 
-    pub fn plus<'c>(&'c mut self) -> GuiPlus<'a, 'b, 'c> {
+    pub fn plus<'c>(&'c mut self) -> GuiPlus<'a, 'c> {
         GuiPlus::wrap(self)
     }
 
@@ -339,10 +336,8 @@ impl<'a, 'b> Frame<'a, 'b> {
         let mut positions = vec![V2::default(); self.widgets.len()];
         for widget in &self.widgets {
             // calculate screen offset
-            positions[widget.id].x +=
-                widget.screen_offset.x * (screen_size.x - widget.bounds.w) / 2.;
-            positions[widget.id].y +=
-                widget.screen_offset.y * (screen_size.y - widget.bounds.h) / 2.;
+            positions[widget.id].x += widget.screen_offset.x * (screen_size.x - widget.bounds.w);
+            positions[widget.id].y += widget.screen_offset.y * (screen_size.y - widget.bounds.h);
 
             // Place children
             let unpadded_size = widget.bounds.size() - widget.padding * 2.;
@@ -443,9 +438,12 @@ impl<'a, 'b> Frame<'a, 'b> {
         widget.logical_size[1].kind = LogicalSizeKind::ChildMax;
     }
 
-    pub fn center_on_growth_axis(&mut self) {
+    pub fn center_on_growth_axis(&mut self, enabled: bool) {
         let widget = self.current_widget_mut();
-        widget.center_children = [widget.growth_axes.x == 0., widget.growth_axes.y == 0.];
+        widget.center_children = [
+            enabled && widget.growth_axes.x == 0.,
+            enabled && widget.growth_axes.y == 0.,
+        ];
     }
 
     pub fn fingerprint(&mut self, fingerprint: u64) {
@@ -459,6 +457,10 @@ impl<'a, 'b> Frame<'a, 'b> {
             widget.text.string.hash(&mut hasher);
             hasher.finish()
         };
+    }
+
+    pub fn screen_pos(&mut self, offset: V2) {
+        self.current_widget_mut().screen_offset = offset;
     }
 }
 

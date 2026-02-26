@@ -2,8 +2,6 @@ use macroquad::prelude as mq;
 use std::collections::HashMap;
 use util::arena::Arena;
 
-use crate::csv;
-
 pub(crate) struct TextureAtlas<'a> {
     texture: mq::Texture2D,
     rects: HashMap<&'a str, mq::Rect>,

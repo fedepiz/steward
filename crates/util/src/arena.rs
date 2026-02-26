@@ -47,6 +47,10 @@ impl Arena {
     pub fn alloc_str_mut(&self, src: &str) -> &mut str {
         self.0.alloc_str(src)
     }
+
+    pub fn fmt(&self, args: std::fmt::Arguments) -> &str {
+        bumpalo::format!(in &self.0, "{}", args).into_bump_str()
+    }
 }
 
 pub type AString<'a> = bumpalo::collections::String<'a>;

@@ -1,5 +1,5 @@
 use crate::core::*;
-use util::geom::*;
+use util::{arena::Arena, geom::*};
 
 pub mod style {
     use super::*;
@@ -16,25 +16,29 @@ pub mod style {
 
 use self::style::*;
 
-pub struct GuiPlus<'a, 'b, 'c>(&'c mut Frame<'a, 'b>);
+pub struct GuiPlus<'a, 'c>(&'c mut Frame<'a>);
 
-impl<'a, 'b, 'c> GuiPlus<'a, 'b, 'c> {
-    pub fn wrap(frame: &'c mut Frame<'a, 'b>) -> Self {
+impl<'a, 'c> GuiPlus<'a, 'c> {
+    pub fn wrap(frame: &'c mut Frame<'a>) -> Self {
         Self(frame)
     }
 
-    pub fn inner(&mut self) -> &mut Frame<'a, 'b> {
+    pub fn inner(&mut self) -> &mut Frame<'a> {
         self.0
+    }
+
+    pub fn arena(&self) -> &'a Arena {
+        self.0.arena
     }
 
     pub fn panel(&mut self, body: impl FnOnce(GuiPlus)) {
         self.0.widget(|gui| {
             gui.vertical_growing();
-            gui.center_on_growth_axis();
+            gui.center_on_growth_axis(true);
             gui.fill(FILL);
             gui.stroke(BORDER, 4.);
             gui.pad(MARGIN * 4.);
-            body(GuiPlus(gui));
+            body(GuiPlus::wrap(gui));
         });
     }
 
@@ -70,6 +74,18 @@ impl<'a, 'b, 'c> GuiPlus<'a, 'b, 'c> {
             gui.stroke(BORDER, 4.);
             gui.shadow(SHADOW);
             gui.interaction().clicked
+        })
+    }
+
+    pub fn label(&mut self, text: &'a str) {
+        self.label_sized(text, 2., 1.)
+    }
+
+    pub fn label_sized(&mut self, text: &'a str, w: f32, h: f32) {
+        self.0.widget(|gui| {
+            gui.pixel_size(V2::new(ELEM_W * w, ELEM_H * h));
+            gui.margin(MARGIN);
+            gui.text(text, 22, RGBA::BLACK, [true, true]);
         })
     }
 }

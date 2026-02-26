@@ -1,12 +1,10 @@
 mod assets;
 mod board;
-mod csv;
-mod terrain;
 mod things;
 
 use std::marker::PhantomData;
 
-use crate::{assets::*, terrain::TerrainRenderer, things::*};
+use crate::{assets::*, things::*};
 use board::*;
 use gui::Gui;
 use macroquad::prelude as mq;
@@ -33,10 +31,9 @@ async fn amain() {
 
     let mut sim = setup(&frame_arena);
 
-    let mut board = Board::new();
+    let mut board = Board::new(&frame_arena);
     board.set_camera(mq::vec2(600., 500.), 20.);
     let font = mq::load_ttf_font("assets/fonts/board.ttf").await.unwrap();
-    let terrain_renderer = TerrainRenderer::new(&eternal_arena);
 
     let mut selected_id = ThingId::default();
 
@@ -52,7 +49,7 @@ async fn amain() {
             return;
         }
 
-        let gui_output = build_ui::root(&mut gui, &frame_arena);
+        let gui_output = build_ui::root(&mut gui, &frame_arena, &sim.things, selected_id);
         if !gui_output.is_mouse_over_ui && mq::is_mouse_button_pressed(mq::MouseButton::Left) {
             selected_id = board.hovered_id();
         }
@@ -84,7 +81,7 @@ async fn amain() {
 
         // Actuall draw to screen
         mq::clear_background(mq::LIGHTGRAY);
-        board.draw(&draw_data, &terrain_renderer, &sprite_atlas, &font);
+        board.draw(&draw_data, &sprite_atlas, &font);
         gui_renderer.draw(gui_output.draw_list, &font);
 
         tick(&mut sim, &frame_arena);
@@ -592,7 +589,14 @@ mod build_ui {
     use macroquad::prelude as mq;
     use util::{arena::Arena, geom::*};
 
-    pub(super) fn root<'a>(gui: &mut Gui, arena: &'a Arena) -> Output<'a> {
+    use crate::things::*;
+
+    pub(super) fn root<'a>(
+        gui: &'a mut Gui,
+        arena: &'a Arena,
+        things: &Things,
+        selected_id: ThingId,
+    ) -> Output<'a> {
         gui.frame(
             arena,
             Input {
@@ -602,7 +606,9 @@ mod build_ui {
                 mouse_pressed: mq::is_mouse_button_pressed(mq::MouseButton::Left),
             },
             |gui| {
-                gui.plus().panel(|mut gui| {
+                let mut gui = gui.plus();
+
+                gui.panel(|mut gui| {
                     gui.heading("Test Panel", 4.);
 
                     if gui.button("Hello") {
@@ -616,7 +622,18 @@ mod build_ui {
                     if gui.button_sized("X##hello", 1., 1.) {
                         println!("X")
                     }
-                })
+                });
+
+                if !selected_id.is_null() {
+                    let this = &things[selected_id];
+                    gui.panel(|mut gui| {
+                        gui.inner().center_on_growth_axis(false);
+                        gui.inner().screen_pos(V2::new(0., 0.5));
+                        gui.heading("Selected Entity", 6.);
+
+                        gui.label(gui.arena().fmt(format_args!("Name: {}", this.name())));
+                    });
+                }
             },
         )
     }
