@@ -16,6 +16,7 @@ pathfinding = { version = "*" }
 strum = { version = "*", features = ["derive"] }
 rayon = { version = "*" }
 
+csv = { path = "crates/csv"}
 gui = { path = "crates/gui" }
 util = { path = "crates/util" }
 
@@ -26,5 +27,6 @@ pathfinding = { workspace = true }
 strum = { workspace = true }
 rayon = { workspace = true }
 
+csv = { workspace = true }
 gui = { workspace = true }
 util = { workspace = true }
