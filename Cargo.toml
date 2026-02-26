@@ -16,6 +16,7 @@ pathfinding = { version = "*" }
 strum = { version = "*", features = ["derive"] }
 rayon = { version = "*" }
 
+gui = { path = "crates/gui" }
 util = { path = "crates/util" }
 
 [dependencies]
@@ -25,4 +26,5 @@ pathfinding = { workspace = true }
 strum = { workspace = true }
 rayon = { workspace = true }
 
+gui = { workspace = true }
 util = { workspace = true }

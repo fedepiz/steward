@@ -1,15 +1,14 @@
 mod assets;
 mod board;
 mod csv;
-mod gui;
 mod terrain;
 mod things;
 
 use std::marker::PhantomData;
 
-use crate::gui::Gui;
 use crate::{assets::*, terrain::TerrainRenderer, things::*};
 use board::*;
+use gui::Gui;
 use macroquad::prelude as mq;
 use util::arena::Arena;
 use util::geom::*;
@@ -45,6 +44,7 @@ async fn amain() {
         load_texture_atlas(&eternal_arena, &frame_arena, "assets/atlas/out/pawns").await;
 
     let mut gui = Gui::default();
+    let mut gui_renderer = board::GuiRenderer::new();
 
     loop {
         frame_arena.reset();
@@ -52,127 +52,7 @@ async fn amain() {
             return;
         }
 
-        let gui_output = gui.frame(
-            &frame_arena,
-            gui::Input {
-                screen_size: V2::new(mq::screen_width(), mq::screen_height()),
-                mouse_pos: mq::mouse_position().into(),
-                mouse_down: mq::is_mouse_button_down(mq::MouseButton::Left),
-                mouse_pressed: mq::is_mouse_button_pressed(mq::MouseButton::Left),
-            },
-            |gui| {
-                const MARGIN: V2 = V2 { x: 5., y: 5. };
-                const BORDER: gui::RGBA = gui::RGBA {
-                    r: 0.8,
-                    g: 0.5,
-                    b: 0.5,
-                    a: 1.,
-                };
-                gui.widget(|gui| {
-                    gui.vertical_growing();
-                    gui.center_on_growth_axis();
-                    gui.fill(gui::RGBA::RED);
-                    gui.stroke(BORDER, 4.);
-                    gui.pad(MARGIN);
-
-                    gui.widget(|gui| {
-                        gui.fingerprint(1);
-                        gui.pixel_size(V2::new(80., 40.));
-                        gui.margin(MARGIN);
-
-                        gui.text("Hello", 16, gui::RGBA::WHITE, [true, true]);
-                        gui.fingerprint_from_text();
-
-                        let color = if gui.interaction().down {
-                            BORDER
-                        } else if !gui.interaction().hovered {
-                            gui::RGBA::BLUE
-                        } else {
-                            gui::RGBA::GREEN
-                        };
-
-                        if gui.interaction().clicked {
-                            println!("A")
-                        }
-
-                        gui.fill(color);
-                        gui.stroke(BORDER, 2.);
-                    });
-
-                    gui.widget(|gui| {
-                        gui.pixel_size(V2::new(80., 40.));
-                        gui.margin(MARGIN);
-
-                        gui.text("Goodbye", 16, gui::RGBA::WHITE, [true, true]);
-                        gui.fingerprint_from_text();
-
-                        let color = if gui.interaction().down {
-                            gui::RGBA {
-                                r: 0.5,
-                                g: 0.5,
-                                b: 0.5,
-                                a: 1.,
-                            }
-                        } else if !gui.interaction().hovered {
-                            gui::RGBA::BLUE
-                        } else {
-                            gui::RGBA::GREEN
-                        };
-
-                        if gui.interaction().clicked {
-                            println!("B")
-                        }
-
-                        gui.fill(color);
-                        gui.stroke(BORDER, 4.);
-                    });
-
-                    gui.widget(|gui| {
-                        gui.horizontal_growing();
-                        gui.fill(gui::RGBA::WHITE);
-                        gui.pad(MARGIN);
-                        gui.margin(MARGIN);
-
-                        gui.widget(|gui| {
-                            gui.pixel_size(V2::new(40., 40.));
-                            gui.fill(gui::RGBA::BLACK);
-                            gui.margin(V2::new(2., 2.));
-                        });
-
-                        gui.widget(|gui| {
-                            gui.pixel_size(V2::new(40., 40.));
-                            gui.fill(gui::RGBA::BLACK);
-                            gui.margin(V2::new(2., 2.));
-                        });
-                    });
-
-                    gui.widget(|gui| {
-                        gui.fill(gui::RGBA::WHITE);
-                        gui.horizontal_growing();
-                        gui.pixel_size(V2::new(100., 40.));
-                        gui.pad(MARGIN);
-                        gui.margin(MARGIN);
-                        gui.center_on_growth_axis();
-
-                        gui.widget(|gui| {
-                            gui.fill(gui::RGBA::GREEN);
-                            gui.pixel_size(V2::new(40., 20.));
-                            gui.grow_to_fill(true, false);
-                        });
-                        gui.widget(|gui| {
-                            gui.fill(gui::RGBA::RED);
-                            gui.pixel_size(V2::splat(20.));
-                        });
-                        gui.widget(|gui| {
-                            gui.fill(gui::RGBA::BLUE);
-                            gui.pixel_size(V2::new(20., 20.));
-                            gui.grow_to_fill(true, false);
-                        });
-                    });
-                });
-            },
-        );
-
+        let gui_output = build_ui::root(&mut gui, &frame_arena);
         if !gui_output.is_mouse_over_ui && mq::is_mouse_button_pressed(mq::MouseButton::Left) {
             selected_id = board.hovered_id();
         }
@@ -205,60 +85,11 @@ async fn amain() {
         // Actuall draw to screen
         mq::clear_background(mq::LIGHTGRAY);
         board.draw(&draw_data, &terrain_renderer, &sprite_atlas, &font);
-        draw_gui(gui_output.draw_list, &font);
+        gui_renderer.draw(gui_output.draw_list, &font);
 
         tick(&mut sim, &frame_arena);
 
         mq::next_frame().await;
-    }
-}
-
-fn draw_gui(draw_list: &[gui::Draw], font: &mq::Font) {
-    let mq_color = |x: gui::RGBA| mq::Color::new(x.r, x.g, x.b, x.a);
-    for item in draw_list {
-        let bounds = item.bounds;
-        if item.fill.a != 0. {
-            mq::draw_rectangle(bounds.x, bounds.y, bounds.w, bounds.h, mq_color(item.fill));
-        }
-
-        let text = &item.text;
-        if !text.string.is_empty() {
-            let measure = mq::measure_text(text.string, Some(font), text.size, 1.);
-            let aling_x = if text.centering[0] {
-                ((item.bounds.w - measure.width) / 2.).max(0.)
-            } else {
-                0.
-            };
-            let aling_y = if text.centering[0] {
-                ((item.bounds.h - measure.height) / 2.).max(0.)
-            } else {
-                0.
-            };
-
-            mq::draw_text_ex(
-                text.string,
-                bounds.x + aling_x,
-                bounds.y + aling_y + measure.offset_y,
-                mq::TextParams {
-                    font: Some(font),
-                    font_size: text.size,
-                    color: mq_color(text.color),
-                    ..Default::default()
-                },
-            );
-        }
-
-        let (color, thickness) = item.stroke;
-        if color.a != 0. && thickness > 0. {
-            mq::draw_rectangle_lines(
-                bounds.x,
-                bounds.y,
-                bounds.w,
-                bounds.h,
-                thickness,
-                mq_color(color),
-            );
-        }
     }
 }
 
@@ -754,4 +585,39 @@ fn render_template_string<'a>(arena: &'a Arena, template: &str, params: &[&str])
     }
 
     buffer.into_bump_str()
+}
+
+mod build_ui {
+    use gui::*;
+    use macroquad::prelude as mq;
+    use util::{arena::Arena, geom::*};
+
+    pub(super) fn root<'a>(gui: &mut Gui, arena: &'a Arena) -> Output<'a> {
+        gui.frame(
+            arena,
+            Input {
+                screen_size: V2::new(mq::screen_width(), mq::screen_height()),
+                mouse_pos: mq::mouse_position().into(),
+                mouse_down: mq::is_mouse_button_down(mq::MouseButton::Left),
+                mouse_pressed: mq::is_mouse_button_pressed(mq::MouseButton::Left),
+            },
+            |gui| {
+                gui.plus().panel(|mut gui| {
+                    gui.heading("Test Panel", 4.);
+
+                    if gui.button("Hello") {
+                        println!("A");
+                    }
+
+                    if gui.button("Goodbye") {
+                        println!("B");
+                    }
+
+                    if gui.button_sized("X", 1., 1.) {
+                        println!("X")
+                    }
+                })
+            },
+        )
+    }
 }

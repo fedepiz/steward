@@ -6,6 +6,8 @@ use util::{
     geom::*,
 };
 
+use crate::GuiPlus;
+
 type Fingerprint = u64;
 
 #[derive(Default)]
@@ -124,13 +126,15 @@ struct Widget<'a> {
     padding: V2,
     screen_offset: V2,
     growth_axes: V2,
+    children: &'a [WidgetId],
     center_children: [bool; 2],
     grow_to_fill: [bool; 2],
     bounds: Rect,
     text: Text<'a>,
     fill: RGBA,
     stroke: (RGBA, f32),
-    children: &'a [WidgetId],
+    shadow: f32,
+    pulse: f32,
 }
 
 #[derive(Default, Clone, Copy)]
@@ -160,10 +164,15 @@ impl<'a, 'b> Frame<'a, 'b> {
         }
     }
 
-    pub fn widget(&mut self, body: impl FnOnce(&mut Self)) {
+    pub fn plus<'c>(&'c mut self) -> GuiPlus<'a, 'b, 'c> {
+        GuiPlus::wrap(self)
+    }
+
+    pub fn widget<R>(&mut self, body: impl FnOnce(&mut Self) -> R) -> R {
         self.start_widget();
-        body(self);
+        let r = body(self);
         self.end_widget();
+        r
     }
 
     fn start_widget(&mut self) {
@@ -240,6 +249,8 @@ impl<'a, 'b> Frame<'a, 'b> {
                     fill: widget.fill,
                     stroke: widget.stroke,
                     text: widget.text,
+                    shadow: widget.shadow,
+                    pulse: widget.pulse,
                 });
             }
         }
@@ -374,6 +385,14 @@ impl<'a, 'b> Frame<'a, 'b> {
         self.current_widget_mut().stroke = (color, thickness);
     }
 
+    pub fn shadow(&mut self, value: f32) {
+        self.current_widget_mut().shadow = value;
+    }
+
+    pub fn pulse(&mut self, value: f32) {
+        self.current_widget_mut().pulse = value;
+    }
+
     pub fn text(&mut self, string: &'a str, size: u16, color: RGBA, centering: [bool; 2]) {
         self.current_widget_mut().text = Text {
             string,
@@ -465,4 +484,6 @@ pub struct Draw<'a> {
     pub fill: RGBA,
     pub stroke: (RGBA, f32),
     pub text: Text<'a>,
+    pub shadow: f32,
+    pub pulse: f32,
 }

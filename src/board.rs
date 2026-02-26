@@ -1,4 +1,5 @@
 use crate::{assets::TextureAtlas, terrain::TerrainRenderer, things::ThingId};
+use gui;
 use macroquad::prelude as mq;
 use util::arena::{AVec, Arena};
 
@@ -298,4 +299,128 @@ fn load_png_texture(path: &str) -> mq::Texture2D {
     let image = mq::Image::from_file_with_format(&bytes, Some(mq::ImageFormat::Png))
         .unwrap_or_else(|_| panic!("failed to decode png {path}"));
     mq::Texture2D::from_image(&image)
+}
+
+pub(crate) struct GuiRenderer {
+    material: mq::Material,
+    background_texture: mq::Texture2D,
+    corner_radius: f32,
+    background_intensity: f32,
+}
+
+impl GuiRenderer {
+    pub(crate) fn new() -> Self {
+        let vert = std::fs::read_to_string("assets/shaders/widget.vert")
+            .expect("failed to read widget vertex shader");
+        let frag = std::fs::read_to_string("assets/shaders/widget.frag")
+            .expect("failed to read widget fragment shader");
+
+        let material = mq::load_material(
+            mq::ShaderSource::Glsl {
+                vertex: &vert,
+                fragment: &frag,
+            },
+            mq::MaterialParams {
+                pipeline_params: sensible_pipeline_params(),
+                uniforms: vec![
+                    mq::UniformDesc::new("fill_color", mq::UniformType::Float4),
+                    mq::UniformDesc::new("stroke_color", mq::UniformType::Float4),
+                    mq::UniformDesc::new("stroke_thickness", mq::UniformType::Float1),
+                    mq::UniformDesc::new("rect_size", mq::UniformType::Float2),
+                    mq::UniformDesc::new("corner_radius", mq::UniformType::Float1),
+                    mq::UniformDesc::new("background_intensity", mq::UniformType::Float1),
+                    mq::UniformDesc::new("atlas_region", mq::UniformType::Float4),
+                    mq::UniformDesc::new("pulse_intensity", mq::UniformType::Float1),
+                    mq::UniformDesc::new("time", mq::UniformType::Float1),
+                    mq::UniformDesc::new("shadow_strength", mq::UniformType::Float1),
+                    mq::UniformDesc::new("shadow_size", mq::UniformType::Float1),
+                ],
+                textures: vec!["background_tex".to_owned()],
+                ..Default::default()
+            },
+        )
+        .expect("failed to load widget shader material");
+
+        let background_texture = load_png_texture("assets/gfx/widget.png");
+        background_texture.set_filter(mq::FilterMode::Nearest);
+
+        Self {
+            material,
+            background_texture,
+            corner_radius: 6.0,
+            background_intensity: 0.25,
+        }
+    }
+
+    pub(crate) fn draw(&mut self, draw_list: &[gui::Draw], font: &mq::Font) {
+        let mq_color = |x: gui::RGBA| mq::Color::new(x.r, x.g, x.b, x.a);
+
+        self.material
+            .set_texture("background_tex", self.background_texture.clone());
+
+        let time = mq::get_time() as f32;
+
+        for item in draw_list {
+            let bounds = item.bounds;
+            let has_stroke = item.stroke.0.a > 0.0 && item.stroke.1 > 0.0;
+            let has_fill = item.fill.a > 0.0;
+
+            if has_fill || has_stroke {
+                self.material
+                    .set_uniform("fill_color", (mq_color(item.fill),));
+                self.material
+                    .set_uniform("stroke_color", (mq_color(item.stroke.0),));
+                self.material.set_uniform("stroke_thickness", item.stroke.1);
+                self.material
+                    .set_uniform("rect_size", (bounds.w.max(0.0), bounds.h.max(0.0)));
+                self.material
+                    .set_uniform("corner_radius", self.corner_radius);
+                self.material.set_uniform(
+                    "background_intensity",
+                    if has_fill {
+                        self.background_intensity
+                    } else {
+                        0.0
+                    },
+                );
+                self.material
+                    .set_uniform("atlas_region", (0.0_f32, 0.0_f32, 1.0_f32, 1.0_f32));
+                self.material.set_uniform("pulse_intensity", item.pulse);
+                self.material.set_uniform("time", time);
+                self.material.set_uniform("shadow_strength", item.shadow);
+                self.material.set_uniform("shadow_size", item.bounds.h);
+
+                mq::gl_use_material(&self.material);
+                mq::draw_rectangle(bounds.x, bounds.y, bounds.w, bounds.h, mq::WHITE);
+                mq::gl_use_default_material();
+            }
+
+            let text = &item.text;
+            if !text.string.is_empty() {
+                let measure = mq::measure_text(text.string, Some(font), text.size, 1.0);
+                let align_x = if text.centering[0] {
+                    ((item.bounds.w - measure.width) / 2.0).max(0.0)
+                } else {
+                    0.0
+                };
+                let align_y = if text.centering[1] {
+                    ((item.bounds.h - measure.height) / 2.0).max(0.0)
+                } else {
+                    0.0
+                };
+
+                mq::draw_text_ex(
+                    text.string,
+                    bounds.x + align_x,
+                    bounds.y + align_y + measure.offset_y,
+                    mq::TextParams {
+                        font: Some(font),
+                        font_size: text.size,
+                        color: mq_color(text.color),
+                        ..Default::default()
+                    },
+                );
+            }
+        }
+    }
 }
