@@ -64,6 +64,7 @@ impl std::ops::Add for V2 {
         Self::new(self.x + rhs.x, self.y + rhs.y)
     }
 }
+
 impl std::ops::AddAssign for V2 {
     fn add_assign(&mut self, rhs: Self) {
         *self = *self + rhs;
@@ -74,6 +75,12 @@ impl std::ops::Sub for V2 {
     type Output = V2;
     fn sub(self, rhs: Self) -> Self::Output {
         Self::new(self.x - rhs.x, self.y - rhs.y)
+    }
+}
+
+impl std::ops::SubAssign for V2 {
+    fn sub_assign(&mut self, rhs: Self) {
+        *self = *self - rhs;
     }
 }
 

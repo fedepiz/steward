@@ -279,7 +279,7 @@ impl Things {
             self.remove_from_list(list, id);
         }
 
-        // Check for tag
+        // Check for tag and remove
         {
             let tag = self.entries[id.slot as usize].tag;
             if !tag.is_empty() {
@@ -288,8 +288,6 @@ impl Things {
         }
 
         let thing = &mut self.entries[id.slot as usize];
-        // Only untagged things can be removed
-        assert!(thing.tag.is_empty());
 
         // Remove myself from all lists
         assert!(thing.id == id);
@@ -357,7 +355,11 @@ impl Things {
         }
         let (bucket_idx, precursor, cursor) = self.interal_lookup_tag(tag);
         // Reset my tag and extract my next reference
-        let my_next = std::mem::take(&mut self[cursor].tag_chain_next);
+        let my_next = {
+            let cursor = &mut self[cursor];
+            cursor.tag = "";
+            std::mem::take(&mut cursor.tag_chain_next)
+        };
         if precursor.is_null() {
             // This was the head of a tag chain, we update the bin
             self.tag_hash_buckets[bucket_idx] = my_next

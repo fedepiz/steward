@@ -36,7 +36,7 @@ async fn amain() {
 
     let mut board = Board::new();
     board.set_camera(mq::vec2(600., 500.), 20.);
-    let board_font = mq::load_ttf_font("assets/fonts/board.ttf").await.unwrap();
+    let font = mq::load_ttf_font("assets/fonts/board.ttf").await.unwrap();
     let terrain_renderer = TerrainRenderer::new(&eternal_arena);
 
     let mut selected_id = ThingId::default();
@@ -58,17 +58,19 @@ async fn amain() {
                 screen_size: V2::new(mq::screen_width(), mq::screen_height()),
                 mouse_pos: mq::mouse_position().into(),
                 mouse_down: mq::is_mouse_button_down(mq::MouseButton::Left),
+                mouse_pressed: mq::is_mouse_button_pressed(mq::MouseButton::Left),
             },
             |gui| {
                 const MARGIN: V2 = V2 { x: 5., y: 5. };
                 const BORDER: gui::RGBA = gui::RGBA {
-                    r: 0.5,
+                    r: 0.8,
                     g: 0.5,
                     b: 0.5,
                     a: 1.,
                 };
                 gui.widget(|gui| {
                     gui.vertical_growing();
+                    gui.center_on_growth_axis();
                     gui.fill(gui::RGBA::RED);
                     gui.stroke(BORDER, 4.);
                     gui.pad(MARGIN);
@@ -77,24 +79,34 @@ async fn amain() {
                         gui.fingerprint(1);
                         gui.pixel_size(V2::new(80., 40.));
                         gui.margin(MARGIN);
-                        let color = if gui.interaction().pressed {
+
+                        gui.text("Hello", 16, gui::RGBA::WHITE, [true, true]);
+                        gui.fingerprint_from_text();
+
+                        let color = if gui.interaction().down {
                             BORDER
                         } else if !gui.interaction().hovered {
                             gui::RGBA::BLUE
                         } else {
                             gui::RGBA::GREEN
                         };
+
                         if gui.interaction().clicked {
                             println!("A")
                         }
+
                         gui.fill(color);
+                        gui.stroke(BORDER, 2.);
                     });
 
                     gui.widget(|gui| {
-                        gui.fingerprint(2);
                         gui.pixel_size(V2::new(80., 40.));
                         gui.margin(MARGIN);
-                        let color = if gui.interaction().pressed {
+
+                        gui.text("Goodbye", 16, gui::RGBA::WHITE, [true, true]);
+                        gui.fingerprint_from_text();
+
+                        let color = if gui.interaction().down {
                             gui::RGBA {
                                 r: 0.5,
                                 g: 0.5,
@@ -106,10 +118,56 @@ async fn amain() {
                         } else {
                             gui::RGBA::GREEN
                         };
+
                         if gui.interaction().clicked {
                             println!("B")
                         }
+
                         gui.fill(color);
+                        gui.stroke(BORDER, 4.);
+                    });
+
+                    gui.widget(|gui| {
+                        gui.horizontal_growing();
+                        gui.fill(gui::RGBA::WHITE);
+                        gui.pad(MARGIN);
+                        gui.margin(MARGIN);
+
+                        gui.widget(|gui| {
+                            gui.pixel_size(V2::new(40., 40.));
+                            gui.fill(gui::RGBA::BLACK);
+                            gui.margin(V2::new(2., 2.));
+                        });
+
+                        gui.widget(|gui| {
+                            gui.pixel_size(V2::new(40., 40.));
+                            gui.fill(gui::RGBA::BLACK);
+                            gui.margin(V2::new(2., 2.));
+                        });
+                    });
+
+                    gui.widget(|gui| {
+                        gui.fill(gui::RGBA::WHITE);
+                        gui.horizontal_growing();
+                        gui.pixel_size(V2::new(100., 40.));
+                        gui.pad(MARGIN);
+                        gui.margin(MARGIN);
+                        gui.center_on_growth_axis();
+
+                        gui.widget(|gui| {
+                            gui.fill(gui::RGBA::GREEN);
+                            gui.pixel_size(V2::new(40., 20.));
+                            gui.grow_to_fill(true, false);
+                        });
+                        gui.widget(|gui| {
+                            gui.fill(gui::RGBA::RED);
+                            gui.pixel_size(V2::splat(20.));
+                        });
+                        gui.widget(|gui| {
+                            gui.fill(gui::RGBA::BLUE);
+                            gui.pixel_size(V2::new(20., 20.));
+                            gui.grow_to_fill(true, false);
+                        });
                     });
                 });
             },
@@ -146,8 +204,8 @@ async fn amain() {
 
         // Actuall draw to screen
         mq::clear_background(mq::LIGHTGRAY);
-        board.draw(&draw_data, &terrain_renderer, &sprite_atlas, &board_font);
-        draw_gui(gui_output.draw_list);
+        board.draw(&draw_data, &terrain_renderer, &sprite_atlas, &font);
+        draw_gui(gui_output.draw_list, &font);
 
         tick(&mut sim, &frame_arena);
 
@@ -155,29 +213,50 @@ async fn amain() {
     }
 }
 
-fn draw_gui(draw_list: &[gui::Draw]) {
+fn draw_gui(draw_list: &[gui::Draw], font: &mq::Font) {
+    let mq_color = |x: gui::RGBA| mq::Color::new(x.r, x.g, x.b, x.a);
     for item in draw_list {
+        let bounds = item.bounds;
         if item.fill.a != 0. {
-            let color = mq::Color::new(item.fill.r, item.fill.g, item.fill.b, item.fill.a);
-            mq::draw_rectangle(
-                item.bounds.x,
-                item.bounds.y,
-                item.bounds.w,
-                item.bounds.h,
-                color,
+            mq::draw_rectangle(bounds.x, bounds.y, bounds.w, bounds.h, mq_color(item.fill));
+        }
+
+        let text = &item.text;
+        if !text.string.is_empty() {
+            let measure = mq::measure_text(text.string, Some(font), text.size, 1.);
+            let aling_x = if text.centering[0] {
+                ((item.bounds.w - measure.width) / 2.).max(0.)
+            } else {
+                0.
+            };
+            let aling_y = if text.centering[0] {
+                ((item.bounds.h - measure.height) / 2.).max(0.)
+            } else {
+                0.
+            };
+
+            mq::draw_text_ex(
+                text.string,
+                bounds.x + aling_x,
+                bounds.y + aling_y + measure.offset_y,
+                mq::TextParams {
+                    font: Some(font),
+                    font_size: text.size,
+                    color: mq_color(text.color),
+                    ..Default::default()
+                },
             );
         }
 
         let (color, thickness) = item.stroke;
         if color.a != 0. && thickness > 0. {
-            let color = mq::Color::new(color.r, color.g, color.b, color.a);
             mq::draw_rectangle_lines(
-                item.bounds.x,
-                item.bounds.y,
-                item.bounds.w,
-                item.bounds.h,
+                bounds.x,
+                bounds.y,
+                bounds.w,
+                bounds.h,
                 thickness,
-                color,
+                mq_color(color),
             );
         }
     }

@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::hash::{DefaultHasher, Hash, Hasher};
 
 use util::{
     arena::{AVec, Arena},
@@ -8,20 +9,21 @@ use util::{
 type Fingerprint = u64;
 
 #[derive(Default)]
-pub(crate) struct Gui {
+pub struct Gui {
     active_cache: HashMap<Fingerprint, Interaction>,
     passive_cache: HashMap<Fingerprint, Interaction>,
 }
 
-#[derive(Clone, Copy, Default)]
-pub(crate) struct Input {
+#[derive(Clone, Copy)]
+pub struct Input {
     pub screen_size: V2,
     pub mouse_pos: V2,
     pub mouse_down: bool,
+    pub mouse_pressed: bool,
 }
 
-pub(crate) struct Output<'a> {
-    pub draw_list: &'a [Draw],
+pub struct Output<'a> {
+    pub draw_list: &'a [Draw<'a>],
     pub is_mouse_over_ui: bool,
 }
 
@@ -55,8 +57,9 @@ impl Gui {
                 is_mouse_over_ui = true;
 
                 interaction.hovered = true;
-                interaction.clicked = input.mouse_down && !prev_interaction.pressed;
-                interaction.pressed = input.mouse_down;
+                interaction.clicked = input.mouse_pressed && !prev_interaction.down;
+                interaction.down =
+                    input.mouse_down && (prev_interaction.clicked || prev_interaction.down);
             }
 
             if widget.fingerprint != 0 {
@@ -78,7 +81,7 @@ impl Gui {
 pub struct Interaction {
     pub hovered: bool,
     pub clicked: bool,
-    pub pressed: bool,
+    pub down: bool,
 }
 
 type WidgetId = usize;
@@ -92,26 +95,24 @@ pub struct RGBA {
 }
 
 impl RGBA {
-    pub const RED: RGBA = RGBA {
-        r: 1.,
-        g: 0.,
-        b: 0.,
-        a: 1.,
-    };
+    pub const fn new(r: f32, g: f32, b: f32, a: f32) -> Self {
+        Self { r, g, b, a }
+    }
 
-    pub const GREEN: RGBA = RGBA {
-        r: 0.,
-        g: 1.,
-        b: 0.,
-        a: 1.,
-    };
+    pub const BLACK: RGBA = RGBA::new(0., 0., 0., 1.);
+    pub const WHITE: RGBA = RGBA::new(1., 1., 1., 1.);
 
-    pub const BLUE: RGBA = RGBA {
-        r: 0.,
-        g: 0.,
-        b: 1.,
-        a: 1.,
-    };
+    pub const RED: RGBA = RGBA::new(1., 0., 0., 1.);
+    pub const GREEN: RGBA = RGBA::new(0., 1., 0., 1.);
+    pub const BLUE: RGBA = RGBA::new(0., 0., 1., 1.);
+}
+
+#[derive(Default, Clone, Copy)]
+pub struct Text<'a> {
+    pub string: &'a str,
+    pub size: u16,
+    pub centering: [bool; 2],
+    pub color: RGBA,
 }
 
 #[derive(Default)]
@@ -123,10 +124,12 @@ struct Widget<'a> {
     padding: V2,
     screen_offset: V2,
     growth_axes: V2,
+    center_children: [bool; 2],
+    grow_to_fill: [bool; 2],
     bounds: Rect,
+    text: Text<'a>,
     fill: RGBA,
     stroke: (RGBA, f32),
-    parent: WidgetId,
     children: &'a [WidgetId],
 }
 
@@ -136,7 +139,7 @@ struct ActiveWidget {
     children_begin_offset: usize,
 }
 
-pub(crate) struct Frame<'a, 'b> {
+pub struct Frame<'a, 'b> {
     arena: &'a Arena,
     cache: &'b HashMap<Fingerprint, Interaction>,
     widgets: AVec<'a, Widget<'a>>,
@@ -218,8 +221,17 @@ impl<'a, 'b> Frame<'a, 'b> {
         }
     }
 
-    fn draw(mut self, screen_size: V2) -> (&'a [Widget<'a>], &'a [Draw]) {
-        self.layout(screen_size);
+    fn draw(mut self, screen_size: V2) -> (&'a [Widget<'a>], &'a [Draw<'a>]) {
+        let widths = self.calculate_sizes(0);
+        let heights = self.calculate_sizes(1);
+
+        for widget in self.widgets.iter_mut() {
+            widget.bounds.w = widths[widget.id];
+            widget.bounds.h = heights[widget.id];
+        }
+
+        self.calculate_positions(screen_size);
+
         let mut draw_list = self.arena.new_vec_with_capacity(self.widgets.len());
         for widget in &self.widgets {
             if widget.bounds.w > 0. && widget.bounds.h > 0. {
@@ -227,54 +239,89 @@ impl<'a, 'b> Frame<'a, 'b> {
                     bounds: widget.bounds,
                     fill: widget.fill,
                     stroke: widget.stroke,
+                    text: widget.text,
                 });
             }
         }
         (self.widgets.into_bump_slice(), draw_list.into_bump_slice())
     }
 
-    fn layout(&mut self, screen_size: V2) {
-        // Sizing pass
-        let mut computed_sizes = vec![V2::default(); self.widgets.len()];
-        for axis in 0..=1 {
-            // Internal-sized pass
-            for widget in self.widgets.iter_mut() {
-                let logical_size = widget.logical_size[axis];
-                let base = match logical_size.kind {
-                    LogicalSizeKind::Pixels => logical_size.value,
-                    _ => 0.,
-                };
-                computed_sizes[widget.id][axis] = base + widget.padding[axis] * 2.0;
-            }
+    fn calculate_sizes(&self, axis: usize) -> Vec<f32> {
+        assert!(axis <= 1);
+        let mut sizes = vec![0f32; self.widgets.len()];
+        // Upwards propagation (child -> parent)
+        for widget in self.widgets.iter().rev() {
+            let logical_size = widget.logical_size[axis];
 
-            // Upwards propagation (child -> parent)
-            for widget in self.widgets.iter_mut().rev() {
-                let logical_size = widget.logical_size[axis];
-                let mut change = 0.;
-                match logical_size.kind {
-                    LogicalSizeKind::ChildSum => {
-                        for &child in widget.children {
-                            change += computed_sizes[child][axis];
-                        }
-                    }
-                    LogicalSizeKind::ChildMax => {
-                        for &child in widget.children {
-                            change = computed_sizes[child][axis].max(change);
-                        }
-                    }
-                    _ => {}
+            // We are going to iterate over the children anyways to find out if any are in 'grow' mode,
+            // so may as well simplify our life and pull all the looping in here
+            let mut children_total = 0.0;
+            let mut children_max = 0.0;
+            let mut num_growable = 0;
+            for &child in widget.children {
+                let child_size = sizes[child];
+                children_total += child_size;
+                children_max = child_size.max(children_max);
+                if self.widgets[child].grow_to_fill[axis] {
+                    num_growable += 1;
                 }
-                computed_sizes[widget.id][axis] += change;
             }
-        }
-        // Final step: write sizes
-        for widget in self.widgets.iter_mut() {
-            let size = computed_sizes[widget.id];
-            widget.bounds.w = size.x;
-            widget.bounds.h = size.y;
-        }
 
-        // Placement
+            // Get the base size depending on our logical size type
+            let base = match logical_size.kind {
+                LogicalSizeKind::Pixels => logical_size.value,
+                LogicalSizeKind::ChildSum => children_total,
+                LogicalSizeKind::ChildMax => children_max,
+            };
+            // Calculate our actaul size
+            let my_size = base + widget.padding[axis] * 2.;
+            let mut space_to_fill = base - children_total;
+
+            // If some of my children want to grow, and I have leftover space, let me grow them
+            while num_growable > 0 && space_to_fill > 0. {
+                let mut smallest_size = std::f32::INFINITY;
+                let mut second_smallest_size = std::f32::INFINITY;
+
+                // Find the smallest and second-smallest sizes
+                for &child in widget.children {
+                    // Consider only growable
+                    if !self.widgets[child].grow_to_fill[axis] {
+                        continue;
+                    }
+                    let child_size = sizes[child];
+                    smallest_size = child_size.min(smallest_size);
+                    if child_size > smallest_size {
+                        second_smallest_size = child_size.min(second_smallest_size);
+                    }
+                }
+
+                // The growth amount is the smallest of
+                // 1. The gap between the second smallest child and this child
+                // 2. The amount of gap left, equally distributed amongst all children
+                let grow_amount =
+                    (second_smallest_size - smallest_size).min(space_to_fill / num_growable as f32);
+
+                // Add grwoth amount to each child
+                for &child in widget.children {
+                    // Consider only growable
+                    if !self.widgets[child].grow_to_fill[axis] {
+                        continue;
+                    }
+                    let child_size = &mut sizes[child];
+                    if *child_size == smallest_size {
+                        *child_size += grow_amount;
+                        space_to_fill -= grow_amount;
+                    }
+                }
+            }
+
+            // Finally confirm my size
+            sizes[widget.id] = my_size;
+        }
+        sizes
+    }
+
+    fn calculate_positions(&mut self, screen_size: V2) {
         let mut positions = vec![V2::default(); self.widgets.len()];
         for widget in &self.widgets {
             // calculate screen offset
@@ -284,22 +331,33 @@ impl<'a, 'b> Frame<'a, 'b> {
                 widget.screen_offset.y * (screen_size.y - widget.bounds.h) / 2.;
 
             // Place children
+            let unpadded_size = widget.bounds.size() - widget.padding * 2.;
             let mut cursor = positions[widget.id] + widget.padding;
-            for &child in widget.children {
-                positions[child] += cursor;
-                cursor += self.widgets[child].bounds.size() * widget.growth_axes;
+            for &child_id in widget.children {
+                let child = &self.widgets[child_id];
+                positions[child_id] += cursor;
+
+                if widget.center_children[0] {
+                    positions[child_id].x =
+                        cursor.x + (unpadded_size.x - child.bounds.w).max(0.) / 2.;
+                }
+                if widget.center_children[1] {
+                    positions[child_id].y =
+                        cursor.y + (unpadded_size.y - child.bounds.h).max(0.) / 2.;
+                }
+                cursor += child.bounds.size() * widget.growth_axes;
             }
         }
 
         for widget in &mut self.widgets {
             widget.bounds = widget.bounds.with_position(positions[widget.id]);
             // Usa safe margin by making sure we can't shrink more thne our size
-            let margin = widget.margin.min(widget.bounds.size());
+            let shrink = (widget.margin * 2.).min(widget.bounds.size());
             // Shrink all the bounds to apply 'margins'.
-            widget.bounds.x += margin.x;
-            widget.bounds.y += margin.y;
-            widget.bounds.w -= margin.x * 2.;
-            widget.bounds.h -= margin.y * 2.;
+            widget.bounds.x += shrink.x / 2.;
+            widget.bounds.y += shrink.y / 2.;
+            widget.bounds.w -= shrink.x;
+            widget.bounds.h -= shrink.y;
         }
     }
 
@@ -316,6 +374,15 @@ impl<'a, 'b> Frame<'a, 'b> {
         self.current_widget_mut().stroke = (color, thickness);
     }
 
+    pub fn text(&mut self, string: &'a str, size: u16, color: RGBA, centering: [bool; 2]) {
+        self.current_widget_mut().text = Text {
+            string,
+            size,
+            centering,
+            color,
+        };
+    }
+
     pub fn pixel_size(&mut self, size: V2) {
         let widget = self.current_widget_mut();
         widget.logical_size[0].kind = LogicalSizeKind::Pixels;
@@ -329,7 +396,15 @@ impl<'a, 'b> Frame<'a, 'b> {
     }
 
     pub fn margin(&mut self, size: V2) {
-        self.current_widget_mut().margin = size;
+        let widget = self.current_widget_mut();
+        // The padding needs to be adjusted, as the padding is "net" of the margin
+        widget.padding -= widget.margin;
+        widget.margin = size;
+        widget.padding += widget.margin;
+    }
+
+    pub fn grow_to_fill(&mut self, horizontal: bool, vertical: bool) {
+        self.current_widget_mut().grow_to_fill = [horizontal, vertical];
     }
 
     pub fn vertical_growing(&mut self) {
@@ -339,8 +414,29 @@ impl<'a, 'b> Frame<'a, 'b> {
         widget.logical_size[1].kind = LogicalSizeKind::ChildSum;
     }
 
+    pub fn horizontal_growing(&mut self) {
+        let widget = self.current_widget_mut();
+        widget.growth_axes = V2::new(1., 0.);
+        widget.logical_size[0].kind = LogicalSizeKind::ChildSum;
+        widget.logical_size[1].kind = LogicalSizeKind::ChildMax;
+    }
+
+    pub fn center_on_growth_axis(&mut self) {
+        let widget = self.current_widget_mut();
+        widget.center_children = [widget.growth_axes.x == 0., widget.growth_axes.y == 0.];
+    }
+
     pub fn fingerprint(&mut self, fingerprint: u64) {
         self.current_widget_mut().fingerprint = fingerprint;
+    }
+
+    pub fn fingerprint_from_text(&mut self) {
+        let widget = self.current_widget_mut();
+        widget.fingerprint = {
+            let mut hasher = DefaultHasher::new();
+            widget.text.string.hash(&mut hasher);
+            hasher.finish()
+        };
     }
 }
 
@@ -364,8 +460,9 @@ impl Default for LogicalSizeKind {
 }
 
 #[derive(Clone, Copy)]
-pub struct Draw {
+pub struct Draw<'a> {
     pub bounds: Rect,
     pub fill: RGBA,
     pub stroke: (RGBA, f32),
+    pub text: Text<'a>,
 }
