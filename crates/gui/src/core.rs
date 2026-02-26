@@ -244,11 +244,14 @@ impl<'a, 'b> Frame<'a, 'b> {
         let mut draw_list = self.arena.new_vec_with_capacity(self.widgets.len());
         for widget in &self.widgets {
             if widget.bounds.w > 0. && widget.bounds.h > 0. {
+                let mut text = widget.text;
+                // Shrink the text to only include 'visible' text
+                text.string = text.string.split("##").next().unwrap_or_default();
                 draw_list.push(Draw {
                     bounds: widget.bounds,
                     fill: widget.fill,
                     stroke: widget.stroke,
-                    text: widget.text,
+                    text,
                     shadow: widget.shadow,
                     pulse: widget.pulse,
                 });

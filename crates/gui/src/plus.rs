@@ -6,6 +6,7 @@ pub mod style {
 
     pub const MARGIN: V2 = V2 { x: 5., y: 5. };
     pub const FILL: RGBA = RGBA::new(0.83, 0.69, 0.51, 1.);
+    pub const DARK_FILL: RGBA = RGBA::new(0.3, 0.25, 0.18, 1.);
     pub const SHADOW: f32 = 1.2;
     pub const BORDER: RGBA = RGBA::new(0.5, 0.42, 0.31, 1.);
     pub const PULSE: f32 = 0.25;
@@ -57,11 +58,15 @@ impl<'a, 'b, 'c> GuiPlus<'a, 'b, 'c> {
             gui.text(text, 22, RGBA::BLACK, [true, true]);
             gui.fingerprint_from_text();
 
-            if gui.interaction().hovered {
+            if gui.interaction().hovered && !gui.interaction().down {
                 gui.pulse(PULSE);
             }
 
-            gui.fill(FILL);
+            gui.fill(if gui.interaction().down {
+                DARK_FILL
+            } else {
+                FILL
+            });
             gui.stroke(BORDER, 4.);
             gui.shadow(SHADOW);
             gui.interaction().clicked

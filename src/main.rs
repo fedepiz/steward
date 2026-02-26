@@ -613,7 +613,7 @@ mod build_ui {
                         println!("B");
                     }
 
-                    if gui.button_sized("X", 1., 1.) {
+                    if gui.button_sized("X##hello", 1., 1.) {
                         println!("X")
                     }
                 })
