@@ -1,8 +1,10 @@
 use std::hash::{Hash, Hasher};
 
-use strum::{EnumCount, EnumIter};
+use strum::{EnumCount, EnumIter, IntoEnumIterator};
 
 use util::bitset::BitSet;
+
+use crate::V2;
 
 #[derive(Default, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
 pub(crate) struct ThingId {
@@ -46,11 +48,13 @@ pub(crate) enum Flag {
     Teleport,
     IsVisible,
     IsInside,
+    Test,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug, EnumIter, EnumCount)]
 pub(crate) enum Var {
     Dummy,
+    MovementTime,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug, EnumIter, EnumCount)]
@@ -58,12 +62,22 @@ pub(crate) enum Link {
     // Generic A -> B links
     A,
     B,
+    Destination,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug, EnumIter, EnumCount)]
 pub(crate) enum List {
+    Dummy,
     AtLocation,
+    Messages,
 }
+
+impl Default for List {
+    fn default() -> Self {
+        List::Dummy
+    }
+}
+
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Default)]
 struct ListThingData {
     // For the contained element
@@ -169,6 +183,12 @@ pub(crate) struct Body {
     pub layer: u8,
 }
 
+impl Body {
+    pub(crate) fn pos(&self) -> V2 {
+        V2::new(self.x, self.y)
+    }
+}
+
 pub(crate) const NUM_THINGS: usize = 32000;
 const LAST_IDX_THING: usize = NUM_THINGS - 1;
 
@@ -189,7 +209,6 @@ pub(crate) struct Things {
 impl Things {
     pub(crate) fn new() -> Self {
         let mut entries = Vec::from_iter((0..NUM_THINGS).map(|_| Thing::default()));
-        let write_buffer = entries.clone();
         // Create a 'chain' of next_free pointing at each other, with the last pointing to "the null"
         for (idx, thing) in entries.iter_mut().enumerate() {
             let slot = if idx != LAST_IDX_THING { idx + 1 } else { 0 };
@@ -201,6 +220,7 @@ impl Things {
                 generation: 0,
             }
         }
+        let write_buffer = entries.clone();
         let mut meta = MetaData::default();
         // First element in the free list has index 1
         meta.free_list_head = ThingId {
@@ -228,11 +248,19 @@ impl Things {
             return &mut self.entries[0];
         }
         let thing = &mut self.entries[self.meta.free_list_head.slot as usize];
+
         assert!(thing.id == self.meta.free_list_head);
         thing.id.generation += 1;
         assert!(thing.id.generation % 2 == 1);
         // Advance free list pointer
         self.meta.free_list_head = thing.next_free;
+
+        // Reset all fields, except id
+        *thing = Thing {
+            id: thing.id,
+            ..Default::default()
+        };
+
         thing
     }
 
@@ -246,10 +274,16 @@ impl Things {
         if !id.is_valid() {
             return;
         }
+
+        for list in List::iter() {
+            self.remove_from_list(list, id);
+        }
+
         let thing = &mut self.entries[id.slot as usize];
         // Only untagged things can be removed
         assert!(thing.tag.is_empty());
 
+        // Remove myself from all lists
         assert!(thing.id == id);
         thing.id.generation += 1;
         assert!(thing.id.generation % 2 == 0);
@@ -528,19 +562,41 @@ impl Things {
         {
             self.add_to_list(list, parent, child);
         }
+
+        for id in commands.despawns {
+            self.despawn(id);
+        }
+
+        for spawn in commands.spawns {
+            let thing = self.spawn();
+            let id = thing.id;
+            *thing = spawn.thing;
+            thing.id = id;
+
+            // Save important state on the side
+            let (list, parent) = spawn.to_list;
+            if !parent.is_null() {
+                self.add_to_list(list, parent, id);
+            }
+        }
     }
 }
 
 pub(crate) struct Commands {
     list_mutations: Vec<ListMutation>,
+    despawns: Vec<ThingId>,
+    spawns: Vec<Spawn>,
 }
 
 impl Commands {
     fn new() -> Self {
         Self {
             list_mutations: vec![],
+            despawns: vec![],
+            spawns: vec![],
         }
     }
+
     pub fn add_to_list(&mut self, list: List, parent: ThingId, child: ThingId) {
         self.list_mutations.push(ListMutation {
             list,
@@ -556,6 +612,18 @@ impl Commands {
             child,
         });
     }
+
+    pub fn despawn(&mut self, id: ThingId) {
+        self.despawns.push(id);
+    }
+
+    pub fn spawn_and_append_to_list(&mut self, list: List, parent: ThingId) -> &mut Thing {
+        self.spawns.push(Spawn {
+            to_list: (list, parent),
+            ..Default::default()
+        });
+        &mut self.spawns.last_mut().unwrap().thing
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -563,4 +631,10 @@ struct ListMutation {
     list: List,
     parent: ThingId,
     child: ThingId,
+}
+
+#[derive(Default)]
+struct Spawn {
+    thing: Thing,
+    to_list: (List, ThingId),
 }

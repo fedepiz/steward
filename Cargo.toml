@@ -12,6 +12,7 @@ members = ["crates/*"]
 [workspace.dependencies]
 macroquad = { version = "0.4.4" }
 num_enum = { version = "*" }
+pathfinding = { version = "*" }
 strum = { version = "*", features = ["derive"] }
 rayon = { version = "*" }
 
@@ -20,6 +21,7 @@ util = { path = "crates/util" }
 [dependencies]
 macroquad = { workspace = true }
 num_enum = { workspace = true }
+pathfinding = { workspace = true }
 strum = { workspace = true }
 rayon = { workspace = true }
 

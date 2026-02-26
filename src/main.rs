@@ -4,7 +4,7 @@ mod csv;
 mod terrain;
 mod things;
 
-use std::collections::btree_map::Values;
+use std::marker::PhantomData;
 
 use crate::{assets::*, terrain::TerrainRenderer, things::*};
 use board::*;
@@ -19,7 +19,6 @@ fn main() {
     };
     macroquad::Window::from_config(config, amain());
 }
-
 async fn amain() {
     // Arena that is never reset
     let eternal_arena = Arena::new();
@@ -30,7 +29,7 @@ async fn amain() {
     mq::request_new_screen_size(mq::screen_width(), mq::screen_height());
     mq::next_frame().await;
 
-    let mut things = setup(&frame_arena);
+    let mut sim = setup(&frame_arena);
 
     let mut board = Board::new();
     board.set_camera(mq::vec2(600., 500.), 20.);
@@ -76,7 +75,7 @@ async fn amain() {
         let mut draw_data = DrawData::new(&frame_arena);
 
         // "Render" entities
-        things.readonly_pass(|_, this| {
+        sim.things.readonly_pass(|ctx, this| {
             if !this.flag(Flag::IsVisible) {
                 return;
             }
@@ -125,8 +124,8 @@ async fn amain() {
                 let a = this.link(self::Link::A);
                 let b = this.link(self::Link::B);
                 if a.is_valid() && b.is_valid() {
-                    let a_pos = mq::vec2(things[a].body.x, things[a].body.y);
-                    let b_pos = mq::vec2(things[b].body.x, things[b].body.y);
+                    let a_pos = mq::vec2(ctx[a].body.x, ctx[a].body.y);
+                    let b_pos = mq::vec2(ctx[b].body.x, ctx[b].body.y);
                     draw_data.paths.push(Path {
                         start: a_pos,
                         end: b_pos,
@@ -141,7 +140,7 @@ async fn amain() {
         mq::clear_background(mq::LIGHTGRAY);
         board.draw(&draw_data, &terrain_renderer, &sprite_atlas, &board_font);
 
-        tick(&mut things);
+        tick(&mut sim, &frame_arena);
 
         mq::next_frame().await;
     }
@@ -185,8 +184,130 @@ impl std::ops::Mul<f32> for V2 {
     }
 }
 
-fn setup(scratch: &Arena) -> Things {
-    let mut ctx = Things::new();
+struct Simulation {
+    thick_num: u64,
+    things: Things,
+    nav_cache: NavCache,
+}
+
+struct NavCacheBuilder {
+    graph: CsrBuilder<ThingId, ThingId>,
+    cache_size: usize,
+}
+
+impl NavCacheBuilder {
+    fn new(cache_size: usize) -> Self {
+        Self {
+            graph: CsrBuilder::new(),
+            cache_size,
+        }
+    }
+
+    fn add_connection(&mut self, a: ThingId, b: ThingId) {
+        self.graph.push(a, b);
+        self.graph.push(b, a);
+    }
+
+    fn build(self) -> NavCache {
+        NavCache {
+            graph: self.graph.build(),
+            cache: Vec::with_capacity(self.cache_size),
+            counters: NavCacheCounters::default(),
+        }
+    }
+}
+
+#[derive(Default, Clone, Copy)]
+struct NavCacheEntry {
+    source: ThingId,
+    destination: ThingId,
+    next_step: ThingId,
+}
+
+struct NavCache {
+    graph: Csr<ThingId, ThingId>,
+    cache: Vec<NavCacheEntry>,
+    counters: NavCacheCounters,
+}
+
+#[derive(Default)]
+struct NavCacheCounters {
+    num_hits: u64,
+    num_miss: u64,
+    num_reset: u64,
+}
+
+impl NavCache {
+    /// Returns the next hop from `source` toward `destination`.
+    ///
+    /// The cache stores `(source, destination) -> next_step` entries so repeated
+    /// queries can skip pathfinding. On a cache miss, this runs A* over the CSR
+    /// graph, caches each hop along the discovered path, and returns the first
+    /// step after `source`.
+    ///
+    /// If no path is found (or `source == destination`), this returns a null
+    /// `ThingId`.
+    fn pathfind(
+        &mut self,
+        source: ThingId,
+        destination: ThingId,
+        cost_fn: &impl Fn(ThingId, ThingId) -> i32,
+    ) -> ThingId {
+        // Find an existing step, if one exists
+        let entry = self
+            .cache
+            .iter()
+            .find(|entry| entry.source == source && entry.destination == destination);
+
+        // Return the next step if found
+        match entry {
+            Some(entry) => {
+                self.counters.num_hits = self.counters.num_hits.saturating_add(1);
+                return entry.next_step;
+            }
+            None => {}
+        };
+
+        // No step found, run pathfinding
+        let pathfind_result = pathfinding::directed::astar::astar(
+            &source,
+            |&node| {
+                self.graph
+                    .get_slice(node)
+                    .into_iter()
+                    .map(move |&x| (x, cost_fn(node, x)))
+            },
+            |&node| cost_fn(node, destination),
+            |&node| node == destination,
+        );
+        self.counters.num_miss = self.counters.num_miss.saturating_add(1);
+        let path = pathfind_result
+            .as_ref()
+            .map(|x| x.0.as_slice())
+            .unwrap_or_default();
+
+        // Blow the cache if out of room
+        if self.cache.len() + path.len() >= self.cache.capacity() {
+            self.counters.num_reset = self.counters.num_reset.saturating_add(1);
+            self.cache.clear();
+        }
+
+        // Cache the new steps
+        self.cache
+            .extend(path.windows(2).map(|steps| NavCacheEntry {
+                source: steps[0],
+                destination,
+                next_step: steps[1],
+            }));
+
+        // And return the next one, if any
+        path.get(1).copied().unwrap_or_default()
+    }
+}
+
+fn setup(scratch: &Arena) -> Simulation {
+    let mut things = Things::new();
+    let ctx = &mut things;
 
     let csv = csv::parse_file(scratch, "data/init.csv");
     for row in csv.rows() {
@@ -256,38 +377,42 @@ fn setup(scratch: &Arena) -> Things {
         }
     }
 
-    let mut nav_grah = NavGraphBuilder::new();
+    let mut nav_cache = NavCacheBuilder::new(1024);
+
     ctx.readonly_pass(|_, this| {
         if this.flag(Flag::IsPath) {
             let a = this.link(Link::A);
             let b = this.link(Link::B);
-            nav_grah.push(a, b, 1);
+            nav_cache.add_connection(a, b);
         }
     });
-    let nav_graph = nav_grah.build();
-    ctx.readonly_pass(|_, this| {
-        let neighbours = nav_graph.get_neighbours(this.id());
-        for &(nid, _) in neighbours {
-            println!("{} -> {}", this.name(), ctx[nid].name());
-        }
-    });
+    let nav_cache = nav_cache.build();
 
-    ctx
+    Simulation {
+        thick_num: 0,
+        things,
+        nav_cache,
+    }
 }
 
-#[derive(Clone, Copy, Default)]
-struct NavStep {
-    id: ThingId,
-    cost: i32,
+trait Slot {
+    fn slot(&self) -> usize;
 }
 
-struct NavGraphBuilder {
+impl Slot for ThingId {
+    fn slot(&self) -> usize {
+        ThingId::slot(*self)
+    }
+}
+
+struct CsrBuilder<K, V> {
     bins: Vec<usize>,
-    entries: Vec<(ThingId, ThingId, i32)>,
+    entries: Vec<(K, V)>,
     max_slot: usize,
 }
 
-impl NavGraphBuilder {
+impl<K: Slot, V: Default + Clone> CsrBuilder<K, V> {
+    /// Creates an empty CSR builder with fixed bin capacity for all thing slots.
     fn new() -> Self {
         Self {
             bins: vec![0; things::NUM_THINGS],
@@ -296,56 +421,115 @@ impl NavGraphBuilder {
         }
     }
 
-    fn push(&mut self, from: ThingId, to: ThingId, cost: i32) {
-        self.bins[from.slot()] += 1;
-        self.entries.push((from, to, cost));
-        self.max_slot = from.slot().max(self.max_slot);
+    /// Appends one adjacency value under `key`.
+    ///
+    /// Internally this increments the per-slot bin count and records the entry
+    /// for compaction during `build`.
+    fn push(&mut self, key: K, value: V) {
+        let slot = key.slot();
+        self.bins[slot] += 1;
+        self.entries.push((key, value));
+        self.max_slot = slot.max(self.max_slot);
     }
 
-    fn build(self) -> NavGraph {
-        let mut offsets = vec![0; self.max_slot + 1];
+    /// Compacts pushed entries into CSR layout.
+    ///
+    /// Produces prefix offsets per key slot and a contiguous value array where
+    /// neighbors for a slot are stored in `values[offsets[i]..offsets[i + 1]]`.
+    fn build(self) -> Csr<K, V> {
+        let mut offsets = vec![0; self.max_slot + 2];
         // Prefix sum to calculate offsets
-        for i in 0..self.bins.len() {
+        for i in 0..=self.max_slot {
             offsets[i + 1] = offsets[i] + self.bins[i];
         }
         let mut counts = self.bins;
         counts.clear();
-        counts.resize(self.max_slot, 0);
+        counts.resize(self.max_slot + 1, 0);
 
-        let mut values = vec![Default::default(); self.entries.len()];
+        let mut values = vec![V::default(); self.entries.len()];
 
-        for (key, target, cost) in self.entries {
+        for (key, value) in self.entries {
             let idx = offsets[key.slot()] + counts[key.slot()];
             counts[key.slot()] += 1;
-            values[idx] = (target, cost);
+            values[idx] = value
         }
 
-        NavGraph { offsets, values }
+        Csr {
+            key_typ: PhantomData,
+            offsets,
+            values,
+        }
     }
 }
 
 #[derive(Default)]
-struct NavGraph {
+struct Csr<K, V> {
+    key_typ: PhantomData<K>,
     offsets: Vec<usize>,
-    values: Vec<(ThingId, i32)>,
+    values: Vec<V>,
 }
 
-impl NavGraph {
-    fn get_neighbours(&self, id: ThingId) -> &[(ThingId, i32)] {
+impl<K: Slot, V> Csr<K, V> {
+    /// Returns the adjacency slice for `id`.
+    ///
+    /// The returned slice is borrowed from internal CSR storage and is empty
+    /// when the slot is out of range or has no entries.
+    fn get_slice(&self, id: K) -> &[V] {
         let idx = id.slot();
         if idx + 1 >= self.offsets.len() {
             return &[];
         }
         let start = self.offsets[idx];
         let end = self.offsets[idx + 1];
-        &self.values[start..=end]
+        &self.values[start..end]
     }
 }
 
-fn tick(ctx: &mut Things) {
-    ctx.write_pass(
+fn tick(sim: &mut Simulation, scratch: &Arena) {
+    sim.thick_num = sim.thick_num.wrapping_add(1);
+
+    sim.things.write_pass(
         |_, _| true,
         |ctx, this, commands| {
+            // As a test, send people to din drust
+            if this.flag(Flag::IsPerson) && !this.flag(Flag::Test) {
+                this.set_flag(Flag::Test, true);
+                this.set_link(Link::Destination, ctx.lookup_tag("din_drust"));
+                this.set_var(Var::MovementTime, 0.);
+            }
+
+            // If `this` has a destination, then it should try to move there (unless arrived)
+            if let Some(destination) = this.link(Link::Destination).as_valid() {
+                let current_location = this.parent(List::AtLocation);
+                if current_location != destination {
+                    let cost_fn = |x, y| {
+                        let dist = (ctx[x].body.pos() - ctx[y].body.pos()).magnitude();
+                        (dist * 25.).round().max(0.) as i32
+                    };
+
+                    if let Some(next_step) = sim
+                        .nav_cache
+                        .pathfind(current_location, destination, &cost_fn)
+                        .as_valid()
+                    {
+                        let next_step_cost = cost_fn(current_location, next_step) as f32;
+                        let mov_time = this.var(Var::MovementTime);
+                        if mov_time >= next_step_cost {
+                            this.set_var(Var::MovementTime, 0.);
+                            commands.add_to_list(List::AtLocation, next_step, this.id());
+
+                            let message =
+                                commands.spawn_and_append_to_list(List::Messages, this.id());
+                            message.set_name("#0 has arrived at #1");
+                            message.set_link(Link::A, this.id());
+                            message.set_link(Link::B, destination);
+                        } else {
+                            this.set_var(Var::MovementTime, mov_time + 1.);
+                        }
+                    }
+                }
+            }
+
             // Update body position for entities that are in a 'dependent' location
             if let Some(location) = this.parent(List::AtLocation).as_valid() {
                 const MOVEMENT_SPEED: f32 = 2.0;
@@ -379,10 +563,17 @@ fn tick(ctx: &mut Things) {
                 // Update body
                 this.body.x = next_pos.x;
                 this.body.y = next_pos.y;
+            }
 
-                // Temporary: travel to a new place!
-                let new_location = ctx.lookup_tag("din_drust");
-                commands.add_to_list(List::AtLocation, new_location, this.id());
+            for message in ctx.iter_list(List::Messages, this.id()) {
+                let message = &ctx[message];
+                let params = &[
+                    ctx[message.link(Link::A)].name(),
+                    ctx[message.link(Link::B)].name(),
+                ];
+                let rendered = render_template_string(scratch, message.name(), params);
+                println!("{rendered}");
+                commands.despawn(message.id());
             }
         },
     );
@@ -395,4 +586,29 @@ fn pos_around(body: Body, idx: usize, len: usize) -> V2 {
     let cx = body.x + angle.cos() * radius;
     let cy = body.y + angle.sin() * radius;
     V2::new(cx, cy)
+}
+
+fn render_template_string<'a>(arena: &'a Arena, template: &str, params: &[&str]) -> &'a str {
+    let mut buffer = arena.new_string_with_capacity(template.len() * 2);
+
+    let mut iter = template.chars();
+    while let Some(ch) = iter.next() {
+        if ch != '#' {
+            buffer.push(ch);
+        } else {
+            if let Some(next) = iter.next() {
+                if let Some(digit) = next.to_digit(10) {
+                    let value = params.get(digit as usize).copied().unwrap_or("???");
+                    buffer.push_str(value);
+                } else {
+                    buffer.push('#');
+                    buffer.push(next);
+                }
+            } else {
+                buffer.push('#');
+            }
+        }
+    }
+
+    buffer.into_bump_str()
 }

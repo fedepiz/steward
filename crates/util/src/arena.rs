@@ -24,6 +24,11 @@ impl Arena {
     }
 
     #[inline]
+    pub fn new_string_with_capacity(&self, capacity: usize) -> AString<'_> {
+        AString::with_capacity_in(capacity, &self.0)
+    }
+
+    #[inline]
     pub fn alloc_str(&self, src: &str) -> &str {
         self.0.alloc_str(src)
     }
