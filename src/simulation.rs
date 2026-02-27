@@ -153,6 +153,7 @@ pub(crate) fn setup(scratch: &Arena) -> Simulation {
             "spawn_waypoint" => {
                 let tag = row[1].as_str().to_string().leak();
                 let this = ctx.spawn_with_tag(tag);
+                this.set_name("Waypoint");
                 this.set_sprite("way_5");
                 this.body = Body {
                     x: row[2].as_num(),
@@ -173,7 +174,7 @@ pub(crate) fn setup(scratch: &Arena) -> Simulation {
                     layer: 1,
                     ..Default::default()
                 };
-                this.set_flag(Flag::IsPerson, true);
+                this.set_flag(Flag::IsParty, true);
                 this.set_flag(Flag::IsVisible, true);
             }
             _ => {}
@@ -360,8 +361,7 @@ pub(crate) fn tick(sim: &mut Simulation, request: Request) {
         sim.thick_num = sim.thick_num.wrapping_add(1);
 
         if sim.thick_num == 1 {
-            sim.things.with_commands(|ctx, commands| {
-                // send_message(commands, "This is a long", &[], player);
+            sim.things.with_commands(|_, commands| {
                 send_message(commands, "This is a long, long long message, with lots of wordy words, and therefore it will hopefully wrap around. In fact, it also\n include\n new lines, \ttabs n shit", &[], player);
             })
         }
@@ -375,7 +375,7 @@ pub(crate) fn tick(sim: &mut Simulation, request: Request) {
                     commands.despawn(this.id());
                 }
 
-                if this.flag(Flag::IsPerson) {
+                if this.flag(Flag::IsParty) {
                     // As a test, order people to din drust
                     if !this.flag(Flag::Test) {
                         this.set_flag(Flag::Test, true);
@@ -387,7 +387,7 @@ pub(crate) fn tick(sim: &mut Simulation, request: Request) {
                             LinkCollisionMode::DoNotCreate,
                         );
                         order.set_flag(Flag::IsOrder, true);
-                        order.set_handle(Handle::Type, 1);
+                        order.set_handle(Handle::Type, 2);
                         order.set_link(Link::Destination, destination);
                         assign_ownership(order, this.id());
                     }
@@ -396,9 +396,13 @@ pub(crate) fn tick(sim: &mut Simulation, request: Request) {
                     check_order_completion(ctx, this, commands, player);
 
                     // Movement
-                    update_destination(ctx, this);
+                    update_movement_intention(ctx, this);
                     progress_travel(ctx, this, commands, &mut sim.nav_cache);
-                    update_body_of_local_things(ctx, this, request.delta);
+                    let movement_status = update_body_of_local_things(ctx, this, request.delta);
+                    let has_arrived = matches!(movement_status, MovementStatus::Arrived);
+
+                    // A person is invisible if it is not yet arrived at its destination, nor is inside
+                    this.set_flag(Flag::IsVisible, !has_arrived || !this.flag(Flag::IsInside));
                 }
             },
         );
@@ -430,29 +434,28 @@ fn check_order_completion(
     }
 }
 
-fn update_destination(ctx: &Things, this: &mut Thing) {
+fn update_movement_intention(ctx: &Things, this: &mut Thing) {
     // Take the current destination, and the destination from other sources
     let current_destination = this.link(Link::Destination);
 
-    let order = this.link(Link::Order).get(ctx);
-    let order_type = &ORDER_TYPES[order.handle(Handle::Type) as usize];
+    if let Some(order) = this.link(Link::Order).get_as_valid(ctx) {
+        let order_type = &ORDER_TYPES[order.handle(Handle::Type) as usize];
 
-    let ordered_destination = if order_type.move_to_destination {
-        order.link(Link::Destination)
-    } else {
-        ThingId::null()
-    };
+        let ordered_destination = if order_type.move_to_destination {
+            order.link(Link::Destination)
+        } else {
+            current_destination
+        };
 
-    // If the current destination is different then the ordered one, we should
-    // change our destination and reset the movmement timer, and go 'outside'
-    if current_destination != ordered_destination {
-        this.set_link(Link::Destination, ordered_destination);
-        this.set_var(Var::MovementTime, 0.);
+        // If the current destination is different then the ordered one, we should
+        // change our destination and reset the movmement timer, and go 'outside'
+        if current_destination != ordered_destination {
+            this.set_link(Link::Destination, ordered_destination);
+            this.set_var(Var::MovementTime, 0.);
+        }
+
+        this.set_flag(Flag::WantsToBeInside, order_type.wants_to_be_inside);
     }
-
-    // Determine insideness
-    let is_inside = order_type.wants_to_be_inside && current_destination == ordered_destination;
-    this.set_flag(Flag::IsInside, is_inside);
 }
 
 fn progress_travel(
@@ -461,9 +464,10 @@ fn progress_travel(
     commands: &mut Commands,
     nav_cache: &mut NavCache,
 ) {
+    let current_location = this.parent(List::AtLocation);
     // Only makes sense if we have a destination
-    if let Some(destination) = this.link(Link::Destination).as_valid() {
-        let current_location = this.parent(List::AtLocation);
+    let destination = this.link(Link::Destination);
+    if let Some(destination) = destination.as_valid() {
         // If we are not yet arrived
         if current_location != destination {
             // The cost of moving between two edges
@@ -492,9 +496,19 @@ fn progress_travel(
             }
         }
     }
+
+    let wants_to_be_inside = this.flag(Flag::WantsToBeInside);
+    let is_inside =
+        wants_to_be_inside && (destination.is_null() || current_location == destination);
+    this.set_flag(Flag::IsInside, is_inside);
 }
 
-fn update_body_of_local_things(ctx: &Things, this: &mut Thing, delta: f32) {
+enum MovementStatus {
+    Arrived,
+    Moving,
+}
+
+fn update_body_of_local_things(ctx: &Things, this: &mut Thing, delta: f32) -> MovementStatus {
     if let Some((location, idx)) = index_in_list(ctx, List::AtLocation, this) {
         const MOVEMENT_SPEED: f32 = 2.0;
         let location = &ctx[location];
@@ -523,6 +537,14 @@ fn update_body_of_local_things(ctx: &Things, this: &mut Thing, delta: f32) {
         // Update body
         this.body.x = next_pos.x;
         this.body.y = next_pos.y;
+
+        if next_pos == target {
+            MovementStatus::Arrived
+        } else {
+            MovementStatus::Moving
+        }
+    } else {
+        MovementStatus::Moving
     }
 }
 

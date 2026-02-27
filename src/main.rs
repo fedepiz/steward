@@ -152,7 +152,7 @@ async fn amain() {
                     }
                     CommandKind::DespawnAllInList => {
                         sim.things.with_commands(|ctx, commands| {
-                            for id in ctx.iter_list(List::Messages, command.thing) {
+                            for id in ctx.iter_list(command.list, command.thing) {
                                 commands.despawn(id);
                             }
                         });
@@ -231,7 +231,7 @@ fn render_things(draw_data: &mut DrawData, things: &Things, selected_id: ThingId
             };
             draw_data.sprites.push(sprite);
 
-            let show_name = is_selected || this.flag(Flag::IsLocation);
+            let show_name = is_selected || this.flag(Flag::IsSettlement);
             if show_name {
                 let name = this.name();
                 if !name.is_empty() {

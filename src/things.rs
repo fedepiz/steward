@@ -56,10 +56,12 @@ pub(crate) enum Flag {
     MustBeOwned,
     IsLocation,
     IsSettlement,
-    IsPerson,
+    IsParty,
     IsPath,
     Teleport,
     IsVisible,
+    // Insideness
+    WantsToBeInside,
     IsInside,
     IsOrder,
     Test,

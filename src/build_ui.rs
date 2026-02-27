@@ -84,11 +84,46 @@ pub(super) fn root<'a>(
                     gui.inner().screen_pos(V2::new(0., 0.5));
                     gui.heading("Selected Entity", 6.);
 
-                    gui.label(gui.arena().fmt(format_args!("Name: {}", this.name())));
+                    let text = gui.arena().fmt(format_args!("Name: {}", this.name()));
+                    gui.line_sized(text, 6.);
+
+                    if this.flag(Flag::IsSettlement) {
+                        gui.heading("Entities inside", 6.);
+
+                        // Get entities inside the settlemetn
+                        let things_inside = {
+                            let iter = things
+                                .iter_list(List::AtLocation, this.id())
+                                .filter(|&id| id.get(&things).flag(Flag::IsInside))
+                                .map(|x| x.get(things));
+                            arena.alloc_slice_iter(iter)
+                        };
+
+                        // If we are empty
+                        if things_inside.is_empty() {
+                            gui.line_sized("Empty", 4.);
+                        }
+
+                        // For each entity inside
+                        for (idx, thing) in things_inside.iter().enumerate() {
+                            gui.row(|mut gui| {
+                                let name = gui.arena().alloc_str(thing.name());
+                                gui.line_sized(name, 4.);
+                                if gui.button(
+                                    gui.arena().fmt(format_args!("Select##sel_inside_{idx}")),
+                                ) {
+                                    commands.push(Command::with_thing(
+                                        CommandKind::SetSelectedEntity,
+                                        thing.id(),
+                                    ));
+                                }
+                            });
+                        }
+                    }
                 });
             }
 
-            if !data.is_panel_open(Panel::Messages) {
+            if data.is_panel_open(Panel::Messages) {
                 gui.panel(|mut gui| {
                     gui.heading("Messages", 10.);
 
