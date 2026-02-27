@@ -1,7 +1,10 @@
 use crate::{assets::TextureAtlas, things::ThingId};
 use gui;
 use macroquad::prelude as mq;
-use util::arena::{AVec, Arena};
+use util::{
+    arena::{AVec, Arena},
+    geom::{Rect, V2},
+};
 
 #[derive(Clone, Copy, Default)]
 pub(crate) struct Path {
@@ -202,6 +205,7 @@ impl Board {
 
         for layer in 0..=max_layer {
             // Draw labels
+            mq::gl_use_default_material();
             for label in &draw_data.labels {
                 if label.layer != layer {
                     continue;
@@ -355,7 +359,7 @@ impl GuiRenderer {
         }
     }
 
-    pub(crate) fn draw(&mut self, draw_list: &[gui::Draw], font: &mq::Font) {
+    pub(crate) fn draw(&mut self, scratch: &Arena, draw_list: &[gui::Draw], font: &mq::Font) {
         let mq_color = |x: gui::RGBA| mq::Color::new(x.r, x.g, x.b, x.a);
 
         self.material
@@ -400,31 +404,154 @@ impl GuiRenderer {
 
             let text = &item.text;
             if !text.string.is_empty() {
-                let measure = mq::measure_text(text.string, Some(font), text.size, 1.0);
+                let multiline = !text.centering[0] && !text.centering[1];
+                let parts = wrap_text(scratch, &text.string, bounds, font, text.size, multiline);
+
                 let align_x = if text.centering[0] {
-                    ((item.bounds.w - measure.width) / 2.0).max(0.0)
+                    ((item.bounds.w - parts.content_width) / 2.0).max(0.0)
                 } else {
                     0.0
                 };
                 let align_y = if text.centering[1] {
-                    ((item.bounds.h - measure.height) / 2.0).max(0.0)
+                    ((item.bounds.h - parts.content_height) / 2.0).max(0.0)
                 } else {
                     0.0
                 };
 
-                mq::draw_text_ex(
-                    text.string,
-                    bounds.x + align_x,
-                    bounds.y + align_y + measure.offset_y,
-                    mq::TextParams {
-                        font: Some(font),
-                        font_size: text.size,
-                        color: mq_color(text.color),
-                        ..Default::default()
-                    },
-                );
+                for part in parts.fragments {
+                    mq::draw_text_ex(
+                        part.text,
+                        part.pos.x + align_x,
+                        part.pos.y + align_y,
+                        mq::TextParams {
+                            font: Some(font),
+                            font_size: text.size,
+                            color: mq_color(text.color),
+                            ..Default::default()
+                        },
+                    );
+                }
             }
         }
+    }
+}
+
+struct Fragment<'a> {
+    text: &'a str,
+    pos: V2,
+}
+
+#[derive(Default)]
+struct WrappedText<'a> {
+    fragments: &'a [Fragment<'a>],
+    content_width: f32,
+    content_height: f32,
+}
+
+fn wrap_text<'a>(
+    arena: &'a Arena,
+    text: &'a str,
+    bounds: Rect,
+    font: &mq::Font,
+    font_size: u16,
+    multiline: bool,
+) -> WrappedText<'a> {
+    let mut fragments = arena.new_vec();
+
+    let mut cursor = bounds.corner();
+    let mut max_line_width: f32 = 0.0;
+    let mut line_count = 1;
+
+    let measure = mq::measure_text("C", Some(font), font_size, 1.);
+    let line_advance = measure.height + measure.offset_y;
+    let offset_y = measure.offset_y;
+    let line_height = measure.height;
+
+    for word in words(text) {
+        let is_newline = word == "\n";
+        if is_newline {
+            // New line
+            if !multiline {
+                break;
+            }
+            max_line_width = max_line_width.max(cursor.x - bounds.x);
+            cursor.x = bounds.x;
+            cursor.y += line_advance;
+            line_count += 1;
+        } else {
+            let measure = mq::measure_text(word, Some(font), font_size, 1.);
+            if cursor.x + measure.width > bounds.x + bounds.w {
+                // New line
+                if !multiline {
+                    break;
+                }
+                max_line_width = max_line_width.max(cursor.x - bounds.x);
+                cursor.x = bounds.x;
+                cursor.y += line_advance;
+                line_count += 1;
+            }
+            if cursor.y > bounds.y + bounds.h {
+                break;
+            }
+            fragments.push(Fragment {
+                text: word,
+                pos: cursor + V2::new(0., offset_y),
+            });
+            cursor.x += measure.width;
+        }
+    }
+
+    max_line_width = max_line_width.max(cursor.x - bounds.x);
+    let content_height = if fragments.is_empty() {
+        0.0
+    } else {
+        line_height + (line_count - 1) as f32 * line_advance
+    };
+
+    WrappedText {
+        fragments: fragments.into_bump_slice(),
+        content_width: max_line_width,
+        content_height,
+    }
+}
+
+fn words(source: &str) -> WordsIter<'_> {
+    WordsIter { source, cursor: 0 }
+}
+
+struct WordsIter<'a> {
+    source: &'a str,
+    cursor: usize,
+}
+
+impl<'a> Iterator for WordsIter<'a> {
+    type Item = &'a str;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.cursor >= self.source.len() {
+            return None;
+        }
+
+        let start = self.cursor;
+        let mut chars = self.source[start..].char_indices();
+        let (_, first) = chars.next()?;
+
+        if first.is_whitespace() {
+            let end = start + first.len_utf8();
+            self.cursor = end;
+            return Some(&self.source[start..end]);
+        }
+
+        let mut end = self.source.len();
+        for (offset, ch) in chars {
+            if ch.is_whitespace() {
+                end = start + offset;
+                break;
+            }
+        }
+
+        self.cursor = end;
+        Some(&self.source[start..end])
     }
 }
 

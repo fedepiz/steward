@@ -639,6 +639,13 @@ impl Things {
         }
     }
 
+    pub(crate) fn with_commands<R>(&mut self, f: impl FnOnce(&mut Self, &mut Commands) -> R) -> R {
+        let mut commands = Commands::new();
+        let value = f(self, &mut commands);
+        self.appy_commands(commands);
+        value
+    }
+
     fn appy_commands(&mut self, commands: Commands) {
         for ListMutation {
             list,

@@ -121,4 +121,8 @@ impl Rect {
     pub fn size(&self) -> V2 {
         V2::new(self.w, self.h)
     }
+
+    pub fn corner(&self) -> V2 {
+        V2::new(self.x, self.y)
+    }
 }

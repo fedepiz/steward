@@ -353,11 +353,19 @@ const ORDER_TYPES: [OrderType; 3] = [
 
 pub(crate) fn tick(sim: &mut Simulation, request: Request) {
     let _span = tracing::info_span!("Tick").entered();
-    sim.thick_num = sim.thick_num.wrapping_add(1);
 
     let player = sim.things.lookup_tag("player");
 
     for _ in 0..request.advance_time {
+        sim.thick_num = sim.thick_num.wrapping_add(1);
+
+        if sim.thick_num == 1 {
+            sim.things.with_commands(|ctx, commands| {
+                // send_message(commands, "This is a long", &[], player);
+                send_message(commands, "This is a long, long long message, with lots of wordy words, and therefore it will hopefully wrap around. In fact, it also\n include\n new lines, \ttabs n shit", &[], player);
+            })
+        }
+
         let _span = tracing::info_span!("Advance-Step").entered();
         sim.things.write_pass(
             |_, _| true,

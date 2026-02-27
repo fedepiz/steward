@@ -88,7 +88,7 @@ pub(super) fn root<'a>(
                 });
             }
 
-            if data.is_panel_open(Panel::Messages) {
+            if !data.is_panel_open(Panel::Messages) {
                 gui.panel(|mut gui| {
                     gui.heading("Messages", 10.);
 
@@ -97,7 +97,7 @@ pub(super) fn root<'a>(
 
                     if let Some(msg_id) = data.selected_message.as_valid() {
                         let text = render_message(gui.arena(), things, msg_id);
-                        gui.multiline(text, 9., 9.);
+                        gui.multiline(text, 10., 9.);
                         gui.row(|mut gui| {
                             gui.label("Page 1/N");
                             if gui.button("Close") {

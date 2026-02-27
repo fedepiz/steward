@@ -188,7 +188,7 @@ async fn amain() {
             // Actuall draw to screen
             mq::clear_background(mq::LIGHTGRAY);
             board.draw(&draw_data, &sprite_atlas, &font);
-            gui_renderer.draw(gui_output.draw_list, &font);
+            gui_renderer.draw(&frame_arena, gui_output.draw_list, &font);
         }
         mq::next_frame().await;
     }
