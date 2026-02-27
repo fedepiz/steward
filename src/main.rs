@@ -6,14 +6,44 @@ mod things;
 
 use std::sync::{Arc, Mutex};
 
-use crate::build_ui::{Panel, UiData};
 use crate::{assets::*, things::*};
 use board::*;
 use gui::Gui;
 use macroquad::prelude as mq;
 use simulation::*;
+use strum::{EnumCount, EnumIter};
 use util::arena::Arena;
 use util::geom::*;
+
+#[derive(Default)]
+pub(crate) struct UiData {
+    pub selected_entity: ThingId,
+    pub open_panels: [bool; Panel::COUNT],
+    pub selected_message: ThingId,
+    pub is_paused: bool,
+}
+
+#[derive(Clone, Copy, EnumIter, EnumCount, Debug)]
+pub(crate) enum Panel {
+    Dummy,
+    Messages,
+}
+
+impl Default for Panel {
+    fn default() -> Self {
+        Self::Dummy
+    }
+}
+
+impl UiData {
+    pub fn is_panel_open(&self, panel: Panel) -> bool {
+        self.open_panels[panel as usize]
+    }
+
+    pub fn toggle_panel(&mut self, panel: Panel) {
+        self.open_panels[panel as usize] = !self.is_panel_open(panel);
+    }
+}
 
 fn main() {
     use tracing_subscriber::layer::SubscriberExt;
@@ -83,6 +113,7 @@ async fn amain() {
     board.set_camera(mq::vec2(600., 500.), 20.);
     let world_font = mq::load_ttf_font("assets/fonts/board.ttf").await.unwrap();
     let ui_font = mq::load_ttf_font("assets/fonts/ui_bold.ttf").await.unwrap();
+    let overlay_font = mq::load_ttf_font("assets/fonts/board.ttf").await.unwrap();
 
     let sprite_atlas =
         load_texture_atlas(&eternal_arena, &frame_arena, "assets/atlas/out/pawns").await;
@@ -164,10 +195,18 @@ async fn amain() {
             }
         };
 
+        let time_speed = if ui_data.is_paused {
+            0
+        } else if mq::is_key_down(mq::KeyCode::LeftShift) {
+            5
+        } else {
+            1
+        };
+
         // Having realeased the simulation, send off the request. This way, simulation could work in parallel with us
         let mut request = Request::default();
         request.delta = mq::get_frame_time();
-        request.advance_time = 1;
+        request.advance_time = time_speed;
         req_tx.send(request).unwrap();
 
         {
@@ -193,12 +232,33 @@ async fn amain() {
                 board.update_camera(translation, zoom);
             }
 
+            if mq::is_key_pressed(mq::KeyCode::Space) {
+                ui_data.is_paused = !ui_data.is_paused;
+            }
+
             draw_data.prepare();
 
             // Actuall draw to screen
             mq::clear_background(mq::LIGHTGRAY);
             board.draw(&draw_data, &sprite_atlas, &world_font);
             gui_renderer.draw(&frame_arena, gui_output.draw_list, &ui_font);
+            if time_speed == 0 {
+                draw_overlay_text(
+                    "Paused",
+                    mq::WHITE,
+                    Some(&overlay_font),
+                    100,
+                    mq::vec2(0.5, 0.1),
+                );
+            } else if time_speed > 1 {
+                draw_overlay_text(
+                    frame_arena.fmt(format_args!("Speed {time_speed}x")),
+                    mq::WHITE,
+                    Some(&overlay_font),
+                    100,
+                    mq::vec2(0.5, 0.1),
+                );
+            }
         }
         mq::next_frame().await;
     }
@@ -299,4 +359,31 @@ fn render_template_string<'a>(arena: &'a Arena, template: &str, params: &[&str])
     }
 
     buffer.into_bump_str()
+}
+
+fn draw_overlay_text(
+    text: &str,
+    color: mq::Color,
+    font: Option<&mq::Font>,
+    font_size: u16,
+    anchor: mq::Vec2,
+) {
+    let text_dims = mq::measure_text(text, font, font_size, 1.0);
+    let max_x = (mq::screen_width() - text_dims.width).max(0.0);
+    let max_y = (mq::screen_height() - text_dims.height).max(0.0);
+
+    let x = max_x * anchor.x;
+    let y = max_y * anchor.y + text_dims.offset_y;
+
+    mq::draw_text_ex(
+        text,
+        x,
+        y,
+        mq::TextParams {
+            font,
+            font_size: font_size as u16,
+            color,
+            ..Default::default()
+        },
+    );
 }

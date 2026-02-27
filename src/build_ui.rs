@@ -1,41 +1,11 @@
 use gui::*;
 use macroquad::prelude as mq;
-use strum::{EnumCount, EnumIter};
 use util::{
     arena::{AVec, Arena},
     geom::*,
 };
 
 use super::*;
-
-#[derive(Default)]
-pub(crate) struct UiData {
-    pub selected_entity: ThingId,
-    pub open_panels: [bool; Panel::COUNT],
-    pub selected_message: ThingId,
-}
-
-impl UiData {
-    pub fn is_panel_open(&self, panel: Panel) -> bool {
-        self.open_panels[panel as usize]
-    }
-
-    pub fn toggle_panel(&mut self, panel: Panel) {
-        self.open_panels[panel as usize] = !self.is_panel_open(panel);
-    }
-}
-
-#[derive(Clone, Copy, EnumIter, EnumCount, Debug)]
-pub enum Panel {
-    Dummy,
-    Messages,
-}
-
-impl Default for Panel {
-    fn default() -> Self {
-        Self::Dummy
-    }
-}
 
 pub(super) fn root<'a>(
     gui: &'a mut Gui,
