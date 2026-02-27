@@ -34,13 +34,26 @@ impl ThingId {
     }
 
     #[inline]
+    pub(crate) fn get_as_valid(self, ctx: &Things) -> Option<&Thing> {
+        self.as_valid().map(|x| x.get(ctx))
+    }
+
+    #[inline]
     pub(crate) fn slot(self) -> usize {
         self.slot as usize
+    }
+
+    #[inline]
+    pub(crate) fn get(self, things: &Things) -> &Thing {
+        &things[self]
     }
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug, EnumIter, EnumCount)]
 pub(crate) enum Flag {
+    // This flag indicates the thing requires an owner (in Link) to be valid, or else it
+    // will automatically despawn itselfs
+    MustBeOwned,
     IsLocation,
     IsSettlement,
     IsPerson,
@@ -48,6 +61,7 @@ pub(crate) enum Flag {
     Teleport,
     IsVisible,
     IsInside,
+    IsOrder,
     Test,
 }
 
@@ -58,11 +72,29 @@ pub(crate) enum Var {
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug, EnumIter, EnumCount)]
+pub(crate) enum Handle {
+    Type,
+}
+
+pub(crate) type HandleValue = u16;
+
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug, EnumIter, EnumCount)]
 pub(crate) enum Link {
+    Dummy,
+    // A link that, in combination with the flag MustBeOwned, specified dynamic lifetime for this
+    // thing. Used commonly for 'parts' of a whole
+    Owner,
     // Generic A -> B links
     A,
     B,
     Destination,
+    Order,
+}
+
+impl Default for Link {
+    fn default() -> Self {
+        Link::Dummy
+    }
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug, EnumIter, EnumCount)]
@@ -90,6 +122,7 @@ struct ListThingData {
 
 const NUM_FLAGS: usize = Flag::COUNT;
 const NUM_VARS: usize = Var::COUNT;
+const NUM_HANDLES: usize = Handle::COUNT;
 const NUM_LINKS: usize = Link::COUNT;
 const NUM_LISTS: usize = List::COUNT;
 
@@ -103,6 +136,7 @@ pub(crate) struct Thing {
     sprite: &'static str,
     flags: BitSet<NUM_FLAGS>,
     vars: [f32; NUM_VARS],
+    handles: [u16; NUM_HANDLES],
     links: [ThingId; NUM_LINKS],
     lists: [ListThingData; NUM_LISTS],
     pub(crate) body: Body,
@@ -155,8 +189,23 @@ impl Thing {
     }
 
     #[inline]
+    pub(crate) fn set_handle(&mut self, handle: Handle, value: HandleValue) {
+        self.handles[handle as usize] = value;
+    }
+
+    #[inline]
+    pub(crate) fn handle(&self, handle: Handle) -> HandleValue {
+        self.handles[handle as usize]
+    }
+
+    #[inline]
     pub(crate) fn set_link(&mut self, link: Link, value: ThingId) {
         self.links[link as usize] = value;
+    }
+
+    #[inline]
+    pub(crate) fn clear_link(&mut self, link: Link) {
+        self.set_link(link, ThingId::null());
     }
 
     #[inline]
@@ -296,6 +345,10 @@ impl Things {
         let end = &mut self.entries[self.meta.free_list_tail.slot as usize];
         end.next_free = id;
         self.meta.free_list_tail = id;
+    }
+
+    pub(crate) fn exists(&self, id: ThingId) -> bool {
+        !self[id].id.is_null()
     }
 
     pub(crate) fn set_tag(&mut self, tag: &'static str, id: ThingId) {
@@ -601,6 +654,17 @@ impl Things {
         }
 
         for spawn in commands.spawns {
+            let (link, parent, mode) = spawn.to_link;
+            match mode {
+                LinkCollisionMode::DoNotCreate => {
+                    // Do not spawn if we are in "do not create" mode
+                    if self[parent].link(link) != ThingId::null() {
+                        return;
+                    }
+                }
+                LinkCollisionMode::Replace => {}
+            };
+
             let thing = self.spawn();
             let id = thing.id;
             *thing = spawn.thing;
@@ -610,6 +674,12 @@ impl Things {
             let (list, parent) = spawn.to_list;
             if !parent.is_null() {
                 self.add_to_list(list, parent, id);
+            }
+
+            // Link to target
+            let (link, parent, _) = spawn.to_link;
+            if !parent.is_null() {
+                self[parent].set_link(link, id);
             }
         }
     }
@@ -657,6 +727,19 @@ impl Commands {
         });
         &mut self.spawns.last_mut().unwrap().thing
     }
+
+    pub fn spawn_and_set_link(
+        &mut self,
+        link: Link,
+        parent: ThingId,
+        mode: LinkCollisionMode,
+    ) -> &mut Thing {
+        self.spawns.push(Spawn {
+            to_link: (link, parent, mode),
+            ..Default::default()
+        });
+        &mut self.spawns.last_mut().unwrap().thing
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -670,4 +753,17 @@ struct ListMutation {
 struct Spawn {
     thing: Thing,
     to_list: (List, ThingId),
+    to_link: (Link, ThingId, LinkCollisionMode),
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub(crate) enum LinkCollisionMode {
+    Replace,
+    DoNotCreate,
+}
+
+impl Default for LinkCollisionMode {
+    fn default() -> Self {
+        LinkCollisionMode::Replace
+    }
 }

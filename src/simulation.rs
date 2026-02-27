@@ -327,6 +327,35 @@ pub(crate) struct Request {
     pub advance_time: usize,
 }
 
+#[derive(Default, Clone, Copy)]
+struct OrderType {
+    id: &'static str,
+    completion_message: &'static str,
+    move_to_destination: bool,
+    wants_to_be_inside: bool,
+}
+
+const ORDER_TYPES: [OrderType; 3] = [
+    OrderType {
+        id: "nothing",
+        completion_message: "THIS IS A DUMMMY ORDER TYPE",
+        move_to_destination: false,
+        wants_to_be_inside: false,
+    },
+    OrderType {
+        id: "move_to",
+        completion_message: "#0 has arrived as #1",
+        move_to_destination: true,
+        wants_to_be_inside: false,
+    },
+    OrderType {
+        id: "enter",
+        completion_message: "#0 has entered #1",
+        move_to_destination: true,
+        wants_to_be_inside: true,
+    },
+];
+
 #[derive(Default)]
 pub(crate) struct Response {
     pub messages: Vec<ThingId>,
@@ -343,16 +372,36 @@ pub(crate) fn tick(sim: &mut Simulation, request: Request) {
         sim.things.write_pass(
             |_, _| true,
             |ctx, this, commands| {
-                // As a test, send people to din drust
-                if this.flag(Flag::IsPerson) && !this.flag(Flag::Test) {
-                    this.set_flag(Flag::Test, true);
-                    this.set_link(Link::Destination, ctx.lookup_tag("din_drust"));
-                    // Whenever we update the destination, we also restart our movement.
-                    this.set_var(Var::MovementTime, 0.);
+                // Automatic destruction of dependent objects
+                if this.flag(Flag::MustBeOwned) && !ctx.exists(this.link(Link::Owner)) {
+                    commands.despawn(this.id());
                 }
 
-                progress_travel(ctx, this, player, commands, &mut sim.nav_cache);
-                update_body_of_local_things(ctx, this, request.delta);
+                if this.flag(Flag::IsPerson) {
+                    // As a test, order people to din drust
+                    if !this.flag(Flag::Test) {
+                        this.set_flag(Flag::Test, true);
+
+                        let destination = ctx.lookup_tag("din_drust");
+                        let order = commands.spawn_and_set_link(
+                            Link::Order,
+                            this.id(),
+                            LinkCollisionMode::DoNotCreate,
+                        );
+                        order.set_flag(Flag::IsOrder, true);
+                        order.set_handle(Handle::Type, 1);
+                        order.set_link(Link::Destination, destination);
+                        assign_ownership(order, this.id());
+                    }
+
+                    // Order completion
+                    check_order_completion(ctx, this, commands, player);
+
+                    // Movement
+                    update_destination(ctx, this);
+                    progress_travel(ctx, this, commands, &mut sim.nav_cache);
+                    update_body_of_local_things(ctx, this, request.delta);
+                }
             },
         );
     }
@@ -369,10 +418,59 @@ pub(crate) fn tick(sim: &mut Simulation, request: Request) {
     sim.response = response
 }
 
+fn check_order_completion(
+    ctx: &Things,
+    this: &mut Thing,
+    commands: &mut Commands,
+    player: ThingId,
+) {
+    if let Some(order) = this.link(Link::Order).get_as_valid(ctx) {
+        let order_type = &ORDER_TYPES[order.handle(Handle::Type) as usize];
+        let location = this.parent(List::AtLocation);
+        let arrived = location == order.link(Link::Destination);
+        if arrived {
+            // Order completed
+            commands.despawn(order.id());
+            this.clear_link(Link::Order);
+            // Send a message
+            send_message(
+                commands,
+                order_type.completion_message,
+                &[this.id(), location],
+                player,
+            );
+        }
+    }
+}
+
+fn update_destination(ctx: &Things, this: &mut Thing) {
+    // Take the current destination, and the destination from other sources
+    let current_destination = this.link(Link::Destination);
+
+    let order = this.link(Link::Order).get(ctx);
+    let order_type = &ORDER_TYPES[order.handle(Handle::Type) as usize];
+
+    let ordered_destination = if order_type.move_to_destination {
+        order.link(Link::Destination)
+    } else {
+        ThingId::null()
+    };
+
+    // If the current destination is different then the ordered one, we should
+    // change our destination and reset the movmement timer, and go 'outside'
+    if current_destination != ordered_destination {
+        this.set_link(Link::Destination, ordered_destination);
+        this.set_var(Var::MovementTime, 0.);
+    }
+
+    // Determine insideness
+    let is_inside = order_type.wants_to_be_inside && current_destination == ordered_destination;
+    this.set_flag(Flag::IsInside, is_inside);
+}
+
 fn progress_travel(
     ctx: &Things,
     this: &mut Thing,
-    player: ThingId,
     commands: &mut Commands,
     nav_cache: &mut NavCache,
 ) {
@@ -400,14 +498,6 @@ fn progress_travel(
                     // We moved enough! Reset movement time, transfer location
                     this.set_var(Var::MovementTime, 0.);
                     commands.add_to_list(List::AtLocation, next_step, this.id());
-
-                    // If we have arrived at the final destination, notify with am essage
-                    if next_step == destination {
-                        let message = commands.spawn_and_append_to_list(List::Messages, player);
-                        message.set_name("#0 has arrived at #1");
-                        message.set_link(Link::A, this.id());
-                        message.set_link(Link::B, next_step);
-                    }
                 } else {
                     // Otherwise, just step up the movement time
                     this.set_var(Var::MovementTime, mov_time + 1.);
@@ -456,4 +546,25 @@ fn pos_around(body: Body, idx: usize, len: usize) -> V2 {
     let cx = body.x + angle.cos() * radius;
     let cy = body.y + angle.sin() * radius;
     V2::new(cx, cy)
+}
+
+fn send_message(
+    commands: &mut Commands,
+    text: &'static str,
+    params: &[ThingId],
+    recepient: ThingId,
+) {
+    const LINKS: [Link; 2] = [Link::A, Link::B];
+    assert!(params.len() <= LINKS.len());
+
+    let message = commands.spawn_and_append_to_list(List::Messages, recepient);
+    message.set_name(text);
+    for (&link, &param) in LINKS.iter().zip(params) {
+        message.set_link(link, param);
+    }
+}
+
+fn assign_ownership(this: &mut Thing, owner: ThingId) {
+    this.set_flag(Flag::MustBeOwned, true);
+    this.set_link(Link::Owner, owner);
 }
