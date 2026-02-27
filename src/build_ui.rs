@@ -28,7 +28,7 @@ pub(super) fn root<'a>(
             let mut gui = gui.plus();
 
             gui.panel(|mut gui| {
-                gui.heading("Test Panel", 4.);
+                gui.heading("Main Panel", 4.);
 
                 if gui.button("Messages") {
                     commands.push(Command {
@@ -38,13 +38,7 @@ pub(super) fn root<'a>(
                     });
                 }
 
-                if gui.button("Goodbye") {
-                    println!("B");
-                }
-
-                if gui.button_sized("X##hello", 1.) {
-                    println!("X")
-                }
+                if gui.button("Orders") {}
             });
 
             if !data.selected_entity.is_null() {
@@ -93,6 +87,7 @@ pub(super) fn root<'a>(
                 });
             }
 
+            // The message panel
             if data.is_panel_open(Panel::Messages) {
                 gui.panel(|mut gui| {
                     gui.heading("Messages", 10.);
@@ -100,9 +95,10 @@ pub(super) fn root<'a>(
                     gui.inner().screen_pos(V2::new(1., 0.5));
                     gui.inner().center_on_growth_axis(false);
 
+                    // If we have a message selected, we are gonna show the blow-up version of the message.
                     if let Some(msg_id) = data.selected_message.as_valid() {
                         let text = render_message(gui.arena(), things, msg_id);
-                        gui.multiline(text, 10., 10.);
+                        gui.multiline(text, 10., UiData::NUM_MESSAGE_PER_PAGE as f32);
                         gui.row(|mut gui| {
                             if gui.button("Close") {
                                 commands.push(Command::with_thing(
@@ -120,16 +116,22 @@ pub(super) fn root<'a>(
                             }
                         });
                     } else {
+                        // Otherwise, show the messages on the selected page
                         let messages = gui
                             .arena()
                             .alloc_slice_iter(things.iter_list(List::Messages, player));
+                        messages.reverse();
 
-                        for i in 0..10 {
+                        let message_start =
+                            (data.message_page.saturating_sub(1)) * UiData::NUM_MESSAGE_PER_PAGE;
+                        for i in message_start..message_start + UiData::NUM_MESSAGE_PER_PAGE {
                             if let Some(msg_id) = messages.get(i).copied() {
                                 gui.row(|mut gui| {
+                                    // Each message has text...
                                     let text = render_message(gui.arena(), things, msg_id);
                                     gui.line_sized(text, 8.);
 
+                                    // ... a button for expanding the message...
                                     let btn_text =
                                         gui.arena().fmt(format_args!("?##info_msg_{}", i));
                                     if gui.button_sized(btn_text, 1.) {
@@ -138,7 +140,7 @@ pub(super) fn root<'a>(
                                             msg_id,
                                         ));
                                     }
-
+                                    // ... and a button for deleting the message.
                                     let btn_text =
                                         gui.arena().fmt(format_args!("X##del_msg_{}", i));
                                     if gui.button_sized(btn_text, 1.) {
@@ -149,16 +151,32 @@ pub(super) fn root<'a>(
                                     }
                                 });
                             } else {
-                                gui.line_sized("", 10.);
+                                // Otherwise we have just a blank line
+                                gui.line_sized("", 0.);
                             }
                         }
+
+                        // This is the footer for when we are looking at the message list.
                         gui.row(|mut gui| {
-                            gui.label("Page 1/N");
+                            // Page counter
+                            let text = gui.arena().fmt(format_args!(
+                                "{}/{}##msg_page_counter",
+                                data.message_page, data.num_message_pages
+                            ));
+                            gui.label(text);
 
-                            if gui.button_sized("<", 1.) {}
-                            if gui.button_sized(">", 1.) {}
+                            // Page selectors
+                            if gui.button_sized("<##msg_page_back", 1.) {
+                                commands
+                                    .push(Command::with_num(CommandKind::ChangeMessagePage, -1.));
+                            }
+                            if gui.button_sized(">##msg_page_next", 1.) {
+                                commands
+                                    .push(Command::with_num(CommandKind::ChangeMessagePage, 1.));
+                            }
 
-                            if gui.button_sized("Delete All", 3.) {
+                            // And a button to clear all messages
+                            if gui.button_sized("Delete All##msg_delete_all", 3.) {
                                 commands.push(Command {
                                     kind: CommandKind::DespawnAllInList,
                                     thing: player,

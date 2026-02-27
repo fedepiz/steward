@@ -358,7 +358,13 @@ impl GuiRenderer {
         }
     }
 
-    pub(crate) fn draw(&mut self, scratch: &Arena, draw_list: &[gui::Draw], font: &mq::Font) {
+    pub(crate) fn draw(
+        &mut self,
+        scratch: &Arena,
+        draw_list: &[gui::Draw],
+        font: &mq::Font,
+        icons: &TextureAtlas,
+    ) {
         let mq_color = |x: gui::RGBA| mq::Color::new(x.r, x.g, x.b, x.a);
 
         mq::gl_use_default_material();
@@ -420,17 +426,33 @@ impl GuiRenderer {
                 };
 
                 for part in parts.fragments {
-                    mq::draw_text_ex(
-                        part.text,
-                        part.pos.x + align_x,
-                        part.pos.y + align_y,
-                        mq::TextParams {
-                            font: Some(font),
-                            font_size: text.size,
-                            color: mq_color(text.color),
-                            ..Default::default()
-                        },
-                    );
+                    if !part.is_sprite {
+                        mq::draw_text_ex(
+                            part.text,
+                            part.pos.x + align_x,
+                            part.pos.y + align_y,
+                            mq::TextParams {
+                                font: Some(font),
+                                font_size: text.size,
+                                color: mq_color(text.color),
+                                ..Default::default()
+                            },
+                        );
+                    } else {
+                        let source = icons.get(part.text);
+                        let size = part.width as f32;
+                        mq::draw_texture_ex(
+                            icons.texture(),
+                            part.pos.x + align_x,
+                            part.pos.y + align_y,
+                            mq::WHITE,
+                            mq::DrawTextureParams {
+                                dest_size: Some(mq::vec2(size, size)),
+                                source: Some(source),
+                                ..Default::default()
+                            },
+                        );
+                    }
                 }
             }
         }
@@ -440,6 +462,8 @@ impl GuiRenderer {
 struct Fragment<'a> {
     text: &'a str,
     pos: V2,
+    is_sprite: bool,
+    width: f32,
 }
 
 #[derive(Default)]
@@ -469,7 +493,12 @@ fn wrap_text<'a>(
     let offset_y = measure.offset_y;
     let line_height = measure.height;
 
+    let mut skip_next = false;
     for word in words(text) {
+        if skip_next {
+            skip_next = false;
+            continue;
+        }
         let is_newline = word == "\n";
         if is_newline {
             // New line
@@ -482,7 +511,20 @@ fn wrap_text<'a>(
             cursor.y += line_advance;
             line_count += 1;
         } else {
-            let measure = mq::measure_text(word, Some(font), font_size, 1.);
+            let is_sprite = word.starts_with("$sprite$");
+            let word = if is_sprite {
+                word.split_terminator('$').skip(2).next().unwrap_or("")
+            } else {
+                word
+            };
+
+            const SPRITE_SCALE: f32 = 2.;
+            let width = if is_sprite {
+                font_size as f32 * SPRITE_SCALE
+            } else {
+                mq::measure_text(word, Some(font), font_size, 1.).width
+            };
+
             if cursor.x + measure.width > bounds.x + bounds.w {
                 // New line
                 if !multiline {
@@ -497,11 +539,19 @@ fn wrap_text<'a>(
             if cursor.y > bounds.y + bounds.h {
                 break;
             }
+            let y = if is_sprite {
+                -width * (SPRITE_SCALE - 1.) / 4.
+            } else {
+                offset_y
+            };
             fragments.push(Fragment {
                 text: word,
-                pos: cursor + V2::new(0., offset_y),
+                pos: cursor + V2::new(0., y),
+                is_sprite,
+                width,
             });
-            cursor.x += measure.width;
+            skip_next = is_sprite;
+            cursor.x += width;
         }
     }
 
@@ -523,21 +573,23 @@ fn wrap_text<'a>(
             .unwrap_or("");
 
         if !ellipsis.is_empty() {
-            let ellipsis_width = mq::measure_text(ellipsis, Some(font), font_size, 1.).width;
+            let width = mq::measure_text(ellipsis, Some(font), font_size, 1.).width;
 
-            while cursor.x + ellipsis_width > right {
+            while cursor.x + width > right {
                 let Some(last) = fragments.pop() else {
                     break;
                 };
                 cursor.x -= mq::measure_text(last.text, Some(font), font_size, 1.).width;
             }
 
-            if cursor.x + ellipsis_width <= right {
+            if cursor.x + width <= right {
                 fragments.push(Fragment {
                     text: ellipsis,
                     pos: cursor + V2::new(0., offset_y),
+                    is_sprite: false,
+                    width,
                 });
-                cursor.x += ellipsis_width;
+                cursor.x += width;
             }
         }
     }

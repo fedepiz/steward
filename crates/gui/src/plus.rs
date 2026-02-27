@@ -12,6 +12,7 @@ pub mod style {
     pub const PULSE: f32 = 0.25;
     pub const ELEM_W: f32 = 50.;
     pub const ELEM_H: f32 = 50.;
+    pub const ELEM_TEXT_SIZE: u16 = 22;
 }
 
 use self::style::*;
@@ -66,7 +67,7 @@ impl<'a, 'c> GuiPlus<'a, 'c> {
             gui.pixel_size(V2::new(ELEM_W * w, ELEM_H));
             gui.margin(MARGIN);
 
-            gui.text(text, 22, RGBA::BLACK, [true, true]);
+            gui.text(text, ELEM_TEXT_SIZE, RGBA::BLACK, [true, true]);
             gui.fingerprint_from_text();
 
             if gui.interaction().hovered && !gui.interaction().down {
@@ -92,7 +93,7 @@ impl<'a, 'c> GuiPlus<'a, 'c> {
         self.0.widget(|gui| {
             gui.pixel_size(V2::new(ELEM_W * w, ELEM_H));
             gui.margin(MARGIN);
-            gui.text(text, 22, RGBA::BLACK, [true, true]);
+            gui.text(text, ELEM_TEXT_SIZE, RGBA::BLACK, [true, true]);
         })
     }
 
@@ -104,7 +105,7 @@ impl<'a, 'c> GuiPlus<'a, 'c> {
         self.0.widget(|gui| {
             gui.pixel_size(V2::new(ELEM_W * w, ELEM_H));
             gui.margin(MARGIN);
-            gui.text(text, 22, RGBA::BLACK, [false, true]);
+            gui.text(text, ELEM_TEXT_SIZE, RGBA::BLACK, [false, true]);
         })
     }
 
@@ -112,7 +113,7 @@ impl<'a, 'c> GuiPlus<'a, 'c> {
         self.0.widget(|gui| {
             gui.pixel_size(V2::new(ELEM_W * w, ELEM_H * h));
             gui.margin(MARGIN);
-            gui.text(text, 22, RGBA::BLACK, [false, false]);
+            gui.text(text, ELEM_TEXT_SIZE, RGBA::BLACK, [false, false]);
         });
     }
 }

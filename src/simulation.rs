@@ -361,9 +361,11 @@ pub(crate) fn tick(sim: &mut Simulation, request: Request) {
         sim.thick_num = sim.thick_num.wrapping_add(1);
 
         if sim.thick_num == 1 {
-            sim.things.with_commands(|_, commands| {
-                send_message(commands, "This is a long, long long message, with lots of wordy words, and therefore it will hopefully wrap around. In fact, it also\n include\n new lines, \ttabs n shit", &[], player);
+            for _ in 0..20 {
+                sim.things.with_commands(|_, commands| {
+                send_message(commands, "This is a long, $sprite$soldier :3 long long message, with lots of wordy words, and $sprite$celtic_town  it will hopefully wrap around. In fact, it also\n include\n new lines, \ttabs n shit", &[], player);
             })
+            }
         }
 
         let _span = tracing::info_span!("Advance-Step").entered();

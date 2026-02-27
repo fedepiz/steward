@@ -21,6 +21,12 @@ pub(crate) struct UiData {
     pub open_panels: [bool; Panel::COUNT],
     pub selected_message: ThingId,
     pub is_paused: bool,
+    pub message_page: usize,
+    pub num_message_pages: usize,
+}
+
+impl UiData {
+    const NUM_MESSAGE_PER_PAGE: usize = 10;
 }
 
 #[derive(Clone, Copy, EnumIter, EnumCount, Debug)]
@@ -69,6 +75,7 @@ struct Command {
     thing: ThingId,
     panel: Panel,
     list: List,
+    num: f32,
 }
 
 impl Command {
@@ -76,6 +83,14 @@ impl Command {
         Self {
             kind,
             thing,
+            ..Default::default()
+        }
+    }
+
+    fn with_num(kind: CommandKind, num: f32) -> Self {
+        Self {
+            kind,
+            num,
             ..Default::default()
         }
     }
@@ -89,6 +104,7 @@ enum CommandKind {
     SetSelectedEntity,
     SetSelectedMessage,
     TogglePanel,
+    ChangeMessagePage,
 }
 
 impl Default for CommandKind {
@@ -162,6 +178,30 @@ async fn amain() {
             let _span = tracing::info_span!("Locked Sim").entered();
             let mut commands = frame_arena.new_vec_with_capacity(10);
 
+            // Fix up ui data
+            {
+                let player = sim.things.lookup_tag("player");
+
+                // Get rid of stale thing ids
+                if !sim.things.exists(ui_data.selected_entity) {
+                    ui_data.selected_entity = ThingId::null()
+                }
+                if !sim.things.exists(ui_data.selected_message) {
+                    ui_data.selected_message = ThingId::null()
+                }
+
+                // Fix the number of pages
+                ui_data.num_message_pages = sim
+                    .things
+                    .iter_list(List::Messages, player)
+                    .count()
+                    .saturating_sub(1)
+                    / UiData::NUM_MESSAGE_PER_PAGE
+                    + 1;
+
+                ui_data.message_page = ui_data.message_page.clamp(1, ui_data.num_message_pages);
+            }
+
             gui_output =
                 build_ui::root(&mut gui, &frame_arena, &sim.things, &ui_data, &mut commands);
 
@@ -191,6 +231,10 @@ async fn amain() {
                     CommandKind::SetSelectedEntity => ui_data.selected_entity = command.thing,
                     CommandKind::SetSelectedMessage => ui_data.selected_message = command.thing,
                     CommandKind::TogglePanel => ui_data.toggle_panel(command.panel),
+                    CommandKind::ChangeMessagePage => {
+                        ui_data.message_page =
+                            (ui_data.message_page as i32 + command.num as i32).max(0) as usize
+                    }
                 }
             }
         };
@@ -235,13 +279,16 @@ async fn amain() {
             if mq::is_key_pressed(mq::KeyCode::Space) {
                 ui_data.is_paused = !ui_data.is_paused;
             }
+            if mq::is_key_pressed(mq::KeyCode::M) {
+                ui_data.toggle_panel(Panel::Messages);
+            }
 
             draw_data.prepare();
 
             // Actuall draw to screen
             mq::clear_background(mq::LIGHTGRAY);
             board.draw(&draw_data, &sprite_atlas, &world_font);
-            gui_renderer.draw(&frame_arena, gui_output.draw_list, &ui_font);
+            gui_renderer.draw(&frame_arena, gui_output.draw_list, &ui_font, &sprite_atlas);
             if time_speed == 0 {
                 draw_overlay_text(
                     "Paused",
