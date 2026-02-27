@@ -39,6 +39,14 @@ impl Arena {
     }
 
     #[inline]
+    pub fn alloc_slice_iter<T>(
+        &self,
+        src: impl Iterator<Item = T> + ExactSizeIterator,
+    ) -> &mut [T] {
+        self.0.alloc_slice_fill_iter(src)
+    }
+
+    #[inline]
     pub fn alloc_str(&self, src: &str) -> &str {
         self.0.alloc_str(src)
     }

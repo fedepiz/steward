@@ -24,6 +24,7 @@ pub struct Input {
     pub mouse_pressed: bool,
 }
 
+#[derive(Default)]
 pub struct Output<'a> {
     pub draw_list: &'a [Draw<'a>],
     pub is_mouse_over_ui: bool,
@@ -228,6 +229,7 @@ impl<'a> Frame<'a> {
     }
 
     fn draw(mut self, screen_size: V2) -> (&'a [Widget<'a>], &'a [Draw<'a>]) {
+        let _span = tracing::info_span!("gui::draw").entered();
         let widths = self.calculate_sizes(0);
         let heights = self.calculate_sizes(1);
 

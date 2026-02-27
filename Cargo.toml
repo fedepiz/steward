@@ -16,6 +16,11 @@ pathfinding = { version = "*" }
 strum = { version = "*", features = ["derive"] }
 rayon = { version = "*" }
 
+tracing = "*"
+tracing-subscriber = "*"
+tracing-tracy = { version = "*", default-features = false }
+# tracing-tracy = { version = "*" }
+
 csv = { path = "crates/csv"}
 gui = { path = "crates/gui" }
 util = { path = "crates/util" }
@@ -26,6 +31,11 @@ num_enum = { workspace = true }
 pathfinding = { workspace = true }
 strum = { workspace = true }
 rayon = { workspace = true }
+
+
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+tracing-tracy = { workspace = true }
 
 csv = { workspace = true }
 gui = { workspace = true }

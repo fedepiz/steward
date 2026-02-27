@@ -42,6 +42,13 @@ impl<'a, 'c> GuiPlus<'a, 'c> {
         });
     }
 
+    pub fn row(&mut self, body: impl FnOnce(GuiPlus)) {
+        self.0.widget(|gui| {
+            gui.horizontal_growing();
+            body(GuiPlus::wrap(gui));
+        });
+    }
+
     pub fn heading(&mut self, text: &'a str, width: f32) {
         self.0.widget(|gui| {
             gui.margin(MARGIN);
@@ -78,14 +85,26 @@ impl<'a, 'c> GuiPlus<'a, 'c> {
     }
 
     pub fn label(&mut self, text: &'a str) {
-        self.label_sized(text, 2., 1.)
+        self.label_sized(text, 2.)
     }
 
-    pub fn label_sized(&mut self, text: &'a str, w: f32, h: f32) {
+    pub fn label_sized(&mut self, text: &'a str, w: f32) {
         self.0.widget(|gui| {
-            gui.pixel_size(V2::new(ELEM_W * w, ELEM_H * h));
+            gui.pixel_size(V2::new(ELEM_W * w, ELEM_H));
             gui.margin(MARGIN);
             gui.text(text, 22, RGBA::BLACK, [true, true]);
+        })
+    }
+
+    pub fn line(&mut self, text: &'a str) {
+        self.line_sized(text, 2.)
+    }
+
+    pub fn line_sized(&mut self, text: &'a str, w: f32) {
+        self.0.widget(|gui| {
+            gui.pixel_size(V2::new(ELEM_W * w, ELEM_H));
+            gui.margin(MARGIN);
+            gui.text(text, 22, RGBA::BLACK, [false, true]);
         })
     }
 }
