@@ -1,10 +1,12 @@
 mod assets;
 mod board;
+mod build_ui;
 mod simulation;
 mod things;
 
 use std::sync::{Arc, Mutex};
 
+use crate::build_ui::{Panel, UiData};
 use crate::{assets::*, things::*};
 use board::*;
 use gui::Gui;
@@ -35,13 +37,26 @@ fn main() {
 struct Command {
     kind: CommandKind,
     thing: ThingId,
+    panel: Panel,
+}
+
+impl Command {
+    fn with_thing(kind: CommandKind, thing: ThingId) -> Self {
+        Self {
+            kind,
+            thing,
+            ..Default::default()
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug)]
 enum CommandKind {
     Nothing,
     Despawn,
-    SetSelected,
+    SetSelectedEntity,
+    SetSelectedMessage,
+    TogglePanel,
 }
 
 impl Default for CommandKind {
@@ -65,8 +80,6 @@ async fn amain() {
     let mut board = Board::new(&frame_arena);
     board.set_camera(mq::vec2(600., 500.), 20.);
     let font = mq::load_ttf_font("assets/fonts/board.ttf").await.unwrap();
-
-    let mut selected_id = ThingId::default();
 
     let sprite_atlas =
         load_texture_atlas(&eternal_arena, &frame_arena, "assets/atlas/out/pawns").await;
@@ -96,6 +109,8 @@ async fn amain() {
         });
     }
 
+    let mut ui_data = UiData::default();
+
     loop {
         tracing_tracy::client::frame_mark();
         frame_arena.reset();
@@ -109,41 +124,39 @@ async fn amain() {
 
         {
             // This part "locks" the simulation
-            let mut sim = sim.lock().unwrap();
+            let sim = &mut *sim.lock().unwrap();
             let _span = tracing::info_span!("Locked Sim").entered();
-            let mut command = Command::default();
+            let mut commands = frame_arena.new_vec_with_capacity(10);
 
-            gui_output = {
-                let ui_data = build_ui::UiData {
-                    selected_id,
-                    messages: &sim.response.messages,
-                    ..Default::default()
-                };
-                build_ui::root(&mut gui, &frame_arena, &sim.things, &ui_data, &mut command)
-            };
+            gui_output =
+                build_ui::root(&mut gui, &frame_arena, &sim.things, &ui_data, &mut commands);
 
-            render_things(&mut draw_data, &sim.things, selected_id);
+            render_things(&mut draw_data, &sim.things, ui_data.selected_entity);
 
             if !gui_output.is_mouse_over_ui && mq::is_mouse_button_pressed(mq::MouseButton::Left) {
-                command.kind = CommandKind::SetSelected;
-                command.thing = board.hovered_id();
+                commands.push(Command::with_thing(
+                    CommandKind::SetSelectedEntity,
+                    board.hovered_id(),
+                ));
             }
 
             // Perform commands
-            match command.kind {
-                CommandKind::Nothing => {}
-                CommandKind::Despawn => {
-                    sim.things.despawn(command.thing);
+            for command in commands {
+                match command.kind {
+                    CommandKind::Nothing => {}
+                    CommandKind::Despawn => {
+                        sim.things.despawn(command.thing);
+                    }
+                    CommandKind::SetSelectedEntity => ui_data.selected_entity = command.thing,
+                    CommandKind::SetSelectedMessage => ui_data.selected_message = command.thing,
+                    CommandKind::TogglePanel => ui_data.toggle_panel(command.panel),
                 }
-                CommandKind::SetSelected => selected_id = command.thing,
             }
         };
 
         // Having realeased the simulation, send off the request. This way, simulation could work in parallel with us
         let mut request = Request::default();
         request.delta = mq::get_frame_time();
-        request.message_first = 0;
-        request.message_count = 10;
         request.advance_time = 1;
         req_tx.send(request).unwrap();
 
@@ -242,96 +255,6 @@ fn render_things(draw_data: &mut DrawData, things: &Things, selected_id: ThingId
             }
         }
     });
-}
-
-mod build_ui {
-    use gui::*;
-    use macroquad::prelude as mq;
-    use util::{arena::Arena, geom::*};
-
-    use super::*;
-
-    #[derive(Default)]
-    pub struct UiData<'a> {
-        pub selected_id: ThingId,
-        pub messages: &'a [ThingId],
-    }
-
-    pub(super) fn root<'a>(
-        gui: &'a mut Gui,
-        arena: &'a Arena,
-        things: &Things,
-        data: &UiData,
-        command: &mut Command,
-    ) -> Output<'a> {
-        gui.frame(
-            arena,
-            Input {
-                screen_size: V2::new(mq::screen_width(), mq::screen_height()),
-                mouse_pos: mq::mouse_position().into(),
-                mouse_down: mq::is_mouse_button_down(mq::MouseButton::Left),
-                mouse_pressed: mq::is_mouse_button_pressed(mq::MouseButton::Left),
-            },
-            |gui| {
-                let mut gui = gui.plus();
-
-                gui.panel(|mut gui| {
-                    gui.heading("Test Panel", 4.);
-
-                    if gui.button("Hello") {
-                        println!("A");
-                    }
-
-                    if gui.button("Goodbye") {
-                        println!("B");
-                    }
-
-                    if gui.button_sized("X##hello", 1., 1.) {
-                        println!("X")
-                    }
-                });
-
-                if !data.selected_id.is_null() {
-                    let this = &things[data.selected_id];
-                    gui.panel(|mut gui| {
-                        gui.inner().center_on_growth_axis(false);
-                        gui.inner().screen_pos(V2::new(0., 0.5));
-                        gui.heading("Selected Entity", 6.);
-
-                        gui.label(gui.arena().fmt(format_args!("Name: {}", this.name())));
-                    });
-                }
-
-                if !data.messages.is_empty() {
-                    gui.panel(|mut gui| {
-                        gui.heading("Messages", 10.);
-
-                        gui.inner().screen_pos(V2::new(1., 0.5));
-                        gui.inner().center_on_growth_axis(false);
-
-                        for i in 0..10 {
-                            if let Some(msg_id) = data.messages.get(i).copied() {
-                                gui.row(|mut gui| {
-                                    let text = render_message(gui.arena(), things, msg_id);
-                                    gui.line_sized(text, 9.);
-
-                                    let btn_text =
-                                        gui.arena().fmt(format_args!("X##del_msg_{}", i));
-
-                                    if gui.button_sized(btn_text, 1., 1.) {
-                                        command.kind = CommandKind::Despawn;
-                                        command.thing = msg_id;
-                                    }
-                                });
-                            } else {
-                                gui.label("");
-                            }
-                        }
-                    });
-                }
-            },
-        )
-    }
 }
 
 fn render_message<'a>(arena: &'a Arena, ctx: &Things, message: ThingId) -> &'a str {

@@ -8,7 +8,6 @@ pub(crate) struct Simulation {
     pub thick_num: u64,
     pub things: Things,
     nav_cache: NavCache,
-    pub response: Response,
 }
 
 struct NavCacheBuilder {
@@ -216,7 +215,6 @@ pub(crate) fn setup(scratch: &Arena) -> Simulation {
         thick_num: 0,
         things,
         nav_cache,
-        response: Default::default(),
     }
 }
 
@@ -321,9 +319,6 @@ fn index_in_list(ctx: &Things, list: List, this: &Thing) -> Option<(ThingId, usi
 #[derive(Default)]
 pub(crate) struct Request {
     pub delta: f32, // Delta time, for animation
-    // First and last message we want to see
-    pub message_first: usize,
-    pub message_count: usize,
     pub advance_time: usize,
 }
 
@@ -355,11 +350,6 @@ const ORDER_TYPES: [OrderType; 3] = [
         wants_to_be_inside: true,
     },
 ];
-
-#[derive(Default)]
-pub(crate) struct Response {
-    pub messages: Vec<ThingId>,
-}
 
 pub(crate) fn tick(sim: &mut Simulation, request: Request) {
     let _span = tracing::info_span!("Tick").entered();
@@ -405,17 +395,6 @@ pub(crate) fn tick(sim: &mut Simulation, request: Request) {
             },
         );
     }
-
-    let mut response = Response::default();
-
-    response.messages.extend(
-        sim.things
-            .iter_list(List::Messages, player)
-            .skip(request.message_first)
-            .take(request.message_count),
-    );
-
-    sim.response = response
 }
 
 fn check_order_completion(

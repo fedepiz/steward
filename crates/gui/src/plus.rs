@@ -10,8 +10,8 @@ pub mod style {
     pub const SHADOW: f32 = 1.2;
     pub const BORDER: RGBA = RGBA::new(0.5, 0.42, 0.31, 1.);
     pub const PULSE: f32 = 0.25;
-    pub const ELEM_W: f32 = 45.;
-    pub const ELEM_H: f32 = 45.;
+    pub const ELEM_W: f32 = 50.;
+    pub const ELEM_H: f32 = 50.;
 }
 
 use self::style::*;
@@ -58,12 +58,12 @@ impl<'a, 'c> GuiPlus<'a, 'c> {
     }
 
     pub fn button(&mut self, text: &'a str) -> bool {
-        self.button_sized(text, 2., 1.)
+        self.button_sized(text, 2.)
     }
 
-    pub fn button_sized(&mut self, text: &'a str, w: f32, h: f32) -> bool {
+    pub fn button_sized(&mut self, text: &'a str, w: f32) -> bool {
         self.0.widget(|gui| {
-            gui.pixel_size(V2::new(ELEM_W * w, ELEM_H * h));
+            gui.pixel_size(V2::new(ELEM_W * w, ELEM_H));
             gui.margin(MARGIN);
 
             gui.text(text, 22, RGBA::BLACK, [true, true]);
@@ -106,5 +106,13 @@ impl<'a, 'c> GuiPlus<'a, 'c> {
             gui.margin(MARGIN);
             gui.text(text, 22, RGBA::BLACK, [false, true]);
         })
+    }
+
+    pub fn multiline(&mut self, text: &'a str, w: f32, h: f32) {
+        self.0.widget(|gui| {
+            gui.pixel_size(V2::new(ELEM_W * w, ELEM_H * h));
+            gui.margin(MARGIN);
+            gui.text(text, 22, RGBA::BLACK, [false, false]);
+        });
     }
 }

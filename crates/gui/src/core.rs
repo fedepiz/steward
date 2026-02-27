@@ -417,9 +417,7 @@ impl<'a> Frame<'a> {
     pub fn margin(&mut self, size: V2) {
         let widget = self.current_widget_mut();
         // The padding needs to be adjusted, as the padding is "net" of the margin
-        widget.padding -= widget.margin;
         widget.margin = size;
-        widget.padding += widget.margin;
     }
 
     pub fn grow_to_fill(&mut self, horizontal: bool, vertical: bool) {

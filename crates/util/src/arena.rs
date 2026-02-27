@@ -39,11 +39,18 @@ impl Arena {
     }
 
     #[inline]
-    pub fn alloc_slice_iter<T>(
+    pub fn alloc_slice_exact<T>(
         &self,
         src: impl Iterator<Item = T> + ExactSizeIterator,
     ) -> &mut [T] {
         self.0.alloc_slice_fill_iter(src)
+    }
+
+    #[inline]
+    pub fn alloc_slice_iter<T>(&self, src: impl Iterator<Item = T>) -> &mut [T] {
+        let mut vec = self.new_vec();
+        vec.extend(src);
+        vec.into_bump_slice_mut()
     }
 
     #[inline]
