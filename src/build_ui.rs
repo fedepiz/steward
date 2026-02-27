@@ -97,9 +97,8 @@ pub(super) fn root<'a>(
 
                     if let Some(msg_id) = data.selected_message.as_valid() {
                         let text = render_message(gui.arena(), things, msg_id);
-                        gui.multiline(text, 10., 9.);
+                        gui.multiline(text, 10., 10.);
                         gui.row(|mut gui| {
-                            gui.label("Page 1/N");
                             if gui.button("Close") {
                                 commands.push(Command::with_thing(
                                     CommandKind::SetSelectedMessage,
@@ -148,6 +147,21 @@ pub(super) fn root<'a>(
                                 gui.line_sized("", 10.);
                             }
                         }
+                        gui.row(|mut gui| {
+                            gui.label("Page 1/N");
+
+                            if gui.button_sized("<", 1.) {}
+                            if gui.button_sized(">", 1.) {}
+
+                            if gui.button_sized("Delete All", 3.) {
+                                commands.push(Command {
+                                    kind: CommandKind::DespawnAllInList,
+                                    thing: player,
+                                    list: List::Messages,
+                                    ..Default::default()
+                                });
+                            }
+                        });
                     }
                 });
             }

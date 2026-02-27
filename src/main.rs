@@ -38,6 +38,7 @@ struct Command {
     kind: CommandKind,
     thing: ThingId,
     panel: Panel,
+    list: List,
 }
 
 impl Command {
@@ -54,6 +55,7 @@ impl Command {
 enum CommandKind {
     Nothing,
     Despawn,
+    DespawnAllInList,
     SetSelectedEntity,
     SetSelectedMessage,
     TogglePanel,
@@ -79,7 +81,8 @@ async fn amain() {
 
     let mut board = Board::new(&frame_arena);
     board.set_camera(mq::vec2(600., 500.), 20.);
-    let font = mq::load_ttf_font("assets/fonts/board.ttf").await.unwrap();
+    let world_font = mq::load_ttf_font("assets/fonts/board.ttf").await.unwrap();
+    let ui_font = mq::load_ttf_font("assets/fonts/ui_bold.ttf").await.unwrap();
 
     let sprite_atlas =
         load_texture_atlas(&eternal_arena, &frame_arena, "assets/atlas/out/pawns").await;
@@ -147,6 +150,13 @@ async fn amain() {
                     CommandKind::Despawn => {
                         sim.things.despawn(command.thing);
                     }
+                    CommandKind::DespawnAllInList => {
+                        sim.things.with_commands(|ctx, commands| {
+                            for id in ctx.iter_list(List::Messages, command.thing) {
+                                commands.despawn(id);
+                            }
+                        });
+                    }
                     CommandKind::SetSelectedEntity => ui_data.selected_entity = command.thing,
                     CommandKind::SetSelectedMessage => ui_data.selected_message = command.thing,
                     CommandKind::TogglePanel => ui_data.toggle_panel(command.panel),
@@ -187,8 +197,8 @@ async fn amain() {
 
             // Actuall draw to screen
             mq::clear_background(mq::LIGHTGRAY);
-            board.draw(&draw_data, &sprite_atlas, &font);
-            gui_renderer.draw(&frame_arena, gui_output.draw_list, &font);
+            board.draw(&draw_data, &sprite_atlas, &world_font);
+            gui_renderer.draw(&frame_arena, gui_output.draw_list, &ui_font);
         }
         mq::next_frame().await;
     }

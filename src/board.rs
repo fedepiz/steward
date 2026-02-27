@@ -205,7 +205,6 @@ impl Board {
 
         for layer in 0..=max_layer {
             // Draw labels
-            mq::gl_use_default_material();
             for label in &draw_data.labels {
                 if label.layer != layer {
                     continue;
@@ -362,6 +361,8 @@ impl GuiRenderer {
     pub(crate) fn draw(&mut self, scratch: &Arena, draw_list: &[gui::Draw], font: &mq::Font) {
         let mq_color = |x: gui::RGBA| mq::Color::new(x.r, x.g, x.b, x.a);
 
+        mq::gl_use_default_material();
+
         self.material
             .set_texture("background_tex", self.background_texture.clone());
 
@@ -457,6 +458,7 @@ fn wrap_text<'a>(
     multiline: bool,
 ) -> WrappedText<'a> {
     let mut fragments = arena.new_vec();
+    let mut truncated = false;
 
     let mut cursor = bounds.corner();
     let mut max_line_width: f32 = 0.0;
@@ -472,6 +474,7 @@ fn wrap_text<'a>(
         if is_newline {
             // New line
             if !multiline {
+                truncated = true;
                 break;
             }
             max_line_width = max_line_width.max(cursor.x - bounds.x);
@@ -483,6 +486,7 @@ fn wrap_text<'a>(
             if cursor.x + measure.width > bounds.x + bounds.w {
                 // New line
                 if !multiline {
+                    truncated = true;
                     break;
                 }
                 max_line_width = max_line_width.max(cursor.x - bounds.x);
@@ -498,6 +502,43 @@ fn wrap_text<'a>(
                 pos: cursor + V2::new(0., offset_y),
             });
             cursor.x += measure.width;
+        }
+    }
+
+    if !multiline && truncated {
+        // Keep room for an ellipsis by trimming already-laid-out fragments if needed.
+        while let Some(last) = fragments.last() {
+            if !last.text.chars().all(|ch| ch.is_whitespace()) {
+                break;
+            }
+            let width = mq::measure_text(last.text, Some(font), font_size, 1.).width;
+            cursor.x -= width;
+            fragments.pop();
+        }
+
+        let right = bounds.x + bounds.w;
+        let ellipsis = ["...", "..", "."]
+            .into_iter()
+            .find(|token| mq::measure_text(token, Some(font), font_size, 1.).width <= bounds.w)
+            .unwrap_or("");
+
+        if !ellipsis.is_empty() {
+            let ellipsis_width = mq::measure_text(ellipsis, Some(font), font_size, 1.).width;
+
+            while cursor.x + ellipsis_width > right {
+                let Some(last) = fragments.pop() else {
+                    break;
+                };
+                cursor.x -= mq::measure_text(last.text, Some(font), font_size, 1.).width;
+            }
+
+            if cursor.x + ellipsis_width <= right {
+                fragments.push(Fragment {
+                    text: ellipsis,
+                    pos: cursor + V2::new(0., offset_y),
+                });
+                cursor.x += ellipsis_width;
+            }
         }
     }
 

@@ -10,7 +10,7 @@ opt-level = 2
 members = ["crates/*"]
 
 [workspace.dependencies]
-macroquad = { version = "0.4.4" }
+macroquad = { version = "0.4.14" }
 num_enum = { version = "*" }
 pathfinding = { version = "*" }
 strum = { version = "*", features = ["derive"] }
