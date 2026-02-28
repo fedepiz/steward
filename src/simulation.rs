@@ -324,8 +324,9 @@ pub(crate) struct Request {
 }
 
 #[derive(Default, Clone, Copy)]
-struct OrderType {
+pub(crate) struct OrderType {
     id: &'static str,
+    pub name: &'static str,
     completion_message: &'static str,
     move_to_destination: bool,
     wants_to_be_inside: bool,
@@ -334,23 +335,75 @@ struct OrderType {
 const ORDER_TYPES: [OrderType; 3] = [
     OrderType {
         id: "nothing",
+        name: "Nothing",
         completion_message: "THIS IS A DUMMMY ORDER TYPE",
         move_to_destination: false,
         wants_to_be_inside: false,
     },
     OrderType {
         id: "move_to",
+        name: "Move to #1",
         completion_message: "#0 has arrived as #1",
         move_to_destination: true,
         wants_to_be_inside: false,
     },
     OrderType {
         id: "enter",
+        name: "Enter #1",
         completion_message: "#0 has entered #1",
         move_to_destination: true,
         wants_to_be_inside: true,
     },
 ];
+
+#[inline]
+pub(crate) fn get_order_type(order: &Thing) -> &OrderType {
+    &ORDER_TYPES[order.handle(Handle::Type) as usize]
+}
+
+#[inline]
+pub(crate) fn render_order_name<'a>(arena: &'a Arena, ctx: &Things, order: &Thing) -> &'a str {
+    let params = &[
+        ctx[order.link(Link::Owner)].name(),
+        ctx[order.link(Link::Destination)].name(),
+    ];
+    render_template_string(arena, order.name(), params)
+}
+
+#[inline]
+pub(crate) fn render_message<'a>(arena: &'a Arena, ctx: &Things, message: ThingId) -> &'a str {
+    let this = &ctx[message];
+    let params = &[
+        ctx[this.link(Link::A)].name(),
+        ctx[this.link(Link::B)].name(),
+    ];
+    render_template_string(arena, this.name(), params)
+}
+
+fn render_template_string<'a>(arena: &'a Arena, template: &str, params: &[&str]) -> &'a str {
+    let mut buffer = arena.new_string_with_capacity(template.len() * 2);
+
+    let mut iter = template.chars();
+    while let Some(ch) = iter.next() {
+        if ch != '#' {
+            buffer.push(ch);
+        } else {
+            if let Some(next) = iter.next() {
+                if let Some(digit) = next.to_digit(10) {
+                    let value = params.get(digit as usize).copied().unwrap_or("???");
+                    buffer.push_str(value);
+                } else {
+                    buffer.push('#');
+                    buffer.push(next);
+                }
+            } else {
+                buffer.push('#');
+            }
+        }
+    }
+
+    buffer.into_bump_str()
+}
 
 pub(crate) fn tick(sim: &mut Simulation, request: Request) {
     let _span = tracing::info_span!("Tick").entered();
@@ -388,8 +441,10 @@ pub(crate) fn tick(sim: &mut Simulation, request: Request) {
                             this.id(),
                             LinkCollisionMode::DoNotCreate,
                         );
-                        order.set_flag(Flag::IsOrder, true);
                         order.set_handle(Handle::Type, 2);
+                        let order_type = get_order_type(order);
+                        order.set_name(order_type.name);
+                        order.set_flag(Flag::IsOrder, true);
                         order.set_link(Link::Destination, destination);
                         assign_ownership(order, this.id());
                     }
@@ -418,7 +473,7 @@ fn check_order_completion(
     player: ThingId,
 ) {
     if let Some(order) = this.link(Link::Order).get_as_valid(ctx) {
-        let order_type = &ORDER_TYPES[order.handle(Handle::Type) as usize];
+        let order_type = get_order_type(order);
         let location = this.parent(List::AtLocation);
         let arrived = location == order.link(Link::Destination);
         if arrived {
@@ -441,7 +496,7 @@ fn update_movement_intention(ctx: &Things, this: &mut Thing) {
     let current_destination = this.link(Link::Destination);
 
     if let Some(order) = this.link(Link::Order).get_as_valid(ctx) {
-        let order_type = &ORDER_TYPES[order.handle(Handle::Type) as usize];
+        let order_type = get_order_type(order);
 
         let ordered_destination = if order_type.move_to_destination {
             order.link(Link::Destination)

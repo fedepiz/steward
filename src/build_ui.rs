@@ -38,7 +38,13 @@ pub(super) fn root<'a>(
                     });
                 }
 
-                if gui.button("Orders") {}
+                if gui.button("Orders") {
+                    commands.push(Command {
+                        kind: CommandKind::TogglePanel,
+                        panel: Panel::Orders,
+                        ..Default::default()
+                    });
+                }
             });
 
             if !data.selected_entity.is_null() {
@@ -82,6 +88,33 @@ pub(super) fn root<'a>(
                                     ));
                                 }
                             });
+                        }
+                    }
+                });
+            }
+
+            if data.is_panel_open(Panel::Orders) {
+                gui.panel(|mut gui| {
+                    gui.heading("Orders", 10.);
+                    gui.inner().screen_pos(V2::new(1., 0.5));
+                    gui.inner().center_on_growth_axis(false);
+
+                    match data.selected_entity.get_as_valid(things) {
+                        Some(this) => {
+                            {
+                                let name =
+                                    gui.arena().fmt(format_args!("Orders for: {}", this.name()));
+                                gui.line_sized(name, 10.);
+                            }
+
+                            let order = this.link(Link::Order).get_as_valid(things);
+                            let order_name = order
+                                .map(|x| render_order_name(gui.arena(), things, x))
+                                .unwrap_or("No order");
+                            gui.line_sized(order_name, 10.);
+                        }
+                        None => {
+                            gui.line_sized("No entity selected...", 10.);
                         }
                     }
                 });

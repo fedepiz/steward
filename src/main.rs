@@ -33,6 +33,7 @@ impl UiData {
 pub(crate) enum Panel {
     Dummy,
     Messages,
+    Orders,
 }
 
 impl Default for Panel {
@@ -372,40 +373,6 @@ fn render_things(draw_data: &mut DrawData, things: &Things, selected_id: ThingId
             }
         }
     });
-}
-
-fn render_message<'a>(arena: &'a Arena, ctx: &Things, message: ThingId) -> &'a str {
-    let message = &ctx[message];
-    let params = &[
-        ctx[message.link(Link::A)].name(),
-        ctx[message.link(Link::B)].name(),
-    ];
-    render_template_string(arena, message.name(), params)
-}
-
-fn render_template_string<'a>(arena: &'a Arena, template: &str, params: &[&str]) -> &'a str {
-    let mut buffer = arena.new_string_with_capacity(template.len() * 2);
-
-    let mut iter = template.chars();
-    while let Some(ch) = iter.next() {
-        if ch != '#' {
-            buffer.push(ch);
-        } else {
-            if let Some(next) = iter.next() {
-                if let Some(digit) = next.to_digit(10) {
-                    let value = params.get(digit as usize).copied().unwrap_or("???");
-                    buffer.push_str(value);
-                } else {
-                    buffer.push('#');
-                    buffer.push(next);
-                }
-            } else {
-                buffer.push('#');
-            }
-        }
-    }
-
-    buffer.into_bump_str()
 }
 
 fn draw_overlay_text(

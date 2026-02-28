@@ -18,5 +18,5 @@ connect_path,way_caer_ligualid_north,din_drust
 connect_path,way_din_drust_west,anava
 spawn_person,test,"Callum",soldier,llan_heledd
 spawn_person,test2,"Einar",soldier,caer_ligualid
-spawn_person,test3,"Oswiu",soldier,caer_wenddoleu
+spawn_person,test3,"Eadweard",soldier,caer_wenddoleu
 spawn_person,test4,"Oswiu",soldier,caer_ligualid
