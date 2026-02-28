@@ -226,10 +226,10 @@ impl Board {
                         continue;
                     }
 
-                    let border_highlight = if sprite.border_highlight {
-                        mq::YELLOW.with_alpha(0.9)
-                    } else {
-                        mq::Color::default()
+                    let border_highlight = match sprite.border_highlight {
+                        HighlightType::Nothing => mq::Color::default(),
+                        HighlightType::Selection => mq::YELLOW,
+                        HighlightType::Target => mq::GREEN,
                     };
                     self.sprite_shader
                         .set_uniform("border_highlight", (border_highlight,));

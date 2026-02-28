@@ -10,12 +10,25 @@ pub(crate) struct Path {
     pub end: V2,
 }
 
+#[derive(Clone, Copy)]
+pub(crate) enum HighlightType {
+    Nothing,
+    Selection,
+    Target,
+}
+
+impl Default for HighlightType {
+    fn default() -> Self {
+        Self::Nothing
+    }
+}
+
 #[derive(Clone, Copy, Default)]
 pub(crate) struct Sprite {
     pub image: &'static str,
     pub bounds: Rect,
     pub layer: u8,
-    pub border_highlight: bool,
+    pub border_highlight: HighlightType,
     pub pulse_intensity: f32,
 }
 

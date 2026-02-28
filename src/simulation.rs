@@ -16,13 +16,8 @@ pub(crate) struct Simulation {
     nav_cache: NavCache,
 }
 
-impl Simulation {
-    const PLAYER_TAG: &'static str = "player";
-
-    pub(crate) fn player(&self) -> ThingId {
-        self.things.lookup_tag(Self::PLAYER_TAG)
-    }
-}
+const PLAYER_TAG: &'static str = "player";
+const COMMS_TAG: &'static str = "communications";
 
 struct NavCacheBuilder {
     graph: CsrBuilder<ThingId, ThingId>,
@@ -143,8 +138,9 @@ pub(crate) fn setup(scratch: &Arena) -> Simulation {
     let mut things = Things::new();
     let ctx = &mut things;
 
-    // Create the player thing
-    ctx.spawn_with_tag(Simulation::PLAYER_TAG);
+    // Create the 'system' items
+    ctx.spawn_with_tag(PLAYER_TAG);
+    ctx.spawn_with_tag(COMMS_TAG);
 
     let csv = csv::parse_file(scratch, "data/init.csv");
     for row in csv.rows() {
@@ -340,15 +336,31 @@ pub(crate) struct Request {
     // Selection
     // - entity selected
     pub select_entity: ThingId,
-    // Messages
-    // - page to show
-    pub message_page: usize,
-    // - how big is a page
-    pub messages_per_page: usize,
-    // - message to focus on
-    pub message_expended: ThingId,
+    pub messages: MessageRequest,
     // Despawns
     pub despawns: Vec<ThingId>,
+    // Communication
+    // - pick communication type
+    pub communication: CommunicationRequest,
+}
+
+#[derive(Default)]
+pub(crate) struct MessageRequest {
+    // - page to show
+    pub current_page: usize,
+    // - how big is a page
+    pub page_size: usize,
+    // - message to focus on
+    pub expanded: ThingId,
+    // - remove all the messages
+    pub delete_all: bool,
+}
+
+#[derive(Default)]
+pub(crate) struct CommunicationRequest {
+    pub selected_option: Option<usize>,
+    pub target: ThingId,
+    pub send: bool,
 }
 
 #[derive(Default, Clone, Copy)]
@@ -368,7 +380,7 @@ const ORDER_TYPES: [OrderType; 3] = [
     },
     OrderType {
         name: "Move to #1",
-        completion_message: "#0 has arrived as #1",
+        completion_message: "#0 has arrived to #1",
         move_to_destination: true,
         wants_to_be_inside: false,
     },
@@ -429,10 +441,43 @@ fn render_template_string<'a>(arena: &'a Arena, template: &str, params: &[&str])
     buffer.into_bump_str()
 }
 
+#[derive(Default, Clone, Copy)]
+pub(crate) struct CommunicationType {
+    short_name: &'static str,
+    long_name: &'static str,
+    target_type: TargetType,
+}
+
+#[derive(Clone, Copy, Default)]
+struct TargetType {
+    name: &'static str,
+    flag: Flag,
+}
+
+const COMMUNICATION_TYPES: [CommunicationType; 2] = [
+    CommunicationType {
+        short_name: "Move",
+        long_name: "Move to #0",
+        target_type: TargetType {
+            name: "location",
+            flag: Flag::IsLocation,
+        },
+    },
+    CommunicationType {
+        short_name: "Enter",
+        long_name: "Enter #0",
+        target_type: TargetType {
+            name: "settlement",
+            flag: Flag::IsSettlement,
+        },
+    },
+];
+
 pub(crate) struct Response<'a> {
     pub selected_entity: ThingId,
     pub messages: MessagesInfo<'a>,
     pub order: OrderInfo<'a>,
+    pub communication: CommunicationInfo<'a>,
     pub draw_data: DrawData<'a>,
 }
 
@@ -442,6 +487,7 @@ impl<'a> Response<'a> {
             selected_entity: ThingId::null(),
             messages: MessagesInfo::default(),
             order: OrderInfo::default(),
+            communication: CommunicationInfo::default(),
             draw_data: DrawData::new(arena),
         }
     }
@@ -460,6 +506,22 @@ pub(crate) struct OrderInfo<'a> {
     pub name: &'a str,
 }
 
+#[derive(Default)]
+pub(crate) struct CommunicationInfo<'a> {
+    // List of option-buttons to pick form
+    pub options: &'a [(usize, &'a str)],
+    // Text and type index of selected option
+    pub selected_option: Option<(usize, &'a str)>,
+    // Pick a target please!
+    pub pick_target: bool,
+    // The target that has been picked
+    pub target: ThingId,
+    // Are we ready to send
+    pub ready_to_send: bool,
+    // Did we just send
+    pub just_sent: bool,
+}
+
 pub(crate) fn tick<'a>(sim: &mut Simulation, req: Request, arena: &'a Arena) -> Response<'a> {
     let _span = tracing::info_span!("Tick").entered();
 
@@ -467,18 +529,29 @@ pub(crate) fn tick<'a>(sim: &mut Simulation, req: Request, arena: &'a Arena) -> 
         sim.things.despawn(id);
     }
 
-    let player = sim.player();
+    let player = sim.things.lookup_tag(PLAYER_TAG);
+
+    if req.messages.delete_all {
+        sim.things.with_commands(|ctx, commands| {
+            for id in ctx.iter_list(List::Messages, player) {
+                commands.despawn(id);
+            }
+        });
+    }
+
+    let mut response = Response::new(arena);
+    let mut communication_sent = false;
 
     for _ in 0..req.advance_time {
         sim.thick_num = sim.thick_num.wrapping_add(1);
 
-        if sim.thick_num == 1 {
-            for _ in 0..20 {
-                sim.things.with_commands(|_, commands| {
-                send_message(commands, "This is a long, $sprite$soldier :3 long long message, with lots of wordy words, and $sprite$celtic_town  it will hopefully wrap around. In fact, it also\n include\n new lines, \ttabs n shit", &[], player);
-            })
-            }
-        }
+        // if sim.thick_num == 1 {
+        //     for _ in 0..20 {
+        //         sim.things.with_commands(|_, commands| {
+        //         send_message(commands, "This is a long, $sprite$soldier :3 long long message, with lots of wordy words, and $sprite$celtic_town  it will hopefully wrap around. In fact, it also\n include\n new lines, \ttabs n shit", &[], player);
+        //     })
+        //     }
+        // }
 
         let _span = tracing::info_span!("Advance-Step").entered();
         sim.things.write_pass(
@@ -489,15 +562,26 @@ pub(crate) fn tick<'a>(sim: &mut Simulation, req: Request, arena: &'a Arena) -> 
                     commands.despawn(this.id());
                 }
 
-                if this.flag(Flag::IsParty) {
-                    // As a test, order people to din drust
-                    if !this.flag(Flag::Test) {
-                        this.set_flag(Flag::Test, true);
-
-                        add_order(this, 1, ctx.lookup_tag("llan_heledd"), commands);
-                        add_order(this, 2, ctx.lookup_tag("din_drust"), commands);
+                // If I am the selected entity
+                if this.id() == req.select_entity {
+                    // And there is a communication picked
+                    if let Some(type_idx) = req.communication.selected_option
+                        && req.communication.send
+                    {
+                        match type_idx {
+                            0 => {
+                                add_order(this, 1, req.communication.target, commands);
+                            }
+                            1 => {
+                                add_order(this, 2, req.communication.target, commands);
+                            }
+                            _ => {}
+                        }
+                        communication_sent = true;
                     }
+                }
 
+                if this.flag(Flag::IsParty) {
                     // Order completion
                     check_order_completion(ctx, this, commands, player);
 
@@ -514,7 +598,6 @@ pub(crate) fn tick<'a>(sim: &mut Simulation, req: Request, arena: &'a Arena) -> 
         );
     }
 
-    let mut response = Response::new(arena);
     let ctx = &sim.things;
 
     let selected_entity = if ctx.exists(req.select_entity) {
@@ -524,15 +607,12 @@ pub(crate) fn tick<'a>(sim: &mut Simulation, req: Request, arena: &'a Arena) -> 
     };
     response.selected_entity = selected_entity;
 
-    ctx.readonly_pass(|ctx, this| {
-        render_thing(ctx, this, &mut response.draw_data, response.selected_entity);
-    });
-
-    if req.messages_per_page > 0 {
+    // Message overview
+    if req.messages.page_size > 0 {
         let num_messages = player.get(&ctx).list_len(List::Messages);
-        let number_of_pages = (num_messages.saturating_sub(1) / req.messages_per_page) + 1;
-        let current_page = req.message_page.clamp(1, number_of_pages);
-        let to_skip = current_page.saturating_sub(1) * req.messages_per_page;
+        let number_of_pages = (num_messages.saturating_sub(1) / req.messages.page_size) + 1;
+        let current_page = req.messages.current_page.clamp(1, number_of_pages);
+        let to_skip = current_page.saturating_sub(1) * req.messages.page_size;
 
         let list = arena.alloc_slice_exact(
             ctx.iter_list(List::Messages, player)
@@ -546,17 +626,71 @@ pub(crate) fn tick<'a>(sim: &mut Simulation, req: Request, arena: &'a Arena) -> 
         response.messages.number_of_pages = number_of_pages;
     };
 
+    // Expanded message
     response.messages.expanded = req
-        .message_expended
+        .messages
+        .expanded
         .as_valid()
         .map(|id| (id, render_message(arena, &ctx, id)));
 
+    // Order
     {
         let selected_entity = selected_entity.get(ctx);
-        let order = selected_entity.head(List::Orders).get_as_valid(ctx);
+        let order = selected_entity.first(List::Orders).get_as_valid(ctx);
         response.order.name = order
             .map(|order| render_order_name(arena, &ctx, order))
             .unwrap_or("No order");
+    }
+
+    // Communications
+    if !communication_sent {
+        let info = &mut response.communication;
+        info.options = arena.alloc_slice_exact(
+            COMMUNICATION_TYPES
+                .iter()
+                .enumerate()
+                .map(|(idx, typ)| (idx, typ.short_name)),
+        );
+
+        info.target = req.communication.target;
+
+        info.selected_option = req.communication.selected_option.map(|idx| {
+            let typ = &COMMUNICATION_TYPES[idx];
+            let target_param = info
+                .target
+                .get_as_valid(ctx)
+                .map(|x| x.name())
+                .unwrap_or(typ.target_type.name);
+            let name = render_template_string(arena, typ.long_name, &[target_param]);
+            (idx, name)
+        });
+        info.pick_target = info.selected_option.is_some() && req.communication.target.is_null();
+        info.ready_to_send = info.selected_option.is_some() && info.target.is_valid();
+    }
+    response.communication.just_sent = communication_sent;
+
+    // Big pass, including renderings
+    {
+        // Determine the target type for highlighting (if any)
+        let target_type = if !response.communication.pick_target {
+            Default::default()
+        } else {
+            response
+                .communication
+                .selected_option
+                .map(|x| COMMUNICATION_TYPES[x.0].target_type)
+                .unwrap_or_default()
+        };
+
+        ctx.readonly_pass(|ctx, this| {
+            render_thing(
+                ctx,
+                this,
+                &mut response.draw_data,
+                selected_entity,
+                target_type,
+            );
+        });
     }
 
     response
@@ -578,7 +712,7 @@ fn check_order_completion(
     commands: &mut Commands,
     player: ThingId,
 ) {
-    if let Some(order) = this.head(List::Orders).get_as_valid(ctx) {
+    if let Some(order) = this.first(List::Orders).get_as_valid(ctx) {
         let order_type = get_order_type(order);
         let location = this.parent(List::AtLocation);
         let arrived = location == order.link(Link::Destination);
@@ -601,7 +735,7 @@ fn update_movement_intention(ctx: &Things, this: &mut Thing) {
     // Take the current destination, and the destination from other sources
     let current_destination = this.link(Link::Destination);
 
-    if let Some(order) = this.head(List::Orders).get_as_valid(ctx) {
+    if let Some(order) = this.first(List::Orders).get_as_valid(ctx) {
         let order_type = get_order_type(order);
 
         let ordered_destination = if order_type.move_to_destination {
@@ -741,7 +875,13 @@ fn assign_ownership(this: &mut Thing, owner: ThingId) {
     this.set_link(Link::Owner, owner);
 }
 
-fn render_thing(ctx: &Things, this: &Thing, draw_data: &mut DrawData, selected_id: ThingId) {
+fn render_thing(
+    ctx: &Things,
+    this: &Thing,
+    draw_data: &mut DrawData,
+    selected_id: ThingId,
+    target_type: TargetType,
+) {
     if !this.flag(Flag::IsVisible) {
         return;
     }
@@ -752,11 +892,19 @@ fn render_thing(ctx: &Things, this: &Thing, draw_data: &mut DrawData, selected_i
         let xy = V2::new(this.body.x, this.body.y) - size / 2.;
         let bounds = Rect::new(xy.x, xy.y, size, size);
 
+        let border_highlight = if is_selected {
+            HighlightType::Selection
+        } else if this.flag(target_type.flag) {
+            HighlightType::Target
+        } else {
+            HighlightType::Nothing
+        };
+
         let sprite = Sprite {
             image: this.sprite(),
             bounds,
             layer: this.body.layer,
-            border_highlight: is_selected,
+            border_highlight,
             pulse_intensity: if is_selected { 1.0 } else { 0.0 },
         };
         draw_data.sprites.push(sprite);

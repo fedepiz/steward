@@ -12,11 +12,10 @@ pub(super) fn root<'a>(
     arena: &'a Arena,
     sim: &Simulation,
     response: &Response,
+    request: &mut Request,
     data: &UiData,
     commands: &mut AVec<Command>,
 ) -> Output<'a> {
-    let player = sim.player();
-
     let things = &sim.things;
 
     gui.frame(
@@ -33,7 +32,7 @@ pub(super) fn root<'a>(
             gui.panel(|mut gui| {
                 gui.heading("Main Panel", 4.);
 
-                if gui.button("Messages") {
+                if gui.button_sized("Messages", 3.) {
                     commands.push(Command {
                         kind: CommandKind::TogglePanel,
                         panel: Panel::Messages,
@@ -41,10 +40,18 @@ pub(super) fn root<'a>(
                     });
                 }
 
-                if gui.button("Orders") {
+                if gui.button_sized("Orders", 3.) {
                     commands.push(Command {
                         kind: CommandKind::TogglePanel,
                         panel: Panel::Orders,
+                        ..Default::default()
+                    });
+                }
+
+                if gui.button_sized("Communicate", 3.) {
+                    commands.push(Command {
+                        kind: CommandKind::TogglePanel,
+                        panel: Panel::Communications,
                         ..Default::default()
                     });
                 }
@@ -84,10 +91,7 @@ pub(super) fn root<'a>(
                                 if gui.button(
                                     gui.arena().fmt(format_args!("Select##sel_inside_{idx}")),
                                 ) {
-                                    commands.push(Command::with_thing(
-                                        CommandKind::SetSelectedEntity,
-                                        thing.id(),
-                                    ));
+                                    request.select_entity = thing.id();
                                 }
                             });
                         }
@@ -115,6 +119,47 @@ pub(super) fn root<'a>(
                                 let text = gui.arena().alloc_str(info.name);
                                 gui.line_sized(text, 10.);
                             }
+                        }
+                        None => {
+                            gui.line_sized("No entity selected...", 10.);
+                        }
+                    }
+                });
+            }
+
+            if data.is_panel_open(Panel::Communications) {
+                gui.panel(|mut gui| {
+                    gui.heading("Communication", 10.);
+
+                    gui.inner().screen_pos(V2::new(1., 0.5));
+                    gui.inner().center_on_growth_axis(false);
+
+                    let info = &response.communication;
+
+                    match response.selected_entity.get_as_valid(things) {
+                        Some(this) => {
+                            let name = gui.arena().fmt(format_args!("To: {}", this.name()));
+                            gui.line_sized(name, 10.);
+
+                            if let Some((_, name)) = info.selected_option {
+                                let text = gui.arena().alloc_str(name);
+                                gui.line_sized(text, 10.);
+                            } else {
+                                gui.row(|mut gui| {
+                                    for &(idx, name) in info.options {
+                                        let text = gui.arena().alloc_str(name);
+                                        if gui.button(text) {
+                                            request.communication.selected_option = Some(idx);
+                                        }
+                                    }
+                                });
+                            }
+
+                            gui.row(|mut gui| {
+                                if gui.button_generic("Send", 2., info.ready_to_send) {
+                                    request.communication.send = true;
+                                }
+                            });
                         }
                         None => {
                             gui.line_sized("No entity selected...", 10.);
@@ -151,7 +196,7 @@ pub(super) fn root<'a>(
                                     CommandKind::SetSelectedMessage,
                                     ThingId::null(),
                                 ));
-                                commands.push(Command::with_thing(CommandKind::Despawn, msg_id));
+                                request.despawns.push(msg_id);
                             }
                         });
                     } else {
@@ -176,10 +221,7 @@ pub(super) fn root<'a>(
                                     let btn_text =
                                         gui.arena().fmt(format_args!("X##del_msg_{}", i));
                                     if gui.button_sized(btn_text, 1.) {
-                                        commands.push(Command::with_thing(
-                                            CommandKind::Despawn,
-                                            msg_id,
-                                        ));
+                                        request.despawns.push(msg_id);
                                     }
                                 });
                             } else {
@@ -209,12 +251,7 @@ pub(super) fn root<'a>(
 
                             // And a button to clear all messages
                             if gui.button_sized("Delete All##msg_delete_all", 3.) {
-                                commands.push(Command {
-                                    kind: CommandKind::DespawnAllInList,
-                                    thing: player,
-                                    list: List::Messages,
-                                    ..Default::default()
-                                });
+                                request.messages.delete_all = true;
                             }
                         });
                     }

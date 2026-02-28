@@ -29,6 +29,7 @@ pub(crate) enum Panel {
     Dummy,
     Messages,
     Orders,
+    Communications,
 }
 
 impl Default for Panel {
@@ -66,7 +67,6 @@ struct Command {
     kind: CommandKind,
     thing: ThingId,
     panel: Panel,
-    list: List,
     num: f32,
 }
 
@@ -91,9 +91,6 @@ impl Command {
 #[derive(Clone, Copy, Debug)]
 enum CommandKind {
     Nothing,
-    Despawn,
-    DespawnAllInList,
-    SetSelectedEntity,
     SetSelectedMessage,
     TogglePanel,
     ChangeMessagePage,
@@ -138,9 +135,22 @@ async fn amain() {
         tracing_tracy::client::frame_mark();
         request.select_entity = response.selected_entity;
 
-        request.message_page = response.messages.current_page;
-        request.messages_per_page = UiData::NUM_MESSAGE_PER_PAGE;
-        request.message_expended = response.messages.expanded.map(|x| x.0).unwrap_or_default();
+        // Refresh message state
+        request.messages.current_page = response.messages.current_page;
+        request.messages.page_size = UiData::NUM_MESSAGE_PER_PAGE;
+        request.messages.expanded = response.messages.expanded.map(|x| x.0).unwrap_or_default();
+
+        // Refresh communication state
+        if response.communication.just_sent {
+            // If we just sent  the communication, close the panel and reset the state
+            ui_data.open_panels[Panel::Communications as usize] = false;
+        } else if response.selected_entity.is_valid() {
+            // If we have a valid selection, carry throught the selected option and the target
+            request.communication.selected_option =
+                response.communication.selected_option.map(|(id, _)| id);
+            // Carry over the target
+            request.communication.target = response.communication.target;
+        }
 
         let gui_output;
 
@@ -166,36 +176,39 @@ async fn amain() {
                 });
             }
 
+            if mq::is_key_pressed(mq::KeyCode::C) {
+                commands.push(Command {
+                    kind: CommandKind::TogglePanel,
+                    panel: Panel::Communications,
+                    ..Default::default()
+                });
+            }
+
             gui_output = build_ui::root(
                 &mut gui,
                 &frame_arena,
                 &sim,
                 &response,
+                &mut request,
                 &ui_data,
                 &mut commands,
             );
 
             if !gui_output.is_mouse_over_ui && mq::is_mouse_button_pressed(mq::MouseButton::Left) {
-                commands.push(Command::with_thing(
-                    CommandKind::SetSelectedEntity,
-                    board.hovered_id(),
-                ));
+                let target = board.hovered_id();
+
+                if response.communication.pick_target {
+                    request.communication.target = target;
+                } else {
+                    request.select_entity = target;
+                }
             }
 
             // Perform commands
             for command in commands {
                 match command.kind {
                     CommandKind::Nothing => {}
-                    CommandKind::Despawn => request.despawns.push(command.thing),
-                    CommandKind::DespawnAllInList => {
-                        sim.things.with_commands(|ctx, commands| {
-                            for id in ctx.iter_list(command.list, command.thing) {
-                                commands.despawn(id);
-                            }
-                        });
-                    }
-                    CommandKind::SetSelectedEntity => request.select_entity = command.thing,
-                    CommandKind::SetSelectedMessage => request.message_expended = command.thing,
+                    CommandKind::SetSelectedMessage => request.messages.expanded = command.thing,
                     CommandKind::TogglePanel => {
                         let idx = command.panel as usize;
                         if ui_data.open_panels[idx] {
@@ -206,7 +219,7 @@ async fn amain() {
                         }
                     }
                     CommandKind::ChangeMessagePage => {
-                        request.message_page = (response.messages.current_page as i32
+                        request.messages.current_page = (response.messages.current_page as i32
                             + command.num as i32)
                             .max(0) as usize
                     }

@@ -51,6 +51,7 @@ impl ThingId {
 
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug, EnumIter, EnumCount)]
 pub(crate) enum Flag {
+    Dummy,
     // This flag indicates the thing requires an owner (in Link) to be valid, or else it
     // will automatically despawn itselfs
     MustBeOwned,
@@ -64,7 +65,12 @@ pub(crate) enum Flag {
     WantsToBeInside,
     IsInside,
     IsOrder,
-    Test,
+}
+
+impl Default for Flag {
+    fn default() -> Self {
+        Self::Dummy
+    }
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug, EnumIter, EnumCount)]
@@ -102,6 +108,8 @@ impl Default for Link {
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug, EnumIter, EnumCount)]
 pub(crate) enum List {
     Dummy,
+    // Generic subparts list
+    Parts,
     AtLocation,
     Messages,
     Orders,
@@ -222,12 +230,12 @@ impl Thing {
     }
 
     #[inline]
-    pub(crate) fn head(&self, list: List) -> ThingId {
+    pub(crate) fn first(&self, list: List) -> ThingId {
         self.lists[list as usize].children.0
     }
 
     #[inline]
-    pub(crate) fn tail(&self, list: List) -> ThingId {
+    pub(crate) fn last(&self, list: List) -> ThingId {
         self.lists[list as usize].children.1
     }
 
@@ -687,17 +695,6 @@ impl Things {
         }
 
         for spawn in commands.spawns {
-            let (link, parent, mode) = spawn.to_link;
-            match mode {
-                LinkCollisionMode::DoNotCreate => {
-                    // Do not spawn if we are in "do not create" mode
-                    if self[parent].link(link) != ThingId::null() {
-                        return;
-                    }
-                }
-                LinkCollisionMode::Replace => {}
-            };
-
             let thing = self.spawn();
             let id = thing.id;
             *thing = spawn.thing;
@@ -707,12 +704,6 @@ impl Things {
             let (list, parent) = spawn.to_list;
             if !parent.is_null() {
                 self.add_to_list(list, parent, id);
-            }
-
-            // Link to target
-            let (link, parent, _) = spawn.to_link;
-            if !parent.is_null() {
-                self[parent].set_link(link, id);
             }
         }
     }
@@ -760,19 +751,6 @@ impl Commands {
         });
         &mut self.spawns.last_mut().unwrap().thing
     }
-
-    pub fn spawn_and_set_link(
-        &mut self,
-        link: Link,
-        parent: ThingId,
-        mode: LinkCollisionMode,
-    ) -> &mut Thing {
-        self.spawns.push(Spawn {
-            to_link: (link, parent, mode),
-            ..Default::default()
-        });
-        &mut self.spawns.last_mut().unwrap().thing
-    }
 }
 
 #[derive(Clone, Copy)]
@@ -786,17 +764,4 @@ struct ListMutation {
 struct Spawn {
     thing: Thing,
     to_list: (List, ThingId),
-    to_link: (Link, ThingId, LinkCollisionMode),
-}
-
-#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-pub(crate) enum LinkCollisionMode {
-    Replace,
-    DoNotCreate,
-}
-
-impl Default for LinkCollisionMode {
-    fn default() -> Self {
-        LinkCollisionMode::Replace
-    }
 }

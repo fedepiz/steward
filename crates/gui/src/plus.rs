@@ -62,7 +62,15 @@ impl<'a, 'c> GuiPlus<'a, 'c> {
         self.button_sized(text, 2.)
     }
 
+    pub fn disabled_button(&mut self, text: &'a str) -> bool {
+        self.button_generic(text, 2., true)
+    }
+
     pub fn button_sized(&mut self, text: &'a str, w: f32) -> bool {
+        self.button_generic(text, w, true)
+    }
+
+    pub fn button_generic(&mut self, text: &'a str, w: f32, enabled: bool) -> bool {
         self.0.widget(|gui| {
             gui.pixel_size(V2::new(ELEM_W * w, ELEM_H));
             gui.margin(MARGIN);
@@ -70,18 +78,18 @@ impl<'a, 'c> GuiPlus<'a, 'c> {
             gui.text(text, ELEM_TEXT_SIZE, RGBA::BLACK, [true, true]);
             gui.fingerprint_from_text();
 
-            if gui.interaction().hovered && !gui.interaction().down {
+            if gui.interaction().hovered && !gui.interaction().down && enabled {
                 gui.pulse(PULSE);
             }
 
-            gui.fill(if gui.interaction().down {
+            gui.fill(if gui.interaction().down || !enabled {
                 DARK_FILL
             } else {
                 FILL
             });
             gui.stroke(BORDER, 4.);
             gui.shadow(SHADOW);
-            gui.interaction().clicked
+            gui.interaction().clicked && enabled
         })
     }
 
