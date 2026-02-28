@@ -41,10 +41,6 @@ impl UiData {
     pub fn is_panel_open(&self, panel: Panel) -> bool {
         self.open_panels[panel as usize]
     }
-
-    pub fn toggle_panel(&mut self, panel: Panel) {
-        self.open_panels[panel as usize] = !self.is_panel_open(panel);
-    }
 }
 
 fn main() {
@@ -146,14 +142,29 @@ async fn amain() {
         request.messages_per_page = UiData::NUM_MESSAGE_PER_PAGE;
         request.message_expended = response.messages.expanded.map(|x| x.0).unwrap_or_default();
 
-        if mq::is_key_pressed(mq::KeyCode::Escape) {
-            return;
-        }
-
         let gui_output;
 
         {
             let mut commands = frame_arena.new_vec_with_capacity(10);
+
+            if mq::is_key_pressed(mq::KeyCode::Escape) {
+                return;
+            }
+            if mq::is_key_pressed(mq::KeyCode::M) {
+                commands.push(Command {
+                    kind: CommandKind::TogglePanel,
+                    panel: Panel::Messages,
+                    ..Default::default()
+                });
+            }
+
+            if mq::is_key_pressed(mq::KeyCode::O) {
+                commands.push(Command {
+                    kind: CommandKind::TogglePanel,
+                    panel: Panel::Orders,
+                    ..Default::default()
+                });
+            }
 
             gui_output = build_ui::root(
                 &mut gui,
@@ -185,7 +196,15 @@ async fn amain() {
                     }
                     CommandKind::SetSelectedEntity => request.select_entity = command.thing,
                     CommandKind::SetSelectedMessage => request.message_expended = command.thing,
-                    CommandKind::TogglePanel => ui_data.toggle_panel(command.panel),
+                    CommandKind::TogglePanel => {
+                        let idx = command.panel as usize;
+                        if ui_data.open_panels[idx] {
+                            ui_data.open_panels[idx] = false;
+                        } else {
+                            ui_data.open_panels = Default::default();
+                            ui_data.open_panels[idx] = true;
+                        }
+                    }
                     CommandKind::ChangeMessagePage => {
                         request.message_page = (response.messages.current_page as i32
                             + command.num as i32)
@@ -227,9 +246,6 @@ async fn amain() {
 
             if mq::is_key_pressed(mq::KeyCode::Space) {
                 ui_data.is_paused = !ui_data.is_paused;
-            }
-            if mq::is_key_pressed(mq::KeyCode::M) {
-                ui_data.toggle_panel(Panel::Messages);
             }
 
             response.draw_data.prepare();

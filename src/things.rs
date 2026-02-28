@@ -90,7 +90,7 @@ pub(crate) enum Link {
     A,
     B,
     Destination,
-    Order,
+    // Order,
 }
 
 impl Default for Link {
@@ -104,6 +104,7 @@ pub(crate) enum List {
     Dummy,
     AtLocation,
     Messages,
+    Orders,
 }
 
 impl Default for List {
@@ -218,6 +219,16 @@ impl Thing {
     #[inline]
     pub(crate) fn parent(&self, list: List) -> ThingId {
         self.lists[list as usize].parent
+    }
+
+    #[inline]
+    pub(crate) fn head(&self, list: List) -> ThingId {
+        self.lists[list as usize].children.0
+    }
+
+    #[inline]
+    pub(crate) fn tail(&self, list: List) -> ThingId {
+        self.lists[list as usize].children.1
     }
 
     #[inline]

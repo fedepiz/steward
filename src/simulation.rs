@@ -494,18 +494,8 @@ pub(crate) fn tick<'a>(sim: &mut Simulation, req: Request, arena: &'a Arena) -> 
                     if !this.flag(Flag::Test) {
                         this.set_flag(Flag::Test, true);
 
-                        let destination = ctx.lookup_tag("din_drust");
-                        let order = commands.spawn_and_set_link(
-                            Link::Order,
-                            this.id(),
-                            LinkCollisionMode::DoNotCreate,
-                        );
-                        order.set_handle(Handle::Type, 2);
-                        let order_type = get_order_type(order);
-                        order.set_name(order_type.name);
-                        order.set_flag(Flag::IsOrder, true);
-                        order.set_link(Link::Destination, destination);
-                        assign_ownership(order, this.id());
+                        add_order(this, 1, ctx.lookup_tag("llan_heledd"), commands);
+                        add_order(this, 2, ctx.lookup_tag("din_drust"), commands);
                     }
 
                     // Order completion
@@ -563,7 +553,7 @@ pub(crate) fn tick<'a>(sim: &mut Simulation, req: Request, arena: &'a Arena) -> 
 
     {
         let selected_entity = selected_entity.get(ctx);
-        let order = selected_entity.link(Link::Order).get_as_valid(&ctx);
+        let order = selected_entity.head(List::Orders).get_as_valid(ctx);
         response.order.name = order
             .map(|order| render_order_name(arena, &ctx, order))
             .unwrap_or("No order");
@@ -572,20 +562,30 @@ pub(crate) fn tick<'a>(sim: &mut Simulation, req: Request, arena: &'a Arena) -> 
     response
 }
 
+fn add_order(this: &mut Thing, order_type: u16, destination: ThingId, commands: &mut Commands) {
+    let order = commands.spawn_and_append_to_list(List::Orders, this.id());
+    order.set_handle(Handle::Type, order_type);
+    let order_type = get_order_type(order);
+    order.set_name(order_type.name);
+    order.set_flag(Flag::IsOrder, true);
+    order.set_link(Link::Destination, destination);
+    assign_ownership(order, this.id());
+}
+
 fn check_order_completion(
     ctx: &Things,
     this: &mut Thing,
     commands: &mut Commands,
     player: ThingId,
 ) {
-    if let Some(order) = this.link(Link::Order).get_as_valid(ctx) {
+    if let Some(order) = this.head(List::Orders).get_as_valid(ctx) {
         let order_type = get_order_type(order);
         let location = this.parent(List::AtLocation);
         let arrived = location == order.link(Link::Destination);
         if arrived {
             // Order completed
             commands.despawn(order.id());
-            this.clear_link(Link::Order);
+            commands.remove_from_list(List::Orders, order.id());
             // Send a message
             send_message(
                 commands,
@@ -601,7 +601,7 @@ fn update_movement_intention(ctx: &Things, this: &mut Thing) {
     // Take the current destination, and the destination from other sources
     let current_destination = this.link(Link::Destination);
 
-    if let Some(order) = this.link(Link::Order).get_as_valid(ctx) {
+    if let Some(order) = this.head(List::Orders).get_as_valid(ctx) {
         let order_type = get_order_type(order);
 
         let ordered_destination = if order_type.move_to_destination {
