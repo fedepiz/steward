@@ -428,12 +428,13 @@ impl Things {
         assert!(id.is_valid());
         assert!(self.entries[id.slot as usize].id == id);
 
+        let list_data = &self.entries[id.slot as usize].lists[list as usize];
+
         ListChildrenIter {
             things: self,
             list,
-            next: self.entries[id.slot as usize].lists[list as usize]
-                .children
-                .0,
+            next: list_data.children.0,
+            len: list_data.length,
         }
     }
 
@@ -572,19 +573,31 @@ pub(crate) struct ListChildrenIter<'a> {
     things: &'a Things,
     list: List,
     next: ThingId,
+    len: usize,
 }
 
 impl Iterator for ListChildrenIter<'_> {
     type Item = ThingId;
 
     fn next(&mut self) -> Option<Self::Item> {
-        if self.next.is_null() {
+        if self.len == 0 || self.next.is_null() {
             return None;
         }
 
         let current = self.next;
         self.next = self.things.entries[current.slot as usize].lists[self.list as usize].sibling;
+        self.len -= 1;
         Some(current)
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        (self.len, Some(self.len))
+    }
+}
+
+impl ExactSizeIterator for ListChildrenIter<'_> {
+    fn len(&self) -> usize {
+        self.len
     }
 }
 

@@ -536,14 +536,15 @@ pub(crate) fn tick<'a>(sim: &mut Simulation, req: Request, arena: &'a Arena) -> 
         let current_page = req.message_page.clamp(1, number_of_pages);
         let to_skip = current_page.saturating_sub(1) * req.messages_per_page;
 
-        let iter = sim
-            .things
-            .iter_list(List::Messages, player)
-            .skip(to_skip)
-            .take(num_messages)
-            .map(|msg| (msg, render_message(arena, &sim.things, msg)));
-
-        response.messages.list = arena.alloc_slice_iter(iter);
+        let list = arena.alloc_slice_exact(
+            sim.things
+                .iter_list(List::Messages, player)
+                .skip(to_skip)
+                .take(num_messages)
+                .map(|msg| (msg, render_message(arena, &sim.things, msg))),
+        );
+        list.reverse();
+        response.messages.list = list;
         response.messages.current_page = current_page;
         response.messages.number_of_pages = number_of_pages;
     };
