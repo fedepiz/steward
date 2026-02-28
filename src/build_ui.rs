@@ -101,6 +101,8 @@ pub(super) fn root<'a>(
                     gui.inner().screen_pos(V2::new(1., 0.5));
                     gui.inner().center_on_growth_axis(false);
 
+                    let info = &response.order;
+
                     match response.selected_entity.get_as_valid(things) {
                         Some(this) => {
                             {
@@ -109,11 +111,10 @@ pub(super) fn root<'a>(
                                 gui.line_sized(name, 10.);
                             }
 
-                            let order = this.link(Link::Order).get_as_valid(things);
-                            let order_name = order
-                                .map(|x| render_order_name(gui.arena(), things, x))
-                                .unwrap_or("No order");
-                            gui.line_sized(order_name, 10.);
+                            {
+                                let text = gui.arena().alloc_str(info.name);
+                                gui.line_sized(text, 10.);
+                            }
                         }
                         None => {
                             gui.line_sized("No entity selected...", 10.);

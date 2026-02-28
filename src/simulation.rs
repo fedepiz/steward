@@ -381,12 +381,12 @@ const ORDER_TYPES: [OrderType; 3] = [
 ];
 
 #[inline]
-pub(crate) fn get_order_type(order: &Thing) -> &OrderType {
+fn get_order_type(order: &Thing) -> &OrderType {
     &ORDER_TYPES[order.handle(Handle::Type) as usize]
 }
 
 #[inline]
-pub(crate) fn render_order_name<'a>(arena: &'a Arena, ctx: &Things, order: &Thing) -> &'a str {
+fn render_order_name<'a>(arena: &'a Arena, ctx: &Things, order: &Thing) -> &'a str {
     let params = &[
         ctx[order.link(Link::Owner)].name(),
         ctx[order.link(Link::Destination)].name(),
@@ -395,7 +395,7 @@ pub(crate) fn render_order_name<'a>(arena: &'a Arena, ctx: &Things, order: &Thin
 }
 
 #[inline]
-pub(crate) fn render_message<'a>(arena: &'a Arena, ctx: &Things, message: ThingId) -> &'a str {
+fn render_message<'a>(arena: &'a Arena, ctx: &Things, message: ThingId) -> &'a str {
     let this = &ctx[message];
     let params = &[
         ctx[this.link(Link::A)].name(),
@@ -432,6 +432,7 @@ fn render_template_string<'a>(arena: &'a Arena, template: &str, params: &[&str])
 pub(crate) struct Response<'a> {
     pub selected_entity: ThingId,
     pub messages: MessagesInfo<'a>,
+    pub order: OrderInfo<'a>,
     pub draw_data: DrawData<'a>,
 }
 
@@ -440,6 +441,7 @@ impl<'a> Response<'a> {
         Self {
             selected_entity: ThingId::null(),
             messages: MessagesInfo::default(),
+            order: OrderInfo::default(),
             draw_data: DrawData::new(arena),
         }
     }
@@ -451,6 +453,11 @@ pub(crate) struct MessagesInfo<'a> {
     pub list: &'a [(ThingId, &'a str)],
     pub current_page: usize,
     pub number_of_pages: usize,
+}
+
+#[derive(Default)]
+pub(crate) struct OrderInfo<'a> {
+    pub name: &'a str,
 }
 
 pub(crate) fn tick<'a>(sim: &mut Simulation, req: Request, arena: &'a Arena) -> Response<'a> {
@@ -518,30 +525,30 @@ pub(crate) fn tick<'a>(sim: &mut Simulation, req: Request, arena: &'a Arena) -> 
     }
 
     let mut response = Response::new(arena);
+    let ctx = &sim.things;
 
-    let selected_entity = if sim.things.exists(req.select_entity) {
+    let selected_entity = if ctx.exists(req.select_entity) {
         req.select_entity
     } else {
         ThingId::null()
     };
     response.selected_entity = selected_entity;
 
-    sim.things.readonly_pass(|ctx, this| {
+    ctx.readonly_pass(|ctx, this| {
         render_thing(ctx, this, &mut response.draw_data, response.selected_entity);
     });
 
     if req.messages_per_page > 0 {
-        let num_messages = player.get(&sim.things).list_len(List::Messages);
+        let num_messages = player.get(&ctx).list_len(List::Messages);
         let number_of_pages = (num_messages.saturating_sub(1) / req.messages_per_page) + 1;
         let current_page = req.message_page.clamp(1, number_of_pages);
         let to_skip = current_page.saturating_sub(1) * req.messages_per_page;
 
         let list = arena.alloc_slice_exact(
-            sim.things
-                .iter_list(List::Messages, player)
+            ctx.iter_list(List::Messages, player)
                 .skip(to_skip)
                 .take(num_messages)
-                .map(|msg| (msg, render_message(arena, &sim.things, msg))),
+                .map(|msg| (msg, render_message(arena, &ctx, msg))),
         );
         list.reverse();
         response.messages.list = list;
@@ -552,7 +559,15 @@ pub(crate) fn tick<'a>(sim: &mut Simulation, req: Request, arena: &'a Arena) -> 
     response.messages.expanded = req
         .message_expended
         .as_valid()
-        .map(|id| (id, render_message(arena, &sim.things, id)));
+        .map(|id| (id, render_message(arena, &ctx, id)));
+
+    {
+        let selected_entity = selected_entity.get(ctx);
+        let order = selected_entity.link(Link::Order).get_as_valid(&ctx);
+        response.order.name = order
+            .map(|order| render_order_name(arena, &ctx, order))
+            .unwrap_or("No order");
+    }
 
     response
 }
