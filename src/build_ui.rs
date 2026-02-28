@@ -10,11 +10,14 @@ use super::*;
 pub(super) fn root<'a>(
     gui: &'a mut Gui,
     arena: &'a Arena,
-    things: &Things,
+    sim: &Simulation,
+    response: &Response,
     data: &UiData,
     commands: &mut AVec<Command>,
 ) -> Output<'a> {
-    let player = things.lookup_tag("player");
+    let player = sim.player();
+
+    let things = &sim.things;
 
     gui.frame(
         arena,
@@ -47,8 +50,7 @@ pub(super) fn root<'a>(
                 }
             });
 
-            if !data.selected_entity.is_null() {
-                let this = &things[data.selected_entity];
+            if let Some(this) = response.selected_entity.get_as_valid(&sim.things) {
                 gui.panel(|mut gui| {
                     gui.inner().center_on_growth_axis(false);
                     gui.inner().screen_pos(V2::new(0., 0.5));
@@ -99,7 +101,7 @@ pub(super) fn root<'a>(
                     gui.inner().screen_pos(V2::new(1., 0.5));
                     gui.inner().center_on_growth_axis(false);
 
-                    match data.selected_entity.get_as_valid(things) {
+                    match response.selected_entity.get_as_valid(things) {
                         Some(this) => {
                             {
                                 let name =
@@ -129,9 +131,12 @@ pub(super) fn root<'a>(
                     gui.inner().center_on_growth_axis(false);
 
                     // If we have a message selected, we are gonna show the blow-up version of the message.
-                    if let Some(msg_id) = data.selected_message.as_valid() {
-                        let text = render_message(gui.arena(), things, msg_id);
-                        gui.multiline(text, 10., UiData::NUM_MESSAGE_PER_PAGE as f32);
+                    if let Some((msg_id, text)) = response.messages.expanded {
+                        gui.multiline(
+                            gui.arena().alloc_str(text),
+                            10.,
+                            UiData::NUM_MESSAGE_PER_PAGE as f32,
+                        );
                         gui.row(|mut gui| {
                             if gui.button("Close") {
                                 commands.push(Command::with_thing(
@@ -150,19 +155,12 @@ pub(super) fn root<'a>(
                         });
                     } else {
                         // Otherwise, show the messages on the selected page
-                        let messages = gui
-                            .arena()
-                            .alloc_slice_iter(things.iter_list(List::Messages, player));
-                        messages.reverse();
 
-                        let message_start =
-                            (data.message_page.saturating_sub(1)) * UiData::NUM_MESSAGE_PER_PAGE;
-                        for i in message_start..message_start + UiData::NUM_MESSAGE_PER_PAGE {
-                            if let Some(msg_id) = messages.get(i).copied() {
+                        for i in 0..UiData::NUM_MESSAGE_PER_PAGE {
+                            if let Some(&(msg_id, text)) = response.messages.list.get(i) {
                                 gui.row(|mut gui| {
                                     // Each message has text...
-                                    let text = render_message(gui.arena(), things, msg_id);
-                                    gui.line_sized(text, 8.);
+                                    gui.line_sized(gui.arena().alloc_str(text), 8.);
 
                                     // ... a button for expanding the message...
                                     let btn_text =
@@ -194,7 +192,7 @@ pub(super) fn root<'a>(
                             // Page counter
                             let text = gui.arena().fmt(format_args!(
                                 "{}/{}##msg_page_counter",
-                                data.message_page, data.num_message_pages
+                                response.messages.current_page, response.messages.number_of_pages
                             ));
                             gui.label(text);
 

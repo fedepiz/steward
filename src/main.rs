@@ -1,10 +1,9 @@
 mod assets;
 mod board;
 mod build_ui;
+mod draw;
 mod simulation;
 mod things;
-
-use std::sync::{Arc, Mutex};
 
 use crate::{assets::*, things::*};
 use board::*;
@@ -17,12 +16,8 @@ use util::geom::*;
 
 #[derive(Default)]
 pub(crate) struct UiData {
-    pub selected_entity: ThingId,
     pub open_panels: [bool; Panel::COUNT],
-    pub selected_message: ThingId,
     pub is_paused: bool,
-    pub message_page: usize,
-    pub num_message_pages: usize,
 }
 
 impl UiData {
@@ -124,7 +119,7 @@ async fn amain() {
     mq::request_new_screen_size(mq::screen_width(), mq::screen_height());
     mq::next_frame().await;
 
-    let sim = setup(&frame_arena);
+    let mut sim = setup(&frame_arena);
 
     let mut board = Board::new(&frame_arena);
     board.set_camera(mq::vec2(600., 500.), 20.);
@@ -138,34 +133,18 @@ async fn amain() {
     let mut gui = Gui::default();
     let mut gui_renderer = board::GuiRenderer::new();
 
-    let sim = Arc::new(Mutex::new(sim));
-    let (req_tx, req_rx) = std::sync::mpsc::channel();
-
-    {
-        let sim = Arc::clone(&sim);
-        std::thread::spawn(move || {
-            tracing_tracy::client::set_thread_name!("Simulation thread");
-
-            loop {
-                match req_rx.recv() {
-                    Ok(request) => {
-                        let mut sim = sim.lock().unwrap();
-                        tick(&mut sim, request);
-                    }
-                    Err(_) => {
-                        return;
-                    }
-                }
-            }
-        });
-    }
-
     let mut ui_data = UiData::default();
+
+    let mut request = crate::simulation::Request::default();
+    let mut response = simulation::tick(&mut sim, Request::default(), &frame_arena);
 
     loop {
         tracing_tracy::client::frame_mark();
-        frame_arena.reset();
-        let mut draw_data = DrawData::new(&frame_arena);
+        request.select_entity = response.selected_entity;
+
+        request.message_page = response.messages.current_page;
+        request.messages_per_page = UiData::NUM_MESSAGE_PER_PAGE;
+        request.message_expended = response.messages.expanded.map(|x| x.0).unwrap_or_default();
 
         if mq::is_key_pressed(mq::KeyCode::Escape) {
             return;
@@ -174,39 +153,16 @@ async fn amain() {
         let gui_output;
 
         {
-            // This part "locks" the simulation
-            let sim = &mut *sim.lock().unwrap();
-            let _span = tracing::info_span!("Locked Sim").entered();
             let mut commands = frame_arena.new_vec_with_capacity(10);
 
-            // Fix up ui data
-            {
-                let player = sim.things.lookup_tag("player");
-
-                // Get rid of stale thing ids
-                if !sim.things.exists(ui_data.selected_entity) {
-                    ui_data.selected_entity = ThingId::null()
-                }
-                if !sim.things.exists(ui_data.selected_message) {
-                    ui_data.selected_message = ThingId::null()
-                }
-
-                // Fix the number of pages
-                ui_data.num_message_pages = sim
-                    .things
-                    .iter_list(List::Messages, player)
-                    .count()
-                    .saturating_sub(1)
-                    / UiData::NUM_MESSAGE_PER_PAGE
-                    + 1;
-
-                ui_data.message_page = ui_data.message_page.clamp(1, ui_data.num_message_pages);
-            }
-
-            gui_output =
-                build_ui::root(&mut gui, &frame_arena, &sim.things, &ui_data, &mut commands);
-
-            render_things(&mut draw_data, &sim.things, ui_data.selected_entity);
+            gui_output = build_ui::root(
+                &mut gui,
+                &frame_arena,
+                &sim,
+                &response,
+                &ui_data,
+                &mut commands,
+            );
 
             if !gui_output.is_mouse_over_ui && mq::is_mouse_button_pressed(mq::MouseButton::Left) {
                 commands.push(Command::with_thing(
@@ -219,9 +175,7 @@ async fn amain() {
             for command in commands {
                 match command.kind {
                     CommandKind::Nothing => {}
-                    CommandKind::Despawn => {
-                        sim.things.despawn(command.thing);
-                    }
+                    CommandKind::Despawn => request.despawns.push(command.thing),
                     CommandKind::DespawnAllInList => {
                         sim.things.with_commands(|ctx, commands| {
                             for id in ctx.iter_list(command.list, command.thing) {
@@ -229,12 +183,13 @@ async fn amain() {
                             }
                         });
                     }
-                    CommandKind::SetSelectedEntity => ui_data.selected_entity = command.thing,
-                    CommandKind::SetSelectedMessage => ui_data.selected_message = command.thing,
+                    CommandKind::SetSelectedEntity => request.select_entity = command.thing,
+                    CommandKind::SetSelectedMessage => request.message_expended = command.thing,
                     CommandKind::TogglePanel => ui_data.toggle_panel(command.panel),
                     CommandKind::ChangeMessagePage => {
-                        ui_data.message_page =
-                            (ui_data.message_page as i32 + command.num as i32).max(0) as usize
+                        request.message_page = (response.messages.current_page as i32
+                            + command.num as i32)
+                            .max(0) as usize
                     }
                 }
             }
@@ -247,13 +202,6 @@ async fn amain() {
         } else {
             1
         };
-
-        // Having realeased the simulation, send off the request. This way, simulation could work in parallel with us
-        let mut request = Request::default();
-        request.delta = mq::get_frame_time();
-        request.advance_time = time_speed;
-        req_tx.send(request).unwrap();
-
         {
             let _span = tracing::info_span!("Present").entered();
             {
@@ -284,12 +232,13 @@ async fn amain() {
                 ui_data.toggle_panel(Panel::Messages);
             }
 
-            draw_data.prepare();
+            response.draw_data.prepare();
 
             // Actuall draw to screen
             mq::clear_background(mq::LIGHTGRAY);
-            board.draw(&draw_data, &sprite_atlas, &world_font);
+            board.draw(&response.draw_data, &sprite_atlas, &world_font);
             gui_renderer.draw(&frame_arena, gui_output.draw_list, &ui_font, &sprite_atlas);
+
             if time_speed == 0 {
                 draw_overlay_text(
                     "Paused",
@@ -308,71 +257,17 @@ async fn amain() {
                 );
             }
         }
+
+        // Having realeased the simulation, send off the request. This way, simulation could work in parallel with us
+        request.delta = mq::get_frame_time();
+        request.advance_time = time_speed;
+
+        std::mem::drop(response);
+        frame_arena.reset();
+
+        response = simulation::tick(&mut sim, std::mem::take(&mut request), &frame_arena);
         mq::next_frame().await;
     }
-}
-
-fn render_things(draw_data: &mut DrawData, things: &Things, selected_id: ThingId) {
-    let _span = tracing::info_span!("main::render_things").entered();
-    // "Render" entities
-    things.readonly_pass(|ctx, this| {
-        if !this.flag(Flag::IsVisible) {
-            return;
-        }
-        if this.body.size > 0 && !this.sprite().is_empty() {
-            let is_selected = this.id() == selected_id;
-
-            let size = this.body.size as f32;
-            let xy = mq::Vec2::new(this.body.x, this.body.y) - size / 2.;
-            let bounds = mq::Rect::new(xy.x, xy.y, size, size);
-
-            let sprite = Sprite {
-                image: this.sprite(),
-                bounds,
-                layer: this.body.layer,
-                border_highlight: if is_selected {
-                    mq::YELLOW.with_alpha(0.9)
-                } else {
-                    mq::Color::new(0., 0., 0., 0.)
-                },
-                pulse_intensity: if is_selected { 1.0 } else { 0.0 },
-            };
-            draw_data.sprites.push(sprite);
-
-            let show_name = is_selected || this.flag(Flag::IsSettlement);
-            if show_name {
-                let name = this.name();
-                if !name.is_empty() {
-                    let color = if is_selected { mq::YELLOW } else { mq::WHITE };
-                    let layer = this.body.layer.max(if is_selected { 3 } else { 0 });
-                    draw_data.labels.push(Label {
-                        text: name,
-                        pos: xy + mq::vec2(size / 2., size),
-                        font_size: 24,
-                        color,
-                        layer,
-                    });
-                }
-            }
-
-            draw_data.clickboxes.push(Clickbox {
-                id: this.id(),
-                bounds,
-            });
-        }
-        if this.flag(Flag::IsPath) {
-            let a = this.link(self::Link::A);
-            let b = this.link(self::Link::B);
-            if a.is_valid() && b.is_valid() {
-                let a_pos = mq::vec2(ctx[a].body.x, ctx[a].body.y);
-                let b_pos = mq::vec2(ctx[b].body.x, ctx[b].body.y);
-                draw_data.paths.push(Path {
-                    start: a_pos,
-                    end: b_pos,
-                });
-            }
-        }
-    });
 }
 
 fn draw_overlay_text(

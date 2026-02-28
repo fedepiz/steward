@@ -1,60 +1,30 @@
+use crate::draw::*;
 use crate::{assets::TextureAtlas, things::ThingId};
-use gui;
 use macroquad::prelude as mq;
 use util::{
-    arena::{AVec, Arena},
+    arena::Arena,
     geom::{Rect, V2},
 };
 
-#[derive(Clone, Copy, Default)]
-pub(crate) struct Path {
-    pub start: mq::Vec2,
-    pub end: mq::Vec2,
+trait ToMq {
+    type Out;
+
+    fn to_mq(self) -> Self::Out;
 }
 
-#[derive(Clone, Copy, Default)]
-pub(crate) struct Sprite {
-    pub image: &'static str,
-    pub bounds: mq::Rect,
-    pub layer: u8,
-    pub border_highlight: mq::Color,
-    pub pulse_intensity: f32,
-}
+impl ToMq for V2 {
+    type Out = mq::Vec2;
 
-#[derive(Clone, Copy, Default)]
-pub(crate) struct Label<'a> {
-    pub text: &'a str,
-    pub pos: mq::Vec2,
-    pub font_size: u16,
-    pub color: mq::Color,
-    pub layer: u8,
-}
-
-#[derive(Clone, Copy, Default)]
-pub(crate) struct Clickbox {
-    pub id: ThingId,
-    pub bounds: mq::Rect,
-}
-
-pub(crate) struct DrawData<'a> {
-    pub paths: AVec<'a, Path>,
-    pub sprites: AVec<'a, Sprite>,
-    pub labels: AVec<'a, Label<'a>>,
-    pub clickboxes: AVec<'a, Clickbox>,
-}
-
-impl<'a> DrawData<'a> {
-    pub fn new(arena: &'a Arena) -> Self {
-        Self {
-            paths: arena.new_vec_with_capacity(1000),
-            sprites: arena.new_vec_with_capacity(1000),
-            labels: arena.new_vec_with_capacity(1000),
-            clickboxes: arena.new_vec_with_capacity(1000),
-        }
+    fn to_mq(self) -> Self::Out {
+        mq::vec2(self.x, self.y)
     }
+}
 
-    pub fn prepare(&mut self) {
-        self.sprites.sort_by_key(|x| x.layer);
+impl ToMq for Rect {
+    type Out = mq::Rect;
+
+    fn to_mq(self) -> Self::Out {
+        mq::Rect::new(self.x, self.y, self.w, self.h)
     }
 }
 
@@ -178,7 +148,7 @@ impl Board {
 
             for path in &draw_data.paths {
                 let delta = path.end - path.start;
-                let length = delta.length();
+                let length = delta.magnitude();
                 if length <= 0.0001 {
                     continue;
                 }
@@ -195,7 +165,7 @@ impl Board {
                     mq::DrawTextureParams {
                         dest_size: Some(mq::vec2(length, PATH_THICKNESS)),
                         rotation: angle,
-                        pivot: Some(path.start),
+                        pivot: Some(path.start.to_mq()),
                         ..Default::default()
                     },
                 );
@@ -216,7 +186,7 @@ impl Board {
                 let pad = 4. * scale;
                 let vspace = pad;
 
-                let pos = label.pos + mq::vec2(-measure.width / 2., measure.height);
+                let pos = label.pos.to_mq() + mq::vec2(-measure.width / 2., measure.height);
                 mq::draw_rectangle(
                     pos.x - pad,
                     pos.y - pad + vspace - measure.offset_y,
@@ -224,6 +194,12 @@ impl Board {
                     measure.height + pad * 2.,
                     mq::BLACK.with_alpha(0.5),
                 );
+
+                let color = if label.highighted {
+                    mq::YELLOW
+                } else {
+                    mq::WHITE
+                };
                 mq::draw_text_ex(
                     label.text,
                     pos.x,
@@ -231,7 +207,7 @@ impl Board {
                     mq::TextParams {
                         font,
                         font_size: label.font_size,
-                        color: label.color,
+                        color,
                         font_scale: scale,
                         ..Default::default()
                     },
@@ -250,8 +226,13 @@ impl Board {
                         continue;
                     }
 
+                    let border_highlight = if sprite.border_highlight {
+                        mq::YELLOW.with_alpha(0.9)
+                    } else {
+                        mq::Color::default()
+                    };
                     self.sprite_shader
-                        .set_uniform("border_highlight", (sprite.border_highlight,));
+                        .set_uniform("border_highlight", (border_highlight,));
                     self.sprite_shader
                         .set_uniform("pulse_intensity", sprite.pulse_intensity);
 
@@ -263,7 +244,7 @@ impl Board {
                         mq::WHITE,
                         mq::DrawTextureParams {
                             source: Some(source),
-                            dest_size: Some(sprite.bounds.size()),
+                            dest_size: Some(sprite.bounds.size().to_mq()),
                             ..Default::default()
                         },
                     );
@@ -280,7 +261,7 @@ impl Board {
                 .clickboxes
                 .iter()
                 .rev()
-                .find(|cb| cb.bounds.contains(pick_pos))
+                .find(|cb| cb.bounds.to_mq().contains(pick_pos))
                 .map(|cb| cb.id)
                 .unwrap_or_default();
         }

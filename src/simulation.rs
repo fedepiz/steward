@@ -1,13 +1,27 @@
 use std::marker::PhantomData;
 
-use util::{arena::Arena, geom::V2};
+use util::{
+    arena::Arena,
+    geom::{Rect, V2},
+};
 
-use crate::things::{self, *};
+use crate::{
+    draw::*,
+    things::{self, *},
+};
 
 pub(crate) struct Simulation {
     pub thick_num: u64,
     pub things: Things,
     nav_cache: NavCache,
+}
+
+impl Simulation {
+    const PLAYER_TAG: &'static str = "player";
+
+    pub(crate) fn player(&self) -> ThingId {
+        self.things.lookup_tag(Self::PLAYER_TAG)
+    }
 }
 
 struct NavCacheBuilder {
@@ -130,7 +144,7 @@ pub(crate) fn setup(scratch: &Arena) -> Simulation {
     let ctx = &mut things;
 
     // Create the player thing
-    ctx.spawn_with_tag("player");
+    ctx.spawn_with_tag(Simulation::PLAYER_TAG);
 
     let csv = csv::parse_file(scratch, "data/init.csv");
     for row in csv.rows() {
@@ -319,13 +333,26 @@ fn index_in_list(ctx: &Things, list: List, this: &Thing) -> Option<(ThingId, usi
 
 #[derive(Default)]
 pub(crate) struct Request {
-    pub delta: f32, // Delta time, for animation
+    // Delta time, for animations
+    pub delta: f32,
+    // Turns to simulate
     pub advance_time: usize,
+    // Selection
+    // - entity selected
+    pub select_entity: ThingId,
+    // Messages
+    // - page to show
+    pub message_page: usize,
+    // - how big is a page
+    pub messages_per_page: usize,
+    // - message to focus on
+    pub message_expended: ThingId,
+    // Despawns
+    pub despawns: Vec<ThingId>,
 }
 
 #[derive(Default, Clone, Copy)]
 pub(crate) struct OrderType {
-    id: &'static str,
     pub name: &'static str,
     completion_message: &'static str,
     move_to_destination: bool,
@@ -334,21 +361,18 @@ pub(crate) struct OrderType {
 
 const ORDER_TYPES: [OrderType; 3] = [
     OrderType {
-        id: "nothing",
         name: "Nothing",
         completion_message: "THIS IS A DUMMMY ORDER TYPE",
         move_to_destination: false,
         wants_to_be_inside: false,
     },
     OrderType {
-        id: "move_to",
         name: "Move to #1",
         completion_message: "#0 has arrived as #1",
         move_to_destination: true,
         wants_to_be_inside: false,
     },
     OrderType {
-        id: "enter",
         name: "Enter #1",
         completion_message: "#0 has entered #1",
         move_to_destination: true,
@@ -405,12 +429,40 @@ fn render_template_string<'a>(arena: &'a Arena, template: &str, params: &[&str])
     buffer.into_bump_str()
 }
 
-pub(crate) fn tick(sim: &mut Simulation, request: Request) {
+pub(crate) struct Response<'a> {
+    pub selected_entity: ThingId,
+    pub messages: MessagesInfo<'a>,
+    pub draw_data: DrawData<'a>,
+}
+
+impl<'a> Response<'a> {
+    fn new(arena: &'a Arena) -> Self {
+        Self {
+            selected_entity: ThingId::null(),
+            messages: MessagesInfo::default(),
+            draw_data: DrawData::new(arena),
+        }
+    }
+}
+
+#[derive(Default)]
+pub(crate) struct MessagesInfo<'a> {
+    pub expanded: Option<(ThingId, &'a str)>,
+    pub list: &'a [(ThingId, &'a str)],
+    pub current_page: usize,
+    pub number_of_pages: usize,
+}
+
+pub(crate) fn tick<'a>(sim: &mut Simulation, req: Request, arena: &'a Arena) -> Response<'a> {
     let _span = tracing::info_span!("Tick").entered();
 
-    let player = sim.things.lookup_tag("player");
+    for id in req.despawns {
+        sim.things.despawn(id);
+    }
 
-    for _ in 0..request.advance_time {
+    let player = sim.player();
+
+    for _ in 0..req.advance_time {
         sim.thick_num = sim.thick_num.wrapping_add(1);
 
         if sim.thick_num == 1 {
@@ -455,7 +507,7 @@ pub(crate) fn tick(sim: &mut Simulation, request: Request) {
                     // Movement
                     update_movement_intention(ctx, this);
                     progress_travel(ctx, this, commands, &mut sim.nav_cache);
-                    let movement_status = update_body_of_local_things(ctx, this, request.delta);
+                    let movement_status = update_body_of_local_things(ctx, this, req.delta);
                     let has_arrived = matches!(movement_status, MovementStatus::Arrived);
 
                     // A person is invisible if it is not yet arrived at its destination, nor is inside
@@ -464,6 +516,44 @@ pub(crate) fn tick(sim: &mut Simulation, request: Request) {
             },
         );
     }
+
+    let mut response = Response::new(arena);
+
+    let selected_entity = if sim.things.exists(req.select_entity) {
+        req.select_entity
+    } else {
+        ThingId::null()
+    };
+    response.selected_entity = selected_entity;
+
+    sim.things.readonly_pass(|ctx, this| {
+        render_thing(ctx, this, &mut response.draw_data, response.selected_entity);
+    });
+
+    if req.messages_per_page > 0 {
+        let num_messages = player.get(&sim.things).list_len(List::Messages);
+        let number_of_pages = (num_messages.saturating_sub(1) / req.messages_per_page) + 1;
+        let current_page = req.message_page.clamp(1, number_of_pages);
+        let to_skip = current_page.saturating_sub(1) * req.messages_per_page;
+
+        let iter = sim
+            .things
+            .iter_list(List::Messages, player)
+            .skip(to_skip)
+            .take(num_messages)
+            .map(|msg| (msg, render_message(arena, &sim.things, msg)));
+
+        response.messages.list = arena.alloc_slice_iter(iter);
+        response.messages.current_page = current_page;
+        response.messages.number_of_pages = number_of_pages;
+    };
+
+    response.messages.expanded = req
+        .message_expended
+        .as_valid()
+        .map(|id| (id, render_message(arena, &sim.things, id)));
+
+    response
 }
 
 fn check_order_completion(
@@ -633,4 +723,58 @@ fn send_message(
 fn assign_ownership(this: &mut Thing, owner: ThingId) {
     this.set_flag(Flag::MustBeOwned, true);
     this.set_link(Link::Owner, owner);
+}
+
+fn render_thing(ctx: &Things, this: &Thing, draw_data: &mut DrawData, selected_id: ThingId) {
+    if !this.flag(Flag::IsVisible) {
+        return;
+    }
+    if this.body.size > 0 && !this.sprite().is_empty() {
+        let is_selected = this.id() == selected_id;
+
+        let size = this.body.size as f32;
+        let xy = V2::new(this.body.x, this.body.y) - size / 2.;
+        let bounds = Rect::new(xy.x, xy.y, size, size);
+
+        let sprite = Sprite {
+            image: this.sprite(),
+            bounds,
+            layer: this.body.layer,
+            border_highlight: is_selected,
+            pulse_intensity: if is_selected { 1.0 } else { 0.0 },
+        };
+        draw_data.sprites.push(sprite);
+
+        let show_name = is_selected || this.flag(Flag::IsSettlement);
+        if show_name {
+            let name = this.name();
+            if !name.is_empty() {
+                let layer = this.body.layer.max(if is_selected { 3 } else { 0 });
+                draw_data.labels.push(Label {
+                    text: name,
+                    pos: xy + V2::new(size / 2., size),
+                    font_size: 24,
+                    highighted: is_selected,
+                    layer,
+                });
+            }
+        }
+
+        draw_data.clickboxes.push(Clickbox {
+            id: this.id(),
+            bounds,
+        });
+    }
+    if this.flag(Flag::IsPath) {
+        let a = this.link(self::Link::A);
+        let b = this.link(self::Link::B);
+        if a.is_valid() && b.is_valid() {
+            let a_pos = V2::new(ctx[a].body.x, ctx[a].body.y);
+            let b_pos = V2::new(ctx[b].body.x, ctx[b].body.y);
+            draw_data.paths.push(Path {
+                start: a_pos,
+                end: b_pos,
+            });
+        }
+    }
 }

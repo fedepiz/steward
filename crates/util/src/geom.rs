@@ -78,6 +78,13 @@ impl std::ops::Sub for V2 {
     }
 }
 
+impl std::ops::Sub<f32> for V2 {
+    type Output = V2;
+    fn sub(self, rhs: f32) -> Self::Output {
+        Self::new(self.x - rhs, self.y - rhs)
+    }
+}
+
 impl std::ops::SubAssign for V2 {
     fn sub_assign(&mut self, rhs: Self) {
         *self = *self - rhs;
@@ -108,6 +115,10 @@ pub struct Rect {
 }
 
 impl Rect {
+    pub fn new(x: f32, y: f32, w: f32, h: f32) -> Self {
+        Self { x, y, w, h }
+    }
+
     pub fn with_position(self, pos: V2) -> Self {
         Self {
             x: pos.x,
