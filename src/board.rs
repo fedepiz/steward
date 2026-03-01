@@ -521,7 +521,7 @@ fn wrap_text<'a>(
                 break;
             }
             let y = if is_sprite {
-                -width * (SPRITE_SCALE - 1.) / 4.
+                -width * (SPRITE_SCALE - 1.) / 3.
             } else {
                 offset_y
             };

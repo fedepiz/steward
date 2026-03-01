@@ -246,7 +246,7 @@ pub(crate) fn setup(scratch: &Arena) -> Simulation {
             let holder = commands.spawn_and_set_parent(List::Possessions, this.id());
             let name = NAMES[this.id().slot() % NAMES.len()];
             holder.set_name(name);
-            holder.set_sprite("person");
+            holder.set_sprite("soldier");
             holder.set_flag(Flag::IsPerson, true);
             holder.body = Body {
                 size: 2,

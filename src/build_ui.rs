@@ -61,7 +61,11 @@ pub(super) fn root<'a>(
                 gui.panel(|mut gui| {
                     gui.inner().center_on_growth_axis(false);
                     gui.inner().screen_pos(V2::new(0., 0.5));
-                    gui.heading("Selected Entity", 8.);
+
+                    let text = gui
+                        .arena()
+                        .fmt(format_args!("Selected Entity $sprite${}", this.sprite()));
+                    gui.heading(text, 8.);
 
                     gui.row(|mut gui| {
                         gui.line_sized("Name:", 2.);
