@@ -358,10 +358,12 @@ pub(crate) struct MessageRequest {
 
 #[derive(Default)]
 pub(crate) struct CommunicationRequest {
+    // The list of requested communication pieces that are confirmed
     pub enqueued_pieces: Vec<CommPieceRequest>,
+    // Information about the currently open communication piece
     pub selected_option: Option<usize>,
     pub target: ThingId,
-    pub enqueue: bool,
+    // Please send
     pub send: bool,
 }
 
@@ -376,38 +378,68 @@ pub(crate) struct OrderType {
     completion_message: &'static str,
     move_to_destination: bool,
     wants_to_be_inside: bool,
+    wait_time: f32,
 }
 
-const ORDER_TYPES: [OrderType; 3] = [
+mod order_types {
+    use crate::simulation::OrderType;
+
+    pub const MOVE: OrderType = OrderType {
+        name: "Move to #1",
+        completion_message: "#0 has arrived to #1",
+        move_to_destination: true,
+        wants_to_be_inside: false,
+        wait_time: 0.,
+    };
+    pub const ENTER: OrderType = OrderType {
+        name: "Enter #1",
+        completion_message: "#0 has entered #1",
+        move_to_destination: true,
+        wants_to_be_inside: true,
+        wait_time: 0.,
+    };
+}
+
+const ORDER_TYPES: [OrderType; 4] = [
     OrderType {
         name: "Nothing",
         completion_message: "THIS IS A DUMMMY ORDER TYPE",
         move_to_destination: false,
         wants_to_be_inside: false,
+        wait_time: 0.,
     },
     OrderType {
         name: "Move to #1",
         completion_message: "#0 has arrived to #1",
         move_to_destination: true,
         wants_to_be_inside: false,
+        wait_time: 0.,
     },
     OrderType {
         name: "Enter #1",
         completion_message: "#0 has entered #1",
         move_to_destination: true,
         wants_to_be_inside: true,
+        wait_time: 0.,
+    },
+    OrderType {
+        name: "Wait",
+        completion_message: "#0 has entered #1",
+        move_to_destination: false,
+        wants_to_be_inside: false,
+        wait_time: 1000.,
     },
 ];
 
 #[inline]
-fn get_order_type(order: &Thing) -> &OrderType {
+fn get_order_type<'a>(order: &Thing) -> &'a OrderType {
     &ORDER_TYPES[order.handle(Handle::Type) as usize]
 }
 
 #[inline]
 fn render_order_name<'a>(arena: &'a Arena, ctx: &Things, order: &Thing) -> &'a str {
     let params = &[
-        ctx[order.link(Link::Owner)].name(),
+        ctx[order.link(Link::GCOwner)].name(),
         ctx[order.link(Link::Destination)].name(),
     ];
     render_template_string(arena, order.name(), params)
@@ -453,6 +485,7 @@ pub(crate) struct CommunicationType {
     short_name: &'static str,
     long_name: &'static str,
     target_type: TargetType,
+    order: Option<&'static OrderType>,
 }
 
 #[derive(Clone, Copy, Default)]
@@ -475,6 +508,7 @@ const COMMUNICATION_TYPES: [CommunicationType; 2] = [
             name: "location",
             flag: Flag::IsLocation,
         },
+        order: Some(&order_types::MOVE),
     },
     CommunicationType {
         short_name: "Enter",
@@ -483,6 +517,7 @@ const COMMUNICATION_TYPES: [CommunicationType; 2] = [
             name: "settlement",
             flag: Flag::IsSettlement,
         },
+        order: Some(&order_types::ENTER),
     },
 ];
 
@@ -538,8 +573,6 @@ pub(crate) struct CommunicationInfo<'a> {
     // Pick a target please!
     pub pick_target: bool,
     // Are we ready to...
-    // - enqueue the current piece
-    pub ready_to_enqueue: bool,
     // - send the whole thing
     pub ready_to_send: bool,
     // Did we just send
@@ -567,14 +600,9 @@ pub(crate) fn tick<'a>(sim: &mut Simulation, request: Request, arena: &'a Arena)
             // We are sending a communication
             if request.communication.send {
                 for piece in &request.communication.enqueued_pieces {
-                    match piece.type_idx {
-                        0 => {
-                            add_order(this, 1, piece.target, commands);
-                        }
-                        1 => {
-                            add_order(this, 2, piece.target, commands);
-                        }
-                        _ => {}
+                    let typ = &COMMUNICATION_TYPES[piece.type_idx];
+                    if let Some(order_type) = typ.order {
+                        add_order(this, order_type, piece.target, commands);
                     }
                 }
             }
@@ -591,7 +619,7 @@ pub(crate) fn tick<'a>(sim: &mut Simulation, request: Request, arena: &'a Arena)
             |_, _| true,
             |ctx, this, commands| {
                 // Automatic destruction of dependent objects
-                if this.flag(Flag::MustBeOwned) && !ctx.exists(this.link(Link::Owner)) {
+                if this.flag(Flag::MustBeOwned) && !ctx.exists(this.link(Link::GCOwner)) {
                     commands.despawn(this.id());
                 }
 
@@ -600,7 +628,7 @@ pub(crate) fn tick<'a>(sim: &mut Simulation, request: Request, arena: &'a Arena)
                     check_order_completion(ctx, this, commands, player);
 
                     // Movement
-                    update_movement_intention(ctx, this);
+                    update_intentions(ctx, this);
                     progress_travel(ctx, this, commands, &mut sim.nav_cache);
                     let movement_status = update_body_of_local_things(ctx, this, request.delta);
                     let has_arrived = matches!(movement_status, MovementStatus::Arrived);
@@ -658,10 +686,11 @@ pub(crate) fn tick<'a>(sim: &mut Simulation, request: Request, arena: &'a Arena)
 
     // Communications
     let req = &request.communication;
+    let can_enqueue = req.selected_option.is_some() && req.target.is_valid();
     if !req.send {
         let info = &mut response.communication;
 
-        let new_piece = if req.enqueue {
+        let new_piece = if can_enqueue {
             let target = req.target;
             req.selected_option
                 .map(|type_idx| CommPieceRequest { type_idx, target })
@@ -694,7 +723,7 @@ pub(crate) fn tick<'a>(sim: &mut Simulation, request: Request, arena: &'a Arena)
         );
 
         // If we have not enqueued the message, we carry over the data as it is
-        if !req.enqueue {
+        if !can_enqueue {
             if let Some(idx) = req.selected_option {
                 let typ = &COMMUNICATION_TYPES[idx];
 
@@ -716,7 +745,6 @@ pub(crate) fn tick<'a>(sim: &mut Simulation, request: Request, arena: &'a Arena)
         }
 
         info.pick_target = info.selected_option.is_some() && info.target.is_null();
-        info.ready_to_enqueue = info.selected_option.is_some() && info.target.is_valid();
         info.ready_to_send = !info.enqueued_pieces.is_empty();
     }
     response.communication.just_sent = request.communication.send;
@@ -748,13 +776,17 @@ pub(crate) fn tick<'a>(sim: &mut Simulation, request: Request, arena: &'a Arena)
     response
 }
 
-fn add_order(this: &mut Thing, order_type: u16, destination: ThingId, commands: &mut Commands) {
+fn add_order(this: &mut Thing, typ: &OrderType, destination: ThingId, commands: &mut Commands) {
     let order = commands.spawn_and_append_to_list(List::Orders, this.id());
-    order.set_handle(Handle::Type, order_type);
+
+    let order_type_idx = ORDER_TYPES.iter().position(|x| x.name == typ.name).unwrap() as u16;
+    order.set_handle(Handle::Type, order_type_idx);
+
     let order_type = get_order_type(order);
     order.set_name(order_type.name);
     order.set_flag(Flag::IsOrder, true);
     order.set_link(Link::Destination, destination);
+    order.set_var(Var::WaitTime, order_type.wait_time);
     assign_ownership(order, this.id());
 }
 
@@ -768,7 +800,8 @@ fn check_order_completion(
         let order_type = get_order_type(order);
         let location = this.parent(List::AtLocation);
         let arrived = location == order.link(Link::Destination);
-        if arrived {
+        let waited_sufficiently = this.var(Var::WaitTime) >= order.var(Var::WaitTime);
+        if arrived && waited_sufficiently {
             // Order completed
             commands.despawn(order.id());
             commands.remove_from_list(List::Orders, order.id());
@@ -779,16 +812,25 @@ fn check_order_completion(
                 &[this.id(), location],
                 player,
             );
+
+            this.clear_link(Link::CurrentOrder);
         }
     }
 }
 
-fn update_movement_intention(ctx: &Things, this: &mut Thing) {
+fn update_intentions(ctx: &Things, this: &mut Thing) {
+    let current_order = this.link(Link::CurrentOrder);
     // Take the current destination, and the destination from other sources
     let current_destination = this.link(Link::Destination);
 
     if let Some(order) = this.first(List::Orders).get_as_valid(ctx) {
         let order_type = get_order_type(order);
+
+        // This is a new order! Reset stuff like wait time etc
+        if current_order != order.id() {
+            this.set_link(Link::CurrentOrder, order.id());
+            this.set_var(Var::WaitTime, 0.);
+        }
 
         let ordered_destination = if order_type.move_to_destination {
             order.link(Link::Destination)
@@ -801,6 +843,9 @@ fn update_movement_intention(ctx: &Things, this: &mut Thing) {
         if current_destination != ordered_destination {
             this.set_link(Link::Destination, ordered_destination);
             this.set_var(Var::MovementTime, 0.);
+        } else {
+            // If we are at the current destination, increment wait time
+            this.set_var(Var::WaitTime, this.var(Var::WaitTime) + 1.);
         }
 
         this.set_flag(Flag::WantsToBeInside, order_type.wants_to_be_inside);
@@ -924,7 +969,7 @@ fn send_message(
 
 fn assign_ownership(this: &mut Thing, owner: ThingId) {
     this.set_flag(Flag::MustBeOwned, true);
-    this.set_link(Link::Owner, owner);
+    this.set_link(Link::GCOwner, owner);
 }
 
 fn render_thing(

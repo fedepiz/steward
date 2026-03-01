@@ -87,6 +87,7 @@ impl Default for Flag {
 pub(crate) enum Var {
     Dummy,
     MovementTime,
+    WaitTime,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug, EnumIter, EnumCount)]
@@ -101,12 +102,12 @@ pub(crate) enum Link {
     Dummy,
     // A link that, in combination with the flag MustBeOwned, specified dynamic lifetime for this
     // thing. Used commonly for 'parts' of a whole
-    Owner,
+    GCOwner,
     // Generic A -> B links
     A,
     B,
     Destination,
-    // Order,
+    CurrentOrder,
 }
 
 impl Default for Link {

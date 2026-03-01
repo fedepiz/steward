@@ -136,6 +136,7 @@ pub(super) fn root<'a>(
 
                     let info = &response.communication;
 
+                    let mut remove_piece_at_index = None;
                     match response.selected_entity.get_as_valid(things) {
                         Some(this) => {
                             {
@@ -143,9 +144,15 @@ pub(super) fn root<'a>(
                                 gui.line_sized(name, 10.);
                             }
 
-                            for piece in info.enqueued_pieces {
-                                let text = gui.arena().alloc_str(piece.name);
-                                gui.line_sized(text, 10.);
+                            for (idx, piece) in info.enqueued_pieces.iter().enumerate() {
+                                gui.row(|mut gui| {
+                                    let text = gui.arena().alloc_str(piece.name);
+                                    gui.line_sized(text, 9.);
+                                    let text = gui.arena().fmt(format_args!("X##del_comm_{idx}"));
+                                    if gui.button_sized(text, 1.) {
+                                        remove_piece_at_index = Some(idx);
+                                    }
+                                });
                             }
 
                             if let Some((_, name)) = info.selected_option {
@@ -162,10 +169,6 @@ pub(super) fn root<'a>(
                                 });
                             }
                             gui.row(|mut gui| {
-                                if gui.button_generic("Confirm", 2., info.ready_to_enqueue) {
-                                    request.communication.enqueue = true;
-                                }
-
                                 if gui.button_generic("Send", 2., info.ready_to_send) {
                                     request.communication.send = true;
                                 }
@@ -174,6 +177,10 @@ pub(super) fn root<'a>(
                         None => {
                             gui.line_sized("No entity selected...", 10.);
                         }
+                    }
+
+                    if let Some(idx) = remove_piece_at_index {
+                        request.communication.enqueued_pieces.remove(idx);
                     }
                 });
             }
