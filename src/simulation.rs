@@ -14,7 +14,41 @@ pub(crate) struct Simulation {
     pub thick_num: u64,
     pub things: Things,
     nav_cache: NavCache,
+    names: &'static [&'static str],
 }
+
+const NAMES: &'static [&'static str] = &[
+    "Aneirin",
+    "Cadfan",
+    "Ceneu",
+    "Clydno",
+    "Cynfelyn",
+    "Cynon",
+    "Deroch",
+    "Dumnagual",
+    "Dyfnwal",
+    "Eliffer",
+    "Eugein",
+    "Gwallog",
+    "Gwenddoleu",
+    "Iddon",
+    "Llywarch",
+    "Mabon",
+    "Madog",
+    "Morcant",
+    "Myrddin",
+    "Nudd",
+    "Nwython",
+    "Owain",
+    "Pabo",
+    "Peredur",
+    "Rhun",
+    "Rhydderch",
+    "Selyf",
+    "Talorc",
+    "Teneu",
+    "Tutagual",
+];
 
 const PLAYER_TAG: &'static str = "player";
 const COMMS_TAG: &'static str = "communications";
@@ -174,7 +208,7 @@ pub(crate) fn setup(scratch: &Arena) -> Simulation {
                 ctx.with_commands(|_, cmds| {
                     for _ in 0..num_estates {
                         let estate = cmds.spawn_and_append_to_list(List::Parts, this);
-                        estate.set_name("Test Estate");
+                        estate.set_name("Clan");
                         estate.set_flag(Flag::IsEstate, true);
                     }
                 });
@@ -242,6 +276,7 @@ pub(crate) fn setup(scratch: &Arena) -> Simulation {
         thick_num: 0,
         things,
         nav_cache,
+        names: NAMES,
     }
 }
 
@@ -597,7 +632,8 @@ pub(crate) fn tick<'a>(sim: &mut Simulation, request: Request, arena: &'a Arena)
         sim.things.write_pass(|_, this, commands| {
             if this.flag(Flag::IsEstate) && this.parent(List::Possessions).is_null() {
                 let holder = commands.spawn_and_set_parent(List::Possessions, this.id());
-                holder.set_name("Notable");
+                let name = sim.names[this.id().slot() % sim.names.len()];
+                holder.set_name(name);
                 holder.set_sprite("person");
                 holder.set_flag(Flag::IsPerson, true);
                 holder.body = Body {

@@ -243,7 +243,7 @@ async fn amain() {
         let forced_pause = ui_data.open_panels[Panel::Communications as usize];
         let time_speed = if ui_data.pause_requested || forced_pause {
             0
-        } else if mq::is_key_down(mq::KeyCode::LeftShift) {
+        } else if mq::is_key_down(mq::KeyCode::LeftControl) {
             5
         } else {
             1

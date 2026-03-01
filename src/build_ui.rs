@@ -85,11 +85,10 @@ pub(super) fn root<'a>(
                         // For each entity inside
                         for (idx, thing) in things_inside.iter().enumerate() {
                             gui.row(|mut gui| {
-                                let name = gui.arena().alloc_str(thing.name());
-                                gui.line_sized(name, 4.);
-                                if gui.button(
-                                    gui.arena().fmt(format_args!("Select##sel_inside_{idx}")),
-                                ) {
+                                let name = gui
+                                    .arena()
+                                    .fmt(format_args!("{}##sel_inside_{idx}", thing.name()));
+                                if gui.button_sized(name, 4.) {
                                     request.select_entity = thing.id();
                                 }
                             });
@@ -106,8 +105,8 @@ pub(super) fn root<'a>(
                             gui.line_sized("There are no estates here", 4.);
                         } else {
                             gui.row(|mut gui| {
-                                gui.label_sized("Estate", 3.);
-                                gui.label_sized("Holder", 4.);
+                                gui.label_sized("Estate", 2.);
+                                gui.label_sized("Leader", 4.);
                             });
                         }
 
@@ -115,7 +114,7 @@ pub(super) fn root<'a>(
                             gui.row(|mut gui| {
                                 {
                                     let name = gui.arena().alloc_str(estate.name());
-                                    gui.line_sized(name, 3.);
+                                    gui.line_sized(name, 2.);
                                 }
 
                                 {
