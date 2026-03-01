@@ -63,10 +63,55 @@ pub(super) fn root<'a>(
                     gui.inner().screen_pos(V2::new(0., 0.5));
                     gui.heading("Selected Entity", 8.);
 
-                    let text = gui.arena().fmt(format_args!("Name: {}", this.name()));
-                    gui.line_sized(text, 6.);
+                    gui.row(|mut gui| {
+                        gui.line_sized("Name:", 2.);
+                        let text = gui
+                            .arena()
+                            .fmt(format_args!("{}##entity_name", this.name()));
+                        gui.label_sized(text, 4.);
+                    });
+
+                    let selectable_entity =
+                        |gui: &mut GuiPlus,
+                         request: &mut Request,
+                         title: &'static str,
+                         entity: ThingId| {
+                            gui.row(|mut gui| {
+                                gui.line_sized(title, 2.);
+                                let entity = entity.get_as_valid(things);
+                                let name = entity.map(|x| x.name()).unwrap_or("Vacant");
+                                if gui.button_generic(
+                                    gui.arena().alloc_str(name),
+                                    4.,
+                                    entity.is_some(),
+                                ) {
+                                    request.select_entity =
+                                        entity.map(|x| x.id()).unwrap_or_default();
+                                }
+                            });
+                        };
+
+                    if this.flag(Flag::IsPerson) {
+                        if let Some(leader) = this.parent(List::Subordinates).as_valid() {
+                            selectable_entity(&mut gui, request, "Leader:", leader);
+                        }
+
+                        if let Some(location) = things
+                            .iter_list_get(List::Possessions, this.id())
+                            .find(|x| x.flag(Flag::IsLocation))
+                        {
+                            selectable_entity(&mut gui, request, "Base:", location.id());
+                        }
+                    }
 
                     if this.flag(Flag::IsSettlement) {
+                        selectable_entity(
+                            &mut gui,
+                            request,
+                            "Leader:",
+                            this.parent(List::Possessions),
+                        );
+
                         gui.heading("Entities inside", 6.);
 
                         // Get entities inside the settlemetn
@@ -90,44 +135,6 @@ pub(super) fn root<'a>(
                                     .fmt(format_args!("{}##sel_inside_{idx}", thing.name()));
                                 if gui.button_sized(name, 4.) {
                                     request.select_entity = thing.id();
-                                }
-                            });
-                        }
-
-                        gui.heading("Estates", 8.);
-                        let estates = gui.arena().alloc_slice_iter(
-                            things
-                                .iter_list_get(List::Parts, this.id())
-                                .filter(|x| x.flag(Flag::IsEstate)),
-                        );
-
-                        if estates.is_empty() {
-                            gui.line_sized("There are no estates here", 4.);
-                        } else {
-                            gui.row(|mut gui| {
-                                gui.label_sized("Estate", 2.);
-                                gui.label_sized("Leader", 4.);
-                            });
-                        }
-
-                        for (row_idx, estate) in estates.iter().enumerate() {
-                            gui.row(|mut gui| {
-                                {
-                                    let name = gui.arena().alloc_str(estate.name());
-                                    gui.line_sized(name, 2.);
-                                }
-
-                                {
-                                    let holder =
-                                        estate.parent(List::Possessions).get_as_valid(things);
-                                    let name = holder.map(|x| x.name()).unwrap_or("Vacant");
-                                    let text =
-                                        gui.arena().fmt(format_args!("{name}##estate_{row_idx}"));
-
-                                    if gui.button_generic(text, 4., holder.is_some()) {
-                                        request.select_entity =
-                                            holder.map(|x| x.id()).unwrap_or_default();
-                                    }
                                 }
                             });
                         }

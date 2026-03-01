@@ -14,7 +14,6 @@ pub(crate) struct Simulation {
     pub thick_num: u64,
     pub things: Things,
     nav_cache: NavCache,
-    names: &'static [&'static str],
 }
 
 const NAMES: &'static [&'static str] = &[
@@ -180,7 +179,7 @@ pub(crate) fn setup(scratch: &Arena) -> Simulation {
     for row in csv.rows() {
         match row[0].as_str() {
             "spawn_settlement" => {
-                let kind = row[1].as_str();
+                // let kind = row[1].as_str();
                 let tag = row[2].as_str().to_string().leak();
                 let this = ctx.spawn_with_tag(tag);
                 this.set_name(row[3].as_str().to_string().leak());
@@ -193,25 +192,6 @@ pub(crate) fn setup(scratch: &Arena) -> Simulation {
                 };
                 this.set_flag(Flag::IsLocation, true);
                 this.set_flag(Flag::IsSettlement, true);
-
-                let num_estates = match kind {
-                    "town" => 3,
-                    "hillfort" => 2,
-                    "village" => 2,
-                    other => {
-                        println!("Invalid settlement kind '{other}'");
-                        0
-                    }
-                };
-
-                let this = this.id();
-                ctx.with_commands(|_, cmds| {
-                    for _ in 0..num_estates {
-                        let estate = cmds.spawn_and_append_to_list(List::Parts, this);
-                        estate.set_name("Clan");
-                        estate.set_flag(Flag::IsEstate, true);
-                    }
-                });
             }
             "spawn_waypoint" => {
                 let tag = row[1].as_str().to_string().leak();
@@ -260,6 +240,59 @@ pub(crate) fn setup(scratch: &Arena) -> Simulation {
             _ => {}
         }
     }
+    // Fill in all vacant estates
+    ctx.write_pass(|_, this, commands| {
+        if this.flag(Flag::IsSettlement) && this.parent(List::Possessions).is_null() {
+            let holder = commands.spawn_and_set_parent(List::Possessions, this.id());
+            let name = NAMES[this.id().slot() % NAMES.len()];
+            holder.set_name(name);
+            holder.set_sprite("person");
+            holder.set_flag(Flag::IsPerson, true);
+            holder.body = Body {
+                size: 2,
+                layer: 1,
+                ..Default::default()
+            }
+        }
+    });
+
+    // Set the location of all un-locaitoned people...
+    ctx.write_pass(|ctx, this, commands| {
+        if this.flag(Flag::IsPerson) && this.parent(List::AtLocation).is_null() {
+            // Do we control an area?
+            let location = ctx
+                .iter_list_get(List::Possessions, this.id())
+                .filter(|x| x.flag(Flag::IsLocation))
+                .next()
+                .map(|x| x.id())
+                .unwrap_or_default();
+
+            this.set_flag(Flag::WantsToBeInside, true);
+            this.set_flag(Flag::IsInside, true);
+            this.set_flag(Flag::Teleport, true);
+
+            commands.add_to_list(List::AtLocation, location, this.id());
+        }
+    });
+
+    // Use the "set_loyalty" commands
+
+    for row in csv.rows() {
+        match row[0].as_str() {
+            "set_loyalty" => {
+                let subordinate = ctx
+                    .lookup_tag(row[1].as_str())
+                    .get(&ctx)
+                    .parent(List::Possessions);
+                let superior = ctx
+                    .lookup_tag(row[2].as_str())
+                    .get(&ctx)
+                    .parent(List::Possessions);
+                ctx.add_to_list(List::Subordinates, superior, subordinate);
+            }
+            _ => {}
+        }
+    }
 
     let mut nav_cache = NavCacheBuilder::new(1024);
 
@@ -276,7 +309,6 @@ pub(crate) fn setup(scratch: &Arena) -> Simulation {
         thick_num: 0,
         things,
         nav_cache,
-        names: NAMES,
     }
 }
 
@@ -374,8 +406,6 @@ impl<K: Slot, V> Csr<K, V> {
 pub(crate) struct Request {
     // Delta time, for animations
     pub delta: f32,
-    // Initialize the world
-    pub init: bool,
     // Turns to simulate
     pub advance_time: usize,
     // Selection
@@ -626,44 +656,6 @@ pub(crate) struct CommunicationInfo<'a> {
 
 pub(crate) fn tick<'a>(sim: &mut Simulation, request: Request, arena: &'a Arena) -> Response<'a> {
     let _span = tracing::info_span!("Tick").entered();
-
-    if request.init {
-        // Fill in all vacant estates
-        sim.things.write_pass(|_, this, commands| {
-            if this.flag(Flag::IsEstate) && this.parent(List::Possessions).is_null() {
-                let holder = commands.spawn_and_set_parent(List::Possessions, this.id());
-                let name = sim.names[this.id().slot() % sim.names.len()];
-                holder.set_name(name);
-                holder.set_sprite("person");
-                holder.set_flag(Flag::IsPerson, true);
-                holder.body = Body {
-                    size: 2,
-                    layer: 1,
-                    ..Default::default()
-                }
-            }
-        });
-
-        // Set the location of all un-locaitoned people...
-        sim.things.write_pass(|ctx, this, commands| {
-            if this.flag(Flag::IsPerson) && this.parent(List::AtLocation).is_null() {
-                // Do we have an estate?
-                let estate = ctx
-                    .iter_list_get(List::Possessions, this.id())
-                    .filter(|x| x.flag(Flag::IsEstate))
-                    .next();
-
-                // Then that's our location
-                let location = estate.map(|x| x.parent(List::Parts)).unwrap_or_default();
-
-                this.set_flag(Flag::WantsToBeInside, true);
-                this.set_flag(Flag::IsInside, true);
-                this.set_flag(Flag::Teleport, true);
-
-                commands.add_to_list(List::AtLocation, location, this.id());
-            }
-        });
-    }
 
     for id in request.despawns {
         sim.things.despawn(id);

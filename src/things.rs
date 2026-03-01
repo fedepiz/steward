@@ -68,7 +68,6 @@ pub(crate) enum Flag {
     IsLocation,
     IsSettlement,
     IsPerson,
-    IsEstate,
     IsPath,
     Teleport,
     IsInvisible,
@@ -122,8 +121,14 @@ pub(crate) enum List {
     Dummy,
     // Generic subparts list
     Parts,
+    // Links a location to all the movable people currently at that location (inside or outside)
     AtLocation,
+    // Links a person to all the thing they 'possess'.
+    // This includes:
+    // - settlements
     Possessions,
+    // Links a 'liege' to all the people who are 'loyal' to them
+    Subordinates,
     Messages,
     Orders,
 }

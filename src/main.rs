@@ -128,11 +128,7 @@ async fn amain() {
 
     let mut ui_data = UiData::default();
 
-    let mut response = {
-        let mut req = Request::default();
-        req.init = true;
-        simulation::tick(&mut sim, req, &frame_arena)
-    };
+    let mut response = simulation::tick(&mut sim, Request::default(), &frame_arena);
 
     loop {
         tracing_tracy::client::frame_mark();
@@ -248,6 +244,7 @@ async fn amain() {
         } else {
             1
         };
+
         {
             let _span = tracing::info_span!("Present").entered();
             {
