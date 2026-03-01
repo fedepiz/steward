@@ -138,8 +138,15 @@ pub(super) fn root<'a>(
 
                     match response.selected_entity.get_as_valid(things) {
                         Some(this) => {
-                            let name = gui.arena().fmt(format_args!("To: {}", this.name()));
-                            gui.line_sized(name, 10.);
+                            {
+                                let name = gui.arena().fmt(format_args!("To: {}", this.name()));
+                                gui.line_sized(name, 10.);
+                            }
+
+                            for piece in info.enqueued_pieces {
+                                let text = gui.arena().alloc_str(piece.name);
+                                gui.line_sized(text, 10.);
+                            }
 
                             if let Some((_, name)) = info.selected_option {
                                 let text = gui.arena().alloc_str(name);
@@ -154,8 +161,11 @@ pub(super) fn root<'a>(
                                     }
                                 });
                             }
-
                             gui.row(|mut gui| {
+                                if gui.button_generic("Confirm", 2., info.ready_to_enqueue) {
+                                    request.communication.enqueue = true;
+                                }
+
                                 if gui.button_generic("Send", 2., info.ready_to_send) {
                                     request.communication.send = true;
                                 }

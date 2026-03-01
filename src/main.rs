@@ -17,7 +17,7 @@ use util::geom::*;
 #[derive(Default)]
 pub(crate) struct UiData {
     pub open_panels: [bool; Panel::COUNT],
-    pub is_paused: bool,
+    pub pause_requested: bool,
 }
 
 impl UiData {
@@ -150,6 +150,15 @@ async fn amain() {
                 response.communication.selected_option.map(|(id, _)| id);
             // Carry over the target
             request.communication.target = response.communication.target;
+            request.communication.enqueued_pieces = response
+                .communication
+                .enqueued_pieces
+                .iter()
+                .map(|piece| CommPieceRequest {
+                    type_idx: piece.type_idx,
+                    target: piece.target,
+                })
+                .collect();
         }
 
         let gui_output;
@@ -227,7 +236,8 @@ async fn amain() {
             }
         };
 
-        let time_speed = if ui_data.is_paused {
+        let forced_pause = ui_data.open_panels[Panel::Communications as usize];
+        let time_speed = if ui_data.pause_requested || forced_pause {
             0
         } else if mq::is_key_down(mq::KeyCode::LeftShift) {
             5
@@ -258,7 +268,7 @@ async fn amain() {
             }
 
             if mq::is_key_pressed(mq::KeyCode::Space) {
-                ui_data.is_paused = !ui_data.is_paused;
+                ui_data.pause_requested = !ui_data.pause_requested;
             }
 
             response.draw_data.prepare();
