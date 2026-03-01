@@ -256,27 +256,7 @@ pub(crate) fn setup(scratch: &Arena) -> Simulation {
         }
     });
 
-    // Set the location of all un-locaitoned people...
-    ctx.write_pass(|ctx, this, commands| {
-        if this.flag(Flag::IsPerson) && this.parent(List::AtLocation).is_null() {
-            // Do we control an area?
-            let location = ctx
-                .iter_list_get(List::Possessions, this.id())
-                .filter(|x| x.flag(Flag::IsLocation))
-                .next()
-                .map(|x| x.id())
-                .unwrap_or_default();
-
-            this.set_flag(Flag::WantsToBeInside, true);
-            this.set_flag(Flag::IsInside, true);
-            this.set_flag(Flag::Teleport, true);
-
-            commands.add_to_list(List::AtLocation, location, this.id());
-        }
-    });
-
     // Use the "set_loyalty" commands
-
     for row in csv.rows() {
         match row[0].as_str() {
             "set_loyalty" => {
@@ -293,6 +273,31 @@ pub(crate) fn setup(scratch: &Arena) -> Simulation {
             _ => {}
         }
     }
+
+    ctx.write_pass(|ctx, this, commands| {
+        if this.flag(Flag::IsPerson) {
+            // Determine persons' sprite
+            let has_subordinates = this.list_len(List::Subordinates) > 0;
+            this.set_sprite(if has_subordinates { "noble" } else { "soldier" });
+
+            // Set location of unlocationed people
+            if this.parent(List::AtLocation).is_null() {
+                // Do we control an area?
+                let location = ctx
+                    .iter_list_get(List::Possessions, this.id())
+                    .filter(|x| x.flag(Flag::IsLocation))
+                    .next()
+                    .map(|x| x.id())
+                    .unwrap_or_default();
+
+                this.set_flag(Flag::WantsToBeInside, true);
+                this.set_flag(Flag::IsInside, true);
+                this.set_flag(Flag::Teleport, true);
+
+                commands.add_to_list(List::AtLocation, location, this.id());
+            }
+        }
+    });
 
     let mut nav_cache = NavCacheBuilder::new(1024);
 
