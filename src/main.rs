@@ -128,11 +128,15 @@ async fn amain() {
 
     let mut ui_data = UiData::default();
 
-    let mut request = crate::simulation::Request::default();
-    let mut response = simulation::tick(&mut sim, Request::default(), &frame_arena);
+    let mut response = {
+        let mut req = Request::default();
+        req.init = true;
+        simulation::tick(&mut sim, req, &frame_arena)
+    };
 
     loop {
         tracing_tracy::client::frame_mark();
+        let mut request = crate::simulation::Request::default();
         request.select_entity = response.selected_entity;
 
         // Refresh message state
@@ -304,7 +308,7 @@ async fn amain() {
         std::mem::drop(response);
         frame_arena.reset();
 
-        response = simulation::tick(&mut sim, std::mem::take(&mut request), &frame_arena);
+        response = simulation::tick(&mut sim, request, &frame_arena);
         mq::next_frame().await;
     }
 }

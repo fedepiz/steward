@@ -62,10 +62,6 @@ impl<'a, 'c> GuiPlus<'a, 'c> {
         self.button_sized(text, 2.)
     }
 
-    pub fn disabled_button(&mut self, text: &'a str) -> bool {
-        self.button_generic(text, 2., true)
-    }
-
     pub fn button_sized(&mut self, text: &'a str, w: f32) -> bool {
         self.button_generic(text, w, true)
     }

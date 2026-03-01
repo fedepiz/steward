@@ -67,10 +67,11 @@ pub(crate) enum Flag {
     MustBeOwned,
     IsLocation,
     IsSettlement,
-    IsParty,
+    IsPerson,
+    IsEstate,
     IsPath,
     Teleport,
-    IsVisible,
+    IsInvisible,
     // Insideness
     WantsToBeInside,
     IsInside,
@@ -122,6 +123,7 @@ pub(crate) enum List {
     // Generic subparts list
     Parts,
     AtLocation,
+    Possessions,
     Messages,
     Orders,
 }
@@ -468,6 +470,14 @@ impl Things {
         }
     }
 
+    pub(crate) fn iter_list_get(
+        &self,
+        list: List,
+        id: ThingId,
+    ) -> impl Iterator<Item = &Thing> + ExactSizeIterator {
+        self.iter_list(list, id).map(|id| id.get(self))
+    }
+
     pub(crate) fn add_to_list(&mut self, list: List, parent: ThingId, child: ThingId) {
         if !child.is_valid() {
             return;
@@ -656,16 +666,12 @@ impl<'a> Iterator for ThingsIterator<'a> {
 }
 
 impl Things {
-    pub(crate) fn write_pass(
-        &mut self,
-        mut filter: impl FnMut(&Things, &Thing) -> bool,
-        mut body: impl FnMut(&Things, &mut Thing, &mut Commands),
-    ) {
+    pub(crate) fn write_pass(&mut self, mut body: impl FnMut(&Things, &mut Thing, &mut Commands)) {
         let mut write_buffer = std::mem::take(&mut self.write_buffer);
         let mut commands = Commands::new();
 
         for (thing, target) in self.entries.iter().zip(write_buffer.iter_mut()) {
-            if thing.id.is_valid() && filter(self, thing) {
+            if thing.id.is_valid() {
                 *target = *thing;
                 body(self, target, &mut commands);
             }
@@ -707,15 +713,18 @@ impl Things {
 
         for spawn in commands.spawns {
             let thing = self.spawn();
-            let id = thing.id;
+            let this = thing.id;
             *thing = spawn.thing;
-            thing.id = id;
+            thing.id = this;
 
             // Save important state on the side
-            let (list, parent) = spawn.to_list;
+            let (list, parent) = spawn.append_to_list;
             if !parent.is_null() {
-                self.add_to_list(list, parent, id);
+                self.add_to_list(list, parent, this);
             }
+
+            let (list, child) = spawn.set_list_parent;
+            self.add_to_list(list, this, child);
         }
     }
 }
@@ -755,9 +764,24 @@ impl Commands {
         self.despawns.push(id);
     }
 
+    // pub fn spawn(&mut self) -> &mut Thing {
+    //     self.spawns.push(Spawn {
+    //         ..Default::default()
+    //     });
+    //     &mut self.spawns.last_mut().unwrap().thing
+    // }
+
     pub fn spawn_and_append_to_list(&mut self, list: List, parent: ThingId) -> &mut Thing {
         self.spawns.push(Spawn {
-            to_list: (list, parent),
+            append_to_list: (list, parent),
+            ..Default::default()
+        });
+        &mut self.spawns.last_mut().unwrap().thing
+    }
+
+    pub fn spawn_and_set_parent(&mut self, list: List, child: ThingId) -> &mut Thing {
+        self.spawns.push(Spawn {
+            set_list_parent: (list, child),
             ..Default::default()
         });
         &mut self.spawns.last_mut().unwrap().thing
@@ -774,5 +798,6 @@ struct ListMutation {
 #[derive(Default)]
 struct Spawn {
     thing: Thing,
-    to_list: (List, ThingId),
+    append_to_list: (List, ThingId),
+    set_list_parent: (List, ThingId),
 }

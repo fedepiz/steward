@@ -61,7 +61,7 @@ pub(super) fn root<'a>(
                 gui.panel(|mut gui| {
                     gui.inner().center_on_growth_axis(false);
                     gui.inner().screen_pos(V2::new(0., 0.5));
-                    gui.heading("Selected Entity", 6.);
+                    gui.heading("Selected Entity", 8.);
 
                     let text = gui.arena().fmt(format_args!("Name: {}", this.name()));
                     gui.line_sized(text, 6.);
@@ -72,9 +72,8 @@ pub(super) fn root<'a>(
                         // Get entities inside the settlemetn
                         let things_inside = {
                             let iter = things
-                                .iter_list(List::AtLocation, this.id())
-                                .filter(|&id| id.get(&things).flag(Flag::IsInside))
-                                .map(|x| x.get(things));
+                                .iter_list_get(List::AtLocation, this.id())
+                                .filter(|x| x.flag(Flag::IsInside));
                             arena.alloc_slice_iter(iter)
                         };
 
@@ -92,6 +91,44 @@ pub(super) fn root<'a>(
                                     gui.arena().fmt(format_args!("Select##sel_inside_{idx}")),
                                 ) {
                                     request.select_entity = thing.id();
+                                }
+                            });
+                        }
+
+                        gui.heading("Estates", 8.);
+                        let estates = gui.arena().alloc_slice_iter(
+                            things
+                                .iter_list_get(List::Parts, this.id())
+                                .filter(|x| x.flag(Flag::IsEstate)),
+                        );
+
+                        if estates.is_empty() {
+                            gui.line_sized("There are no estates here", 4.);
+                        } else {
+                            gui.row(|mut gui| {
+                                gui.label_sized("Estate", 3.);
+                                gui.label_sized("Holder", 4.);
+                            });
+                        }
+
+                        for (row_idx, estate) in estates.iter().enumerate() {
+                            gui.row(|mut gui| {
+                                {
+                                    let name = gui.arena().alloc_str(estate.name());
+                                    gui.line_sized(name, 3.);
+                                }
+
+                                {
+                                    let holder =
+                                        estate.parent(List::Possessions).get_as_valid(things);
+                                    let name = holder.map(|x| x.name()).unwrap_or("Vacant");
+                                    let text =
+                                        gui.arena().fmt(format_args!("{name}##estate_{row_idx}"));
+
+                                    if gui.button_generic(text, 4., holder.is_some()) {
+                                        request.select_entity =
+                                            holder.map(|x| x.id()).unwrap_or_default();
+                                    }
                                 }
                             });
                         }

@@ -146,19 +146,38 @@ pub(crate) fn setup(scratch: &Arena) -> Simulation {
     for row in csv.rows() {
         match row[0].as_str() {
             "spawn_settlement" => {
-                let tag = row[1].as_str().to_string().leak();
+                let kind = row[1].as_str();
+                let tag = row[2].as_str().to_string().leak();
                 let this = ctx.spawn_with_tag(tag);
-                this.set_name(row[2].as_str().to_string().leak());
-                this.set_sprite(row[3].as_str().to_string().leak());
+                this.set_name(row[3].as_str().to_string().leak());
+                this.set_sprite(row[4].as_str().to_string().leak());
                 this.body = Body {
-                    x: row[4].as_num(),
-                    y: row[5].as_num(),
+                    x: row[5].as_num(),
+                    y: row[6].as_num(),
                     size: 4,
                     layer: 0,
                 };
                 this.set_flag(Flag::IsLocation, true);
                 this.set_flag(Flag::IsSettlement, true);
-                this.set_flag(Flag::IsVisible, true);
+
+                let num_estates = match kind {
+                    "town" => 3,
+                    "hillfort" => 2,
+                    "village" => 2,
+                    other => {
+                        println!("Invalid settlement kind '{other}'");
+                        0
+                    }
+                };
+
+                let this = this.id();
+                ctx.with_commands(|_, cmds| {
+                    for _ in 0..num_estates {
+                        let estate = cmds.spawn_and_append_to_list(List::Parts, this);
+                        estate.set_name("Test Estate");
+                        estate.set_flag(Flag::IsEstate, true);
+                    }
+                });
             }
             "spawn_waypoint" => {
                 let tag = row[1].as_str().to_string().leak();
@@ -172,7 +191,6 @@ pub(crate) fn setup(scratch: &Arena) -> Simulation {
                     layer: 0,
                 };
                 this.set_flag(Flag::IsLocation, true);
-                this.set_flag(Flag::IsVisible, true);
             }
             "spawn_person" => {
                 let tag = row[1].as_str().to_string().leak();
@@ -184,8 +202,7 @@ pub(crate) fn setup(scratch: &Arena) -> Simulation {
                     layer: 1,
                     ..Default::default()
                 };
-                this.set_flag(Flag::IsParty, true);
-                this.set_flag(Flag::IsVisible, true);
+                this.set_flag(Flag::IsPerson, true);
             }
             _ => {}
         }
@@ -205,7 +222,6 @@ pub(crate) fn setup(scratch: &Arena) -> Simulation {
                 this.set_link(Link::A, a);
                 this.set_link(Link::B, b);
                 this.set_flag(Flag::IsPath, true);
-                this.set_flag(Flag::IsVisible, true);
             }
             _ => {}
         }
@@ -319,18 +335,12 @@ impl<K: Slot, V> Csr<K, V> {
     }
 }
 
-#[inline]
-fn index_in_list(ctx: &Things, list: List, this: &Thing) -> Option<(ThingId, usize)> {
-    let parent = this.parent(list).as_valid()?;
-    ctx.iter_list(list, parent)
-        .position(|x| this.id() == x)
-        .map(|x| (parent, x))
-}
-
 #[derive(Default)]
 pub(crate) struct Request {
     // Delta time, for animations
     pub delta: f32,
+    // Initialize the world
+    pub init: bool,
     // Turns to simulate
     pub advance_time: usize,
     // Selection
@@ -582,6 +592,43 @@ pub(crate) struct CommunicationInfo<'a> {
 pub(crate) fn tick<'a>(sim: &mut Simulation, request: Request, arena: &'a Arena) -> Response<'a> {
     let _span = tracing::info_span!("Tick").entered();
 
+    if request.init {
+        // Fill in all vacant estates
+        sim.things.write_pass(|_, this, commands| {
+            if this.flag(Flag::IsEstate) && this.parent(List::Possessions).is_null() {
+                let holder = commands.spawn_and_set_parent(List::Possessions, this.id());
+                holder.set_name("Notable");
+                holder.set_sprite("person");
+                holder.set_flag(Flag::IsPerson, true);
+                holder.body = Body {
+                    size: 2,
+                    layer: 1,
+                    ..Default::default()
+                }
+            }
+        });
+
+        // Set the location of all un-locaitoned people...
+        sim.things.write_pass(|ctx, this, commands| {
+            if this.flag(Flag::IsPerson) && this.parent(List::AtLocation).is_null() {
+                // Do we have an estate?
+                let estate = ctx
+                    .iter_list_get(List::Possessions, this.id())
+                    .filter(|x| x.flag(Flag::IsEstate))
+                    .next();
+
+                // Then that's our location
+                let location = estate.map(|x| x.parent(List::Parts)).unwrap_or_default();
+
+                this.set_flag(Flag::WantsToBeInside, true);
+                this.set_flag(Flag::IsInside, true);
+                this.set_flag(Flag::Teleport, true);
+
+                commands.add_to_list(List::AtLocation, location, this.id());
+            }
+        });
+    }
+
     for id in request.despawns {
         sim.things.despawn(id);
     }
@@ -615,29 +662,26 @@ pub(crate) fn tick<'a>(sim: &mut Simulation, request: Request, arena: &'a Arena)
         sim.thick_num = sim.thick_num.wrapping_add(1);
 
         let _span = tracing::info_span!("Advance-Step").entered();
-        sim.things.write_pass(
-            |_, _| true,
-            |ctx, this, commands| {
-                // Automatic destruction of dependent objects
-                if this.flag(Flag::MustBeOwned) && !ctx.exists(this.link(Link::GCOwner)) {
-                    commands.despawn(this.id());
-                }
+        sim.things.write_pass(|ctx, this, commands| {
+            // Automatic destruction of dependent objects
+            if this.flag(Flag::MustBeOwned) && !ctx.exists(this.link(Link::GCOwner)) {
+                commands.despawn(this.id());
+            }
 
-                if this.flag(Flag::IsParty) {
-                    // Order completion
-                    check_order_completion(ctx, this, commands, player);
+            if this.flag(Flag::IsPerson) {
+                // Order completion
+                check_order_completion(ctx, this, commands, player);
 
-                    // Movement
-                    update_intentions(ctx, this);
-                    progress_travel(ctx, this, commands, &mut sim.nav_cache);
-                    let movement_status = update_body_of_local_things(ctx, this, request.delta);
-                    let has_arrived = matches!(movement_status, MovementStatus::Arrived);
+                // Movement
+                update_intentions(ctx, this);
+                progress_travel(ctx, this, commands, &mut sim.nav_cache);
+                let movement_status = update_body_of_local_things(ctx, this, request.delta);
+                let has_arrived = matches!(movement_status, MovementStatus::Arrived);
 
-                    // A person is invisible if it is not yet arrived at its destination, nor is inside
-                    this.set_flag(Flag::IsVisible, !has_arrived || !this.flag(Flag::IsInside));
-                }
-            },
-        );
+                // A person is invisible if it is not yet arrived at its destination, nor is inside
+                this.set_flag(Flag::IsInvisible, has_arrived && this.flag(Flag::IsInside));
+            }
+        });
     }
 
     let ctx = &sim.things;
@@ -903,40 +947,49 @@ enum MovementStatus {
 }
 
 fn update_body_of_local_things(ctx: &Things, this: &mut Thing, delta: f32) -> MovementStatus {
-    if let Some((location, idx)) = index_in_list(ctx, List::AtLocation, this) {
-        const MOVEMENT_SPEED: f32 = 2.0;
-        let location = &ctx[location];
-        // Find my position around the target
-        let target = if this.flag(Flag::IsInside) {
-            V2::new(location.body.x, location.body.y)
-        } else {
-            let len = location.list_len(List::AtLocation);
-            pos_around(location.body, idx, len)
-        };
+    let location = match this.parent(List::AtLocation).get_as_valid(ctx) {
+        Some(x) => x,
+        None => return MovementStatus::Moving,
+    };
 
-        // Caculate next immediate position
-        let next_pos = if this.flag(Flag::Teleport) {
-            this.set_flag(Flag::Teleport, false);
+    const MOVEMENT_SPEED: f32 = 2.0;
+    // Find my position around the target
+    let target = if this.flag(Flag::IsInside) {
+        V2::new(location.body.x, location.body.y)
+    } else {
+        let mut idx: usize = 0;
+        let mut len: usize = 0;
+        for thing in ctx.iter_list_get(List::AtLocation, location.id()) {
+            if thing.id() == this.id() {
+                idx = len;
+            }
+            if !thing.flag(Flag::IsInside) {
+                len += 1;
+            }
+        }
+        pos_around(location.body, idx, len)
+    };
+
+    // Caculate next immediate position
+    let next_pos = if this.flag(Flag::Teleport) {
+        this.set_flag(Flag::Teleport, false);
+        target
+    } else {
+        let current_pos = V2::new(this.body.x, this.body.y);
+        let dv = target - current_pos;
+        if dv.magnitude() < 0.1 {
             target
         } else {
-            let current_pos = V2::new(this.body.x, this.body.y);
-            let dv = target - current_pos;
-            if dv.magnitude() < 0.1 {
-                target
-            } else {
-                current_pos + dv * delta * MOVEMENT_SPEED
-            }
-        };
-
-        // Update body
-        this.body.x = next_pos.x;
-        this.body.y = next_pos.y;
-
-        if next_pos == target {
-            MovementStatus::Arrived
-        } else {
-            MovementStatus::Moving
+            current_pos + dv * delta * MOVEMENT_SPEED
         }
+    };
+
+    // Update body
+    this.body.x = next_pos.x;
+    this.body.y = next_pos.y;
+
+    if next_pos == target {
+        MovementStatus::Arrived
     } else {
         MovementStatus::Moving
     }
@@ -979,9 +1032,10 @@ fn render_thing(
     selected_id: ThingId,
     target_type: TargetType,
 ) {
-    if !this.flag(Flag::IsVisible) {
+    if this.flag(Flag::IsInvisible) {
         return;
     }
+
     if this.body.size > 0 && !this.sprite().is_empty() {
         let is_selected = this.id() == selected_id;
 
@@ -1026,6 +1080,7 @@ fn render_thing(
             bounds,
         });
     }
+
     if this.flag(Flag::IsPath) {
         let a = this.link(self::Link::A);
         let b = this.link(self::Link::B);
