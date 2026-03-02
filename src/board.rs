@@ -499,7 +499,7 @@ fn wrap_text<'a>(
                 word
             };
 
-            const SPRITE_SCALE: f32 = 2.;
+            const SPRITE_SCALE: f32 = 1.5;
             let width = if is_sprite {
                 font_size as f32 * SPRITE_SCALE
             } else {

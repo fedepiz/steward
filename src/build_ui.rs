@@ -116,8 +116,15 @@ pub(super) fn root<'a>(
                             this.parent(List::Possessions),
                         );
 
-                        gui.heading("Entities inside", 6.);
+                        gui.row(|mut gui| {
+                            let self_tokens =
+                                simulation::count_tokens(things, this.id(), this.id());
+                            let str = token_string(gui.arena(), self_tokens);
+                            gui.line_sized("Tokens:", 2.);
+                            gui.line_sized(str, 6.);
+                        });
 
+                        gui.heading("Entities inside", 6.);
                         // Get entities inside the settlemetn
                         let things_inside = {
                             let iter = things
@@ -323,4 +330,15 @@ pub(super) fn root<'a>(
             }
         },
     )
+}
+
+fn token_string<'a>(arena: &'a Arena, count: TokenCount) -> &'a str {
+    let mut str = arena.new_string_with_capacity(20);
+    for (tok, count) in count.iter() {
+        if count > 0 {
+            let text = arena.fmt(format_args!("$sprite${} {count} ", tok.sprite));
+            str.push_str(text);
+        }
+    }
+    str.into_bump_str()
 }

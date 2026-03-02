@@ -69,6 +69,8 @@ pub(crate) enum Flag {
     IsSettlement,
     IsPerson,
     IsPath,
+    // Tokens are an abstract kind of thing used to model control of some kind of resource or power share.
+    IsToken,
     Teleport,
     IsInvisible,
     // Insideness
@@ -129,6 +131,12 @@ pub(crate) enum List {
     Possessions,
     // Links a 'liege' to all the people who are 'loyal' to them
     Subordinates,
+    // Token Source
+    // - list of all tokens 'rooted' at the current entity
+    TokenSource,
+    // Token Held
+    // - list of all the tokens 'held' by current entity
+    TokensHeld,
     Messages,
     Orders,
 }
@@ -277,7 +285,7 @@ impl Body {
     }
 }
 
-pub(crate) const NUM_THINGS: usize = 32000;
+pub(crate) const NUM_THINGS: usize = 100_000;
 const LAST_IDX_THING: usize = NUM_THINGS - 1;
 
 #[derive(Default, Clone, Copy)]

@@ -49,6 +49,23 @@ const NAMES: &'static [&'static str] = &[
     "Tutagual",
 ];
 
+pub(crate) struct TokenType {
+    pub sprite: &'static str,
+}
+
+const TOKEN_TYPES: [TokenType; 4] = [
+    TokenType {
+        sprite: "tok_generic",
+    },
+    TokenType {
+        sprite: "tok_kinship",
+    },
+    TokenType {
+        sprite: "tok_dread",
+    },
+    TokenType { sprite: "tok_gift" },
+];
+
 const PLAYER_TAG: &'static str = "player";
 const COMMS_TAG: &'static str = "communications";
 
@@ -192,6 +209,19 @@ pub(crate) fn setup(scratch: &Arena) -> Simulation {
                 };
                 this.set_flag(Flag::IsLocation, true);
                 this.set_flag(Flag::IsSettlement, true);
+                let settlement = this.id();
+
+                // Populate the settlement with 10 tokens
+                for idx in 0..10 {
+                    let token = ctx.spawn();
+                    token.set_name("Token");
+                    token.set_flag(Flag::IsToken, true);
+                    token.set_handle(Handle::Type, (idx % TOKEN_TYPES.len()) as u16);
+
+                    let token = token.id();
+                    ctx.add_to_list(List::TokenSource, settlement, token);
+                    ctx.add_to_list(List::TokensHeld, settlement, token);
+                }
             }
             "spawn_waypoint" => {
                 let tag = row[1].as_str().to_string().leak();
@@ -1126,4 +1156,30 @@ fn render_thing(
             });
         }
     }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Default)]
+pub(crate) struct TokenCount([usize; TOKEN_TYPES.len()]);
+
+impl TokenCount {
+    pub fn iter(&self) -> impl Iterator<Item = (&'static TokenType, usize)> {
+        self.0
+            .iter()
+            .enumerate()
+            .map(|(idx, value)| (&TOKEN_TYPES[idx], *value))
+    }
+}
+
+pub(crate) fn count_tokens(ctx: &Things, this: ThingId, source: ThingId) -> TokenCount {
+    let mut count = TokenCount::default();
+    for token in ctx.iter_list_get(List::TokensHeld, this) {
+        assert!(token.flag(Flag::IsToken));
+        if token.parent(List::TokenSource) == source {
+            let idx = token.handle(Handle::Type) as usize;
+            if idx < TOKEN_TYPES.len() {
+                count.0[idx] += 1;
+            }
+        }
+    }
+    count
 }
