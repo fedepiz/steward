@@ -116,13 +116,19 @@ pub(super) fn root<'a>(
                             this.parent(List::Possessions),
                         );
 
-                        gui.row(|mut gui| {
-                            let self_tokens =
-                                simulation::count_tokens(things, this.id(), this.id());
-                            let str = token_string(gui.arena(), self_tokens);
-                            gui.line_sized("Tokens:", 2.);
-                            gui.line_sized(str, 6.);
-                        });
+                        gui.heading("Local Influence", 6.);
+                        for (holder, tokens) in token_holders(arena, things, this.id()) {
+                            gui.row(|mut gui| {
+                                let name = if *holder == this.id() {
+                                    "Unclaimed:"
+                                } else {
+                                    gui.arena().alloc_str(things[*holder].name())
+                                };
+                                gui.line_sized(name, 2.);
+                                let str = token_string(gui.arena(), &tokens);
+                                gui.line_sized(str, 6.);
+                            });
+                        }
 
                         gui.heading("Entities inside", 6.);
                         // Get entities inside the settlemetn
@@ -332,7 +338,7 @@ pub(super) fn root<'a>(
     )
 }
 
-fn token_string<'a>(arena: &'a Arena, count: TokenCount) -> &'a str {
+fn token_string<'a>(arena: &'a Arena, count: &TokenCount) -> &'a str {
     let mut str = arena.new_string_with_capacity(20);
     for (tok, count) in count.iter() {
         if count > 0 {

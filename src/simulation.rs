@@ -1,7 +1,7 @@
 use std::marker::PhantomData;
 
 use util::{
-    arena::Arena,
+    arena::{AVec, Arena},
     geom::{Rect, V2},
 };
 
@@ -212,11 +212,11 @@ pub(crate) fn setup(scratch: &Arena) -> Simulation {
                 let settlement = this.id();
 
                 // Populate the settlement with 10 tokens
-                for idx in 0..10 {
+                for _ in 0..10 {
                     let token = ctx.spawn();
                     token.set_name("Token");
                     token.set_flag(Flag::IsToken, true);
-                    token.set_handle(Handle::Type, (idx % TOKEN_TYPES.len()) as u16);
+                    token.set_handle(Handle::Type, 0);
 
                     let token = token.id();
                     ctx.add_to_list(List::TokenSource, settlement, token);
@@ -270,18 +270,30 @@ pub(crate) fn setup(scratch: &Arena) -> Simulation {
             _ => {}
         }
     }
-    // Fill in all vacant estates
-    ctx.write_pass(|_, this, commands| {
-        if this.flag(Flag::IsSettlement) && this.parent(List::Possessions).is_null() {
-            let holder = commands.spawn_and_set_parent(List::Possessions, this.id());
-            let name = NAMES[this.id().slot() % NAMES.len()];
-            holder.set_name(name);
-            holder.set_sprite("soldier");
-            holder.set_flag(Flag::IsPerson, true);
-            holder.body = Body {
-                size: 2,
-                layer: 1,
-                ..Default::default()
+
+    ctx.exclusive_pass(|ctx, this| {
+        // Populate settlements
+        if this.flag(Flag::IsSettlement) {
+            for _ in 0..3 {
+                let person = ctx.spawn();
+                let name = {
+                    let idx = this.id().slot() * 13 + person.id().slot() * 17;
+                    NAMES[idx % NAMES.len()]
+                };
+                person.set_name(name);
+                person.set_sprite("soldier");
+                person.set_flag(Flag::IsPerson, true);
+                person.body = Body {
+                    size: 2,
+                    layer: 1,
+                    ..Default::default()
+                };
+                person.set_flag(Flag::WantsToBeInside, true);
+                person.set_flag(Flag::IsInside, true);
+                person.set_flag(Flag::Teleport, true);
+
+                let person = person.id();
+                ctx.add_to_list(List::AtLocation, this.id(), person);
             }
         }
     });
@@ -304,28 +316,11 @@ pub(crate) fn setup(scratch: &Arena) -> Simulation {
         }
     }
 
-    ctx.write_pass(|ctx, this, commands| {
+    ctx.write_pass(|_, this, _| {
         if this.flag(Flag::IsPerson) {
             // Determine persons' sprite
             let has_subordinates = this.list_len(List::Subordinates) > 0;
             this.set_sprite(if has_subordinates { "noble" } else { "soldier" });
-
-            // Set location of unlocationed people
-            if this.parent(List::AtLocation).is_null() {
-                // Do we control an area?
-                let location = ctx
-                    .iter_list_get(List::Possessions, this.id())
-                    .filter(|x| x.flag(Flag::IsLocation))
-                    .next()
-                    .map(|x| x.id())
-                    .unwrap_or_default();
-
-                this.set_flag(Flag::WantsToBeInside, true);
-                this.set_flag(Flag::IsInside, true);
-                this.set_flag(Flag::Teleport, true);
-
-                commands.add_to_list(List::AtLocation, location, this.id());
-            }
         }
     });
 
@@ -1170,16 +1165,37 @@ impl TokenCount {
     }
 }
 
-pub(crate) fn count_tokens(ctx: &Things, this: ThingId, source: ThingId) -> TokenCount {
-    let mut count = TokenCount::default();
-    for token in ctx.iter_list_get(List::TokensHeld, this) {
-        assert!(token.flag(Flag::IsToken));
-        if token.parent(List::TokenSource) == source {
-            let idx = token.handle(Handle::Type) as usize;
-            if idx < TOKEN_TYPES.len() {
-                count.0[idx] += 1;
+// pub(crate) fn count_tokens(ctx: &Things, this: ThingId, source: ThingId) -> TokenCount {
+//     let mut count = TokenCount::default();
+//     for token in ctx.iter_list_get(List::TokensHeld, this) {
+//         assert!(token.flag(Flag::IsToken));
+//         if token.parent(List::TokenSource) == source {
+//             let idx = token.handle(Handle::Type) as usize;
+//             if idx < TOKEN_TYPES.len() {
+//                 count.0[idx] += 1;
+//             }
+//         }
+//     }
+//     count
+// }
+
+pub(crate) fn token_holders<'a>(
+    arena: &'a Arena,
+    ctx: &Things,
+    source: ThingId,
+) -> &'a [(ThingId, TokenCount)] {
+    let mut vec: AVec<(ThingId, TokenCount)> = arena.new_vec();
+    for token in ctx.iter_list_get(List::TokenSource, source) {
+        let holder = token.parent(List::TokensHeld);
+        let entry = match vec.iter().position(|(id, _)| id == &holder) {
+            Some(idx) => &mut vec[idx],
+            None => {
+                vec.push((holder, Default::default()));
+                vec.last_mut().unwrap()
             }
-        }
+        };
+        let typ = token.handle(Handle::Type) as usize;
+        entry.1.0[typ] += 1;
     }
-    count
+    vec.into_bump_slice()
 }

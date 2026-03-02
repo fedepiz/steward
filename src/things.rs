@@ -695,6 +695,17 @@ impl Things {
         self.appy_commands(commands);
     }
 
+    pub(crate) fn exclusive_pass(&mut self, mut body: impl FnMut(&mut Self, Thing)) {
+        for i in 0..self.entries.len() {
+            let thing = &self.entries[i];
+            if !thing.id.is_valid() {
+                continue;
+            }
+            let thing = *thing;
+            body(self, thing);
+        }
+    }
+
     pub(crate) fn readonly_pass(&self, mut body: impl FnMut(&Things, &Thing)) {
         for thing in &self.entries {
             if thing.id.is_valid() {
@@ -735,9 +746,6 @@ impl Things {
             if !parent.is_null() {
                 self.add_to_list(list, parent, this);
             }
-
-            let (list, child) = spawn.set_list_parent;
-            self.add_to_list(list, this, child);
         }
     }
 }
@@ -777,24 +785,9 @@ impl Commands {
         self.despawns.push(id);
     }
 
-    // pub fn spawn(&mut self) -> &mut Thing {
-    //     self.spawns.push(Spawn {
-    //         ..Default::default()
-    //     });
-    //     &mut self.spawns.last_mut().unwrap().thing
-    // }
-
     pub fn spawn_and_append_to_list(&mut self, list: List, parent: ThingId) -> &mut Thing {
         self.spawns.push(Spawn {
             append_to_list: (list, parent),
-            ..Default::default()
-        });
-        &mut self.spawns.last_mut().unwrap().thing
-    }
-
-    pub fn spawn_and_set_parent(&mut self, list: List, child: ThingId) -> &mut Thing {
-        self.spawns.push(Spawn {
-            set_list_parent: (list, child),
             ..Default::default()
         });
         &mut self.spawns.last_mut().unwrap().thing
@@ -812,5 +805,4 @@ struct ListMutation {
 struct Spawn {
     thing: Thing,
     append_to_list: (List, ThingId),
-    set_list_parent: (List, ThingId),
 }
