@@ -1,7 +1,7 @@
 use std::marker::PhantomData;
 
 use util::{
-    arena::{AVec, Arena},
+    arena::Arena,
     geom::{Rect, V2},
 };
 
@@ -218,9 +218,11 @@ pub(crate) fn setup(scratch: &Arena) -> Simulation {
                     token.set_flag(Flag::IsToken, true);
                     token.set_handle(Handle::Type, 0);
 
-                    let token = token.id();
-                    ctx.add_to_list(List::TokenSource, settlement, token);
-                    ctx.add_to_list(List::TokensHeld, settlement, token);
+                    token.set_flag(Flag::MustBeOwned, true);
+                    token.set_link(Link::GCOwner, settlement);
+
+                    token.set_link(Link::Source, settlement);
+                    token.set_link(Link::Holder, settlement);
                 }
             }
             "spawn_waypoint" => {
@@ -627,19 +629,19 @@ const COMMUNICATION_TYPES: [CommunicationType; 2] = [
 ];
 
 pub(crate) struct Response<'a> {
-    pub selected_entity: ThingId,
     pub messages: MessagesInfo<'a>,
     pub order: OrderInfo<'a>,
     pub communication: CommunicationInfo<'a>,
+    pub selected_entity: EntityInfo<'a>,
     pub draw_data: DrawData<'a>,
 }
 
 impl<'a> Response<'a> {
     fn new(arena: &'a Arena) -> Self {
         Self {
-            selected_entity: ThingId::null(),
             messages: MessagesInfo::default(),
             order: OrderInfo::default(),
+            selected_entity: EntityInfo::default(),
             communication: CommunicationInfo::default(),
             draw_data: DrawData::new(arena),
         }
@@ -682,6 +684,20 @@ pub(crate) struct CommunicationInfo<'a> {
     pub ready_to_send: bool,
     // Did we just send
     pub just_sent: bool,
+}
+
+#[derive(Default)]
+pub(crate) struct EntityInfo<'a> {
+    pub id: ThingId,
+    pub name: &'a str,
+    pub sprite: &'a str,
+    pub local_power_tokens: Vec<TokenHolderInfo<'a>>,
+}
+
+pub(crate) struct TokenHolderInfo<'a> {
+    pub id: ThingId,
+    pub name: &'a str,
+    pub tokens: TokenCount,
 }
 
 pub(crate) fn tick<'a>(sim: &mut Simulation, request: Request, arena: &'a Arena) -> Response<'a> {
@@ -744,12 +760,7 @@ pub(crate) fn tick<'a>(sim: &mut Simulation, request: Request, arena: &'a Arena)
 
     let ctx = &sim.things;
 
-    let selected_entity = if ctx.exists(request.select_entity) {
-        request.select_entity
-    } else {
-        ThingId::null()
-    };
-    response.selected_entity = selected_entity;
+    let selected_entity = response.selected_entity.id;
 
     // Message overview
     if request.messages.page_size > 0 {
@@ -864,7 +875,40 @@ pub(crate) fn tick<'a>(sim: &mut Simulation, request: Request, arena: &'a Arena)
                 .unwrap_or_default()
         };
 
+        // PRESENT PASS
         ctx.readonly_pass(|ctx, this| {
+            // Extract selected entity information
+            if this.id() == request.select_entity {
+                response.selected_entity.id = this.id();
+                response.selected_entity.name = this.name();
+                response.selected_entity.sprite = this.sprite();
+            }
+            // We are looking at a token
+            if this.flag(Flag::IsToken) {
+                // If we have selected is a source tokens
+                // (FOR NOW, ASSUME ONLY LOCAL POWER EXISTS)
+                if request.select_entity == this.link(Link::Source) {
+                    let tokens = &mut response.selected_entity.local_power_tokens;
+                    let count = match tokens
+                        .iter()
+                        .position(|holder| holder.id == this.link(Link::Holder))
+                    {
+                        Some(idx) => &mut tokens[idx],
+                        None => {
+                            let holder = this.link(Link::Holder).get(ctx);
+                            let entry = TokenHolderInfo {
+                                id: holder.id(),
+                                name: holder.name(),
+                                tokens: TokenCount::default(),
+                            };
+                            tokens.push(entry);
+                            tokens.last_mut().unwrap()
+                        }
+                    };
+                    count.tokens.0[this.handle(Handle::Type) as usize] += 1;
+                }
+            }
+
             render_thing(
                 ctx,
                 this,
@@ -1179,23 +1223,23 @@ impl TokenCount {
 //     count
 // }
 
-pub(crate) fn token_holders<'a>(
-    arena: &'a Arena,
-    ctx: &Things,
-    source: ThingId,
-) -> &'a [(ThingId, TokenCount)] {
-    let mut vec: AVec<(ThingId, TokenCount)> = arena.new_vec();
-    for token in ctx.iter_list_get(List::TokenSource, source) {
-        let holder = token.parent(List::TokensHeld);
-        let entry = match vec.iter().position(|(id, _)| id == &holder) {
-            Some(idx) => &mut vec[idx],
-            None => {
-                vec.push((holder, Default::default()));
-                vec.last_mut().unwrap()
-            }
-        };
-        let typ = token.handle(Handle::Type) as usize;
-        entry.1.0[typ] += 1;
-    }
-    vec.into_bump_slice()
-}
+// pub(crate) fn token_holders<'a>(
+//     arena: &'a Arena,
+//     ctx: &Things,
+//     source: ThingId,
+// ) -> &'a [(ThingId, TokenCount)] {
+//     let mut vec: AVec<(ThingId, TokenCount)> = arena.new_vec();
+//     for token in ctx.iter_list_get(List::TokenSource, source) {
+//         let holder = token.parent(List::TokensHeld);
+//         let entry = match vec.iter().position(|(id, _)| id == &holder) {
+//             Some(idx) => &mut vec[idx],
+//             None => {
+//                 vec.push((holder, Default::default()));
+//                 vec.last_mut().unwrap()
+//             }
+//         };
+//         let typ = token.handle(Handle::Type) as usize;
+//         entry.1.0[typ] += 1;
+//     }
+//     vec.into_bump_slice()
+// }

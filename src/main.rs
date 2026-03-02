@@ -133,7 +133,7 @@ async fn amain() {
     loop {
         tracing_tracy::client::frame_mark();
         let mut request = crate::simulation::Request::default();
-        request.select_entity = response.selected_entity;
+        request.select_entity = response.selected_entity.id;
 
         // Refresh message state
         request.messages.current_page = response.messages.current_page;
@@ -144,7 +144,7 @@ async fn amain() {
         if response.communication.just_sent {
             // If we just sent  the communication, close the panel and reset the state
             ui_data.open_panels[Panel::Communications as usize] = false;
-        } else if response.selected_entity.is_valid() {
+        } else if response.selected_entity.id.is_valid() {
             // If we have a valid selection, carry throught the selected option and the target
             request.communication.selected_option =
                 response.communication.selected_option.map(|(id, _)| id);

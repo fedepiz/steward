@@ -110,6 +110,8 @@ pub(crate) enum Link {
     B,
     Destination,
     CurrentOrder,
+    Source,
+    Holder,
 }
 
 impl Default for Link {
@@ -131,12 +133,6 @@ pub(crate) enum List {
     Possessions,
     // Links a 'liege' to all the people who are 'loyal' to them
     Subordinates,
-    // Token Source
-    // - list of all tokens 'rooted' at the current entity
-    TokenSource,
-    // Token Held
-    // - list of all the tokens 'held' by current entity
-    TokensHeld,
     Messages,
     Orders,
 }
@@ -783,6 +779,11 @@ impl Commands {
 
     pub fn despawn(&mut self, id: ThingId) {
         self.despawns.push(id);
+    }
+
+    pub fn spawn(&mut self) -> &mut Thing {
+        self.spawns.push(Default::default());
+        &mut self.spawns.last_mut().unwrap().thing
     }
 
     pub fn spawn_and_append_to_list(&mut self, list: List, parent: ThingId) -> &mut Thing {

@@ -57,7 +57,7 @@ pub(super) fn root<'a>(
                 }
             });
 
-            if let Some(this) = response.selected_entity.get_as_valid(&sim.things) {
+            if let Some(this) = response.selected_entity.id.get_as_valid(&sim.things) {
                 gui.panel(|mut gui| {
                     gui.inner().center_on_growth_axis(false);
                     gui.inner().screen_pos(V2::new(0., 0.5));
@@ -117,15 +117,15 @@ pub(super) fn root<'a>(
                         );
 
                         gui.heading("Local Influence", 6.);
-                        for (holder, tokens) in token_holders(arena, things, this.id()) {
+                        for holder in &response.selected_entity.local_power_tokens {
                             gui.row(|mut gui| {
-                                let name = if *holder == this.id() {
+                                let name = if holder.id == this.id() {
                                     "Unclaimed:"
                                 } else {
-                                    gui.arena().alloc_str(things[*holder].name())
+                                    gui.arena().alloc_str(holder.name)
                                 };
                                 gui.line_sized(name, 2.);
-                                let str = token_string(gui.arena(), &tokens);
+                                let str = token_string(gui.arena(), &holder.tokens);
                                 gui.line_sized(str, 6.);
                             });
                         }
@@ -167,7 +167,7 @@ pub(super) fn root<'a>(
 
                     let info = &response.order;
 
-                    match response.selected_entity.get_as_valid(things) {
+                    match response.selected_entity.id.get_as_valid(things) {
                         Some(this) => {
                             {
                                 let name =
@@ -197,7 +197,7 @@ pub(super) fn root<'a>(
                     let info = &response.communication;
 
                     let mut remove_piece_at_index = None;
-                    match response.selected_entity.get_as_valid(things) {
+                    match response.selected_entity.id.get_as_valid(things) {
                         Some(this) => {
                             {
                                 let name = gui.arena().fmt(format_args!("To: {}", this.name()));
