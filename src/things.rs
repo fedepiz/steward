@@ -110,8 +110,6 @@ pub(crate) enum Link {
     B,
     Destination,
     CurrentOrder,
-    Source,
-    Holder,
 }
 
 impl Default for Link {
@@ -135,6 +133,8 @@ pub(crate) enum List {
     Subordinates,
     Messages,
     Orders,
+    TokensSourced,
+    TokensHeld,
 }
 
 impl Default for List {

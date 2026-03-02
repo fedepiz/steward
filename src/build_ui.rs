@@ -122,7 +122,7 @@ pub(super) fn root<'a>(
                         gui.heading("Local Influence", 6.);
                         for holder in &selected_entity.local_power_tokens {
                             gui.row(|mut gui| {
-                                let name = if holder.id == this.id() {
+                                let name = if holder.id.is_null() {
                                     "Unclaimed:"
                                 } else {
                                     gui.arena().alloc_str(holder.name)

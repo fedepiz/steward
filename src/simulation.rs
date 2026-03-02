@@ -53,7 +53,15 @@ pub(crate) struct TokenType {
     pub sprite: &'static str,
 }
 
-const TOKEN_TYPES: [TokenType; 4] = [
+mod token_types {
+    pub const GENERIC: u16 = 0;
+    pub const KINSHIP: u16 = 1;
+    pub const DREAD: u16 = 2;
+    pub const GIFT: u16 = 3;
+    pub const ENCUMBENT: u16 = 4;
+}
+
+const TOKEN_TYPES: [TokenType; 5] = [
     TokenType {
         sprite: "tok_generic",
     },
@@ -64,6 +72,9 @@ const TOKEN_TYPES: [TokenType; 4] = [
         sprite: "tok_dread",
     },
     TokenType { sprite: "tok_gift" },
+    TokenType {
+        sprite: "tok_encumbent",
+    },
 ];
 
 const PLAYER_TAG: &'static str = "player";
@@ -221,8 +232,8 @@ pub(crate) fn setup(scratch: &Arena) -> Simulation {
                     token.set_flag(Flag::MustBeOwned, true);
                     token.set_link(Link::GCOwner, settlement);
 
-                    token.set_link(Link::Source, settlement);
-                    token.set_link(Link::Holder, settlement);
+                    let token = token.id();
+                    ctx.add_to_list(List::TokensSourced, settlement, token);
                 }
             }
             "spawn_waypoint" => {
@@ -276,10 +287,20 @@ pub(crate) fn setup(scratch: &Arena) -> Simulation {
     ctx.exclusive_pass(|ctx, this| {
         // Populate settlements
         if this.flag(Flag::IsSettlement) {
-            for _ in 0..3 {
+            let settlement = &this;
+            // Get the list of tokens here
+            let mut tokens = scratch
+                .alloc_slice_iter(ctx.iter_list(List::TokensSourced, settlement.id()))
+                .into_iter();
+
+            let num_people = 3;
+            let mut people = scratch.new_vec_with_capacity(num_people);
+
+            for i in 0..num_people {
                 let person = ctx.spawn();
+                people.push(person.id());
                 let name = {
-                    let idx = this.id().slot() * 13 + person.id().slot() * 17;
+                    let idx = settlement.id().slot() * 13 + person.id().slot() * 17;
                     NAMES[idx % NAMES.len()]
                 };
                 person.set_name(name);
@@ -295,8 +316,32 @@ pub(crate) fn setup(scratch: &Arena) -> Simulation {
                 person.set_flag(Flag::Teleport, true);
 
                 let person = person.id();
-                ctx.add_to_list(List::AtLocation, this.id(), person);
+
+                ctx.add_to_list(List::AtLocation, settlement.id(), person);
+
+                let kinds: &[u16] = if i == 0 {
+                    &[token_types::KINSHIP, token_types::ENCUMBENT]
+                } else {
+                    &[token_types::KINSHIP]
+                };
+                for &kind in kinds {
+                    if let Some(token) = tokens.next().copied() {
+                        ctx.remove_from_list(List::TokensHeld, token);
+                        ctx.add_to_list(List::TokensHeld, person, token);
+                        let token = &mut ctx[token];
+                        token.set_handle(Handle::Type, kind);
+                    }
+                }
             }
+
+            // Strongest person is leader
+            let strongest_person = people
+                .iter()
+                .copied()
+                .max_by_key(|&person| calculate_tokens_at(ctx, person, settlement.id()))
+                .unwrap_or_default();
+
+            ctx.add_to_list(List::Possessions, strongest_person, settlement.id());
         }
     });
 
@@ -342,6 +387,12 @@ pub(crate) fn setup(scratch: &Arena) -> Simulation {
         things,
         nav_cache,
     }
+}
+
+fn calculate_tokens_at(ctx: &Things, holder: ThingId, source: ThingId) -> usize {
+    ctx.iter_list_get(List::TokensHeld, holder)
+        .filter(|tok| tok.parent(List::TokensSourced) == source)
+        .count()
 }
 
 trait Slot {
@@ -880,30 +931,28 @@ pub(crate) fn tick<'a>(sim: &mut Simulation, request: Request, arena: &'a Arena)
                 response.selected_entity.id = this.id();
                 response.selected_entity.name = this.name();
                 response.selected_entity.sprite = this.sprite();
-            }
-            // We are looking at a token
-            if this.flag(Flag::IsToken) {
-                // If we have selected is a source tokens
-                // (FOR NOW, ASSUME ONLY LOCAL POWER EXISTS)
-                if request.select_entity == this.link(Link::Source) {
-                    let tokens = &mut response.selected_entity.local_power_tokens;
-                    let count = match tokens
-                        .iter()
-                        .position(|holder| holder.id == this.link(Link::Holder))
-                    {
-                        Some(idx) => &mut tokens[idx],
-                        None => {
-                            let holder = this.link(Link::Holder).get(ctx);
-                            let entry = TokenHolderInfo {
-                                id: holder.id(),
-                                name: holder.name(),
-                                tokens: TokenCount::default(),
-                            };
-                            tokens.push(entry);
-                            tokens.last_mut().unwrap()
-                        }
-                    };
-                    count.tokens.0[this.handle(Handle::Type) as usize] += 1;
+
+                if this.flag(Flag::IsLocation) {
+                    for token in ctx.iter_list_get(List::TokensSourced, this.id()) {
+                        let tokens = &mut response.selected_entity.local_power_tokens;
+                        let count = match tokens
+                            .iter()
+                            .position(|holder| holder.id == token.parent(List::TokensHeld))
+                        {
+                            Some(idx) => &mut tokens[idx],
+                            None => {
+                                let holder = token.parent(List::TokensHeld).get(ctx);
+                                let entry = TokenHolderInfo {
+                                    id: holder.id(),
+                                    name: holder.name(),
+                                    tokens: TokenCount::default(),
+                                };
+                                tokens.push(entry);
+                                tokens.last_mut().unwrap()
+                            }
+                        };
+                        count.tokens.0[token.handle(Handle::Type) as usize] += 1;
+                    }
                 }
             }
 
