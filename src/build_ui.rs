@@ -58,20 +58,23 @@ pub(super) fn root<'a>(
             });
 
             if let Some(this) = response.selected_entity.id.get_as_valid(&sim.things) {
+                let selected_entity = &response.selected_entity;
+
                 gui.panel(|mut gui| {
                     gui.inner().center_on_growth_axis(false);
                     gui.inner().screen_pos(V2::new(0., 0.5));
 
-                    let text = gui
-                        .arena()
-                        .fmt(format_args!("Selected Entity $sprite${}", this.sprite()));
+                    let text = gui.arena().fmt(format_args!(
+                        "Selected Entity $sprite${}",
+                        selected_entity.sprite
+                    ));
                     gui.heading(text, 8.);
 
                     gui.row(|mut gui| {
                         gui.line_sized("Name:", 2.);
                         let text = gui
                             .arena()
-                            .fmt(format_args!("{}##entity_name", this.name()));
+                            .fmt(format_args!("{}##entity_name", selected_entity.name));
                         gui.label_sized(text, 4.);
                     });
 
@@ -117,7 +120,7 @@ pub(super) fn root<'a>(
                         );
 
                         gui.heading("Local Influence", 6.);
-                        for holder in &response.selected_entity.local_power_tokens {
+                        for holder in &selected_entity.local_power_tokens {
                             gui.row(|mut gui| {
                                 let name = if holder.id == this.id() {
                                     "Unclaimed:"
@@ -197,46 +200,45 @@ pub(super) fn root<'a>(
                     let info = &response.communication;
 
                     let mut remove_piece_at_index = None;
-                    match response.selected_entity.id.get_as_valid(things) {
-                        Some(this) => {
-                            {
-                                let name = gui.arena().fmt(format_args!("To: {}", this.name()));
-                                gui.line_sized(name, 10.);
-                            }
+                    if response.selected_entity.id.is_valid() {
+                        {
+                            let name = gui
+                                .arena()
+                                .fmt(format_args!("To: {}", response.selected_entity.name));
+                            gui.line_sized(name, 10.);
+                        }
 
-                            for (idx, piece) in info.enqueued_pieces.iter().enumerate() {
-                                gui.row(|mut gui| {
-                                    let text = gui.arena().alloc_str(piece.name);
-                                    gui.line_sized(text, 9.);
-                                    let text = gui.arena().fmt(format_args!("X##del_comm_{idx}"));
-                                    if gui.button_sized(text, 1.) {
-                                        remove_piece_at_index = Some(idx);
-                                    }
-                                });
-                            }
-
-                            if let Some((_, name)) = info.selected_option {
-                                let text = gui.arena().alloc_str(name);
-                                gui.line_sized(text, 10.);
-                            } else {
-                                gui.row(|mut gui| {
-                                    for &(idx, name) in info.options {
-                                        let text = gui.arena().alloc_str(name);
-                                        if gui.button(text) {
-                                            request.communication.selected_option = Some(idx);
-                                        }
-                                    }
-                                });
-                            }
+                        for (idx, piece) in info.enqueued_pieces.iter().enumerate() {
                             gui.row(|mut gui| {
-                                if gui.button_generic("Send", 2., info.ready_to_send) {
-                                    request.communication.send = true;
+                                let text = gui.arena().alloc_str(piece.name);
+                                gui.line_sized(text, 9.);
+                                let text = gui.arena().fmt(format_args!("X##del_comm_{idx}"));
+                                if gui.button_sized(text, 1.) {
+                                    remove_piece_at_index = Some(idx);
                                 }
                             });
                         }
-                        None => {
-                            gui.line_sized("No entity selected...", 10.);
+
+                        if let Some((_, name)) = info.selected_option {
+                            let text = gui.arena().alloc_str(name);
+                            gui.line_sized(text, 10.);
+                        } else {
+                            gui.row(|mut gui| {
+                                for &(idx, name) in info.options {
+                                    let text = gui.arena().alloc_str(name);
+                                    if gui.button(text) {
+                                        request.communication.selected_option = Some(idx);
+                                    }
+                                }
+                            });
                         }
+                        gui.row(|mut gui| {
+                            if gui.button_generic("Send", 2., info.ready_to_send) {
+                                request.communication.send = true;
+                            }
+                        });
+                    } else {
+                        gui.line_sized("No entity selected...", 10.);
                     }
 
                     if let Some(idx) = remove_piece_at_index {
