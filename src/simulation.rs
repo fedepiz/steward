@@ -760,8 +760,6 @@ pub(crate) fn tick<'a>(sim: &mut Simulation, request: Request, arena: &'a Arena)
 
     let ctx = &sim.things;
 
-    let selected_entity = response.selected_entity.id;
-
     // Message overview
     if request.messages.page_size > 0 {
         let num_messages = player.get(&ctx).list_len(List::Messages);
@@ -790,7 +788,7 @@ pub(crate) fn tick<'a>(sim: &mut Simulation, request: Request, arena: &'a Arena)
 
     // Order
     {
-        let selected_entity = selected_entity.get(ctx);
+        let selected_entity = request.select_entity.get(ctx);
         let order = selected_entity.first(List::Orders).get_as_valid(ctx);
         response.order.name = order
             .map(|order| render_order_name(arena, &ctx, order))
@@ -913,7 +911,7 @@ pub(crate) fn tick<'a>(sim: &mut Simulation, request: Request, arena: &'a Arena)
                 ctx,
                 this,
                 &mut response.draw_data,
-                selected_entity,
+                request.select_entity,
                 target_type,
             );
         });
@@ -1208,38 +1206,3 @@ impl TokenCount {
             .map(|(idx, value)| (&TOKEN_TYPES[idx], *value))
     }
 }
-
-// pub(crate) fn count_tokens(ctx: &Things, this: ThingId, source: ThingId) -> TokenCount {
-//     let mut count = TokenCount::default();
-//     for token in ctx.iter_list_get(List::TokensHeld, this) {
-//         assert!(token.flag(Flag::IsToken));
-//         if token.parent(List::TokenSource) == source {
-//             let idx = token.handle(Handle::Type) as usize;
-//             if idx < TOKEN_TYPES.len() {
-//                 count.0[idx] += 1;
-//             }
-//         }
-//     }
-//     count
-// }
-
-// pub(crate) fn token_holders<'a>(
-//     arena: &'a Arena,
-//     ctx: &Things,
-//     source: ThingId,
-// ) -> &'a [(ThingId, TokenCount)] {
-//     let mut vec: AVec<(ThingId, TokenCount)> = arena.new_vec();
-//     for token in ctx.iter_list_get(List::TokenSource, source) {
-//         let holder = token.parent(List::TokensHeld);
-//         let entry = match vec.iter().position(|(id, _)| id == &holder) {
-//             Some(idx) => &mut vec[idx],
-//             None => {
-//                 vec.push((holder, Default::default()));
-//                 vec.last_mut().unwrap()
-//             }
-//         };
-//         let typ = token.handle(Handle::Type) as usize;
-//         entry.1.0[typ] += 1;
-//     }
-//     vec.into_bump_slice()
-// }
