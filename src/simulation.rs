@@ -114,13 +114,14 @@ struct NavCacheEntry {
     next_step: ThingId,
 }
 
+#[derive(Clone)]
 struct NavCache {
     graph: Csr<ThingId, ThingId>,
     cache: Vec<NavCacheEntry>,
     counters: NavCacheCounters,
 }
 
-#[derive(Default)]
+#[derive(Clone, Default)]
 struct NavCacheCounters {
     num_hits: u64,
     num_miss: u64,
@@ -479,7 +480,7 @@ impl<K: Slot, V: Default + Clone> CsrBuilder<K, V> {
     }
 }
 
-#[derive(Default)]
+#[derive(Default, Clone)]
 struct Csr<K, V> {
     key_typ: PhantomData<K>,
     offsets: Vec<usize>,
@@ -863,6 +864,7 @@ pub(crate) fn tick<'a>(sim: &mut Simulation, request: Request, arena: &'a Arena)
     }
 
     sim.things.with_commands(|ctx, _| {
+        let _span = tracing::info_span!("Sequential commands").entered();
         for transfer in transfer_tokens {
             // Get all the tokens at the source
             let tokens = arena.alloc_slice_iter(
@@ -989,6 +991,7 @@ pub(crate) fn tick<'a>(sim: &mut Simulation, request: Request, arena: &'a Arena)
 
     // Big pass, including renderings
     {
+        let _span = tracing::info_span!("Present pass").entered();
         // Determine the target type for highlighting (if any)
         let target_type = if !response.communication.pick_target {
             Default::default()
@@ -1029,6 +1032,8 @@ pub(crate) fn tick<'a>(sim: &mut Simulation, request: Request, arena: &'a Arena)
                         };
                         count.tokens.0[token.handle(Handle::Type) as usize] += 1;
                     }
+                    // Sort the entries. First the unclaimed one (null id),
+                    // thereafter the remaining in order of count.
                     tokens.sort_by_key(|x| {
                         if x.id.is_null() {
                             0

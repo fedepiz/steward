@@ -132,6 +132,7 @@ async fn amain() {
 
     loop {
         tracing_tracy::client::frame_mark();
+        let _span = tracing::info_span!("Main Frame").entered();
         let mut request = crate::simulation::Request::default();
         request.select_entity = response.selected_entity.id;
 
@@ -306,6 +307,8 @@ async fn amain() {
         frame_arena.reset();
 
         response = simulation::tick(&mut sim, request, &frame_arena);
+        mq::draw_fps();
+        std::mem::drop(_span);
         mq::next_frame().await;
     }
 }

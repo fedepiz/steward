@@ -285,7 +285,7 @@ impl Body {
     }
 }
 
-pub(crate) const NUM_THINGS: usize = 100_000;
+pub(crate) const NUM_THINGS: usize = 10_000;
 const LAST_IDX_THING: usize = NUM_THINGS - 1;
 
 #[derive(Default, Clone, Copy)]
@@ -726,6 +726,38 @@ impl Things {
         std::mem::swap(&mut self.entries, &mut self.write_buffer);
         self.appy_commands(commands);
     }
+
+    // pub(crate) fn write_pass_par<T: Send + Sync>(
+    //     &mut self,
+    //     chunks: &mut [T],
+    //     body: impl Fn(&mut T, &Things, &mut Thing, &mut Commands) + 'static + Sync + Send,
+    // ) {
+    //     let read_chunks = self.entries.par_chunks(NUM_THINGS / 8);
+    //     let mut write_buffer = std::mem::take(&mut self.write_buffer);
+    //     let write_chunks = write_buffer.par_chunks_mut(NUM_THINGS / 8);
+
+    //     let mut commands = vec![];
+
+    //     let iter = chunks.par_iter_mut().zip(read_chunks.zip(write_chunks));
+
+    //     iter.map(|(data, (read_chunk, write_chunk))| {
+    //         let mut commands = Commands::new();
+    //         for (thing, target) in read_chunk.iter().zip(write_chunk) {
+    //             *target = *thing;
+    //             if thing.id.is_valid() {
+    //                 body(data, self, target, &mut commands);
+    //             }
+    //         }
+    //         commands
+    //     })
+    //     .collect_into_vec(&mut commands);
+
+    //     self.write_buffer = write_buffer;
+    //     std::mem::swap(&mut self.entries, &mut self.write_buffer);
+    //     for commands in commands {
+    //         self.appy_commands(commands);
+    //     }
+    // }
 
     pub(crate) fn exclusive_pass(&mut self, mut body: impl FnMut(&mut Self, Thing)) {
         for i in 0..self.entries.len() {
