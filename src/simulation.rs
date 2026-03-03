@@ -366,14 +366,7 @@ pub(crate) fn setup(scratch: &Arena) -> Simulation {
     // End-of-setup pass
     let mut nav_cache = NavCacheBuilder::new(1024);
 
-    let mut once = false;
-    ctx.write_pass(|ctx, this, commands| {
-        // Create a test activity at llan_heledd
-        if !once {
-            start_activity(ctx, ctx.lookup_tag("llan_heledd"), commands);
-            once = true;
-        }
-
+    ctx.write_pass(|_, this, _| {
         if this.flag(Flag::IsPerson) {
             // Determine persons' sprite
             let has_subordinates = this.list_len(List::Subordinates) > 0;
@@ -396,10 +389,10 @@ pub(crate) fn setup(scratch: &Arena) -> Simulation {
     }
 }
 
-fn start_activity(ctx: &Things, location: ThingId, commands: &mut Commands) {
+fn start_activity(ctx: &Things, location: ThingId, commands: &mut Commands) -> ThingRef {
     let pos = ctx[location].body.pos();
 
-    let activity = commands.spawn_and_append_to_list(List::AtLocation, location);
+    let (activity_ref, activity) = commands.spawn();
     activity.set_name("Test activity");
     activity.set_sprite("raiding");
     activity.set_flag(Flag::IsActivity, true);
@@ -409,6 +402,8 @@ fn start_activity(ctx: &Things, location: ThingId, commands: &mut Commands) {
         size: 2,
         layer: 3,
     };
+    commands.add_to_list(List::AtLocation, location, activity_ref);
+    activity_ref
 }
 
 fn calculate_tokens_at(ctx: &Things, holder: ThingId, source: ThingId) -> usize {
@@ -559,6 +554,7 @@ pub(crate) struct OrderType {
     move_to_destination: bool,
     wants_to_be_inside: bool,
     wait_time: f32,
+    trigger_activity: bool,
 }
 
 mod order_types {
@@ -570,6 +566,7 @@ mod order_types {
         move_to_destination: true,
         wants_to_be_inside: false,
         wait_time: 0.,
+        trigger_activity: false,
     };
     pub const ENTER: OrderType = OrderType {
         name: "Enter #1",
@@ -577,16 +574,26 @@ mod order_types {
         move_to_destination: true,
         wants_to_be_inside: true,
         wait_time: 0.,
+        trigger_activity: false,
+    };
+    pub const CLAIM_KINSHIP: OrderType = OrderType {
+        name: "Claim Kinship at #0",
+        completion_message: "#0 has arrived to #1",
+        move_to_destination: true,
+        wants_to_be_inside: false,
+        wait_time: 200.,
+        trigger_activity: true,
     };
 }
 
-const ORDER_TYPES: [OrderType; 4] = [
+const ORDER_TYPES: [OrderType; 5] = [
     OrderType {
         name: "Nothing",
         completion_message: "THIS IS A DUMMMY ORDER TYPE",
         move_to_destination: false,
         wants_to_be_inside: false,
         wait_time: 0.,
+        trigger_activity: false,
     },
     order_types::MOVE,
     order_types::ENTER,
@@ -596,7 +603,9 @@ const ORDER_TYPES: [OrderType; 4] = [
         move_to_destination: false,
         wants_to_be_inside: false,
         wait_time: 1000.,
+        trigger_activity: false,
     },
+    order_types::CLAIM_KINSHIP,
 ];
 
 #[inline]
@@ -668,7 +677,7 @@ impl TargetType {
     }
 }
 
-const COMMUNICATION_TYPES: [CommunicationType; 2] = [
+const COMMUNICATION_TYPES: [CommunicationType; 3] = [
     CommunicationType {
         short_name: "Move",
         long_name: "Move to #0",
@@ -686,6 +695,15 @@ const COMMUNICATION_TYPES: [CommunicationType; 2] = [
             flag: Flag::IsSettlement,
         },
         order: Some(&order_types::ENTER),
+    },
+    CommunicationType {
+        short_name: "Clm Kin.",
+        long_name: "Claim the right of kinship at #0",
+        target_type: TargetType {
+            name: "settlement",
+            flag: Flag::IsSettlement,
+        },
+        order: Some(&order_types::CLAIM_KINSHIP),
     },
 ];
 
@@ -793,6 +811,13 @@ pub(crate) fn tick<'a>(sim: &mut Simulation, request: Request, arena: &'a Arena)
 
     let mut response = Response::new(arena);
 
+    struct TransferToken {
+        source: ThingId,
+        recepient: ThingId,
+        change_type_to: u16,
+    }
+    let mut transfer_tokens = vec![];
+
     for _ in 0..request.advance_time {
         sim.thick_num = sim.thick_num.wrapping_add(1);
 
@@ -805,8 +830,17 @@ pub(crate) fn tick<'a>(sim: &mut Simulation, request: Request, arena: &'a Arena)
 
             if this.flag(Flag::IsActivity) {
                 let wait_time = this.var(Var::WaitTime);
-                if wait_time > 200. {
+                if wait_time > 1000. {
+                    // End of activity
                     commands.despawn(this.id());
+                    // Enqueue some token transfers
+                    let initiator = this.first(List::Partecipants);
+                    let location = this.parent(List::AtLocation);
+                    transfer_tokens.push(TransferToken {
+                        source: location,
+                        recepient: initiator,
+                        change_type_to: 2,
+                    });
                 } else {
                     this.set_var(Var::WaitTime, wait_time + 1.);
                 }
@@ -827,6 +861,29 @@ pub(crate) fn tick<'a>(sim: &mut Simulation, request: Request, arena: &'a Arena)
             }
         });
     }
+
+    sim.things.with_commands(|ctx, _| {
+        for transfer in transfer_tokens {
+            // Get all the tokens at the source
+            let tokens = arena.alloc_slice_iter(
+                ctx.iter_list_get(List::TokensSourced, transfer.source)
+                    .filter(|tok| transfer.recepient != tok.parent(List::TokensHeld)),
+            );
+            // Score and sort the tokens
+            tokens.sort_by_key(|token| {
+                if token.handle(Handle::Type) == 0 {
+                    100
+                } else {
+                    0
+                }
+            });
+
+            // Re-assign and transform type
+            let best_tok = tokens.last().map(|x| x.id()).unwrap_or_default();
+            ctx[best_tok].set_handle(Handle::Type, transfer.change_type_to);
+            ctx.add_to_list(List::TokensHeld, transfer.recepient, best_tok);
+        }
+    });
 
     let ctx = &sim.things;
 
@@ -952,8 +1009,8 @@ pub(crate) fn tick<'a>(sim: &mut Simulation, request: Request, arena: &'a Arena)
                 response.selected_entity.sprite = this.sprite();
 
                 if this.flag(Flag::IsLocation) {
+                    let tokens = &mut response.selected_entity.local_power_tokens;
                     for token in ctx.iter_list_get(List::TokensSourced, this.id()) {
-                        let tokens = &mut response.selected_entity.local_power_tokens;
                         let count = match tokens
                             .iter()
                             .position(|holder| holder.id == token.parent(List::TokensHeld))
@@ -972,6 +1029,13 @@ pub(crate) fn tick<'a>(sim: &mut Simulation, request: Request, arena: &'a Arena)
                         };
                         count.tokens.0[token.handle(Handle::Type) as usize] += 1;
                     }
+                    tokens.sort_by_key(|x| {
+                        if x.id.is_null() {
+                            0
+                        } else {
+                            1000 - x.tokens.total() + 1
+                        }
+                    });
                 }
             }
 
@@ -989,7 +1053,8 @@ pub(crate) fn tick<'a>(sim: &mut Simulation, request: Request, arena: &'a Arena)
 }
 
 fn add_order(this: &mut Thing, typ: &OrderType, destination: ThingId, commands: &mut Commands) {
-    let order = commands.spawn_and_append_to_list(List::Orders, this.id());
+    // let order = commands.spawn_and_append_to_list(List::Orders, this.id());
+    let (order_ref, order) = commands.spawn();
 
     let order_type_idx = ORDER_TYPES.iter().position(|x| x.name == typ.name).unwrap() as u16;
     order.set_handle(Handle::Type, order_type_idx);
@@ -1000,6 +1065,8 @@ fn add_order(this: &mut Thing, typ: &OrderType, destination: ThingId, commands: 
     order.set_link(Link::Destination, destination);
     order.set_var(Var::WaitTime, order_type.wait_time);
     assign_ownership(order, this.id());
+
+    commands.add_to_list(List::Orders, this.id(), order_ref);
 }
 
 fn check_order_completion(
@@ -1026,6 +1093,11 @@ fn check_order_completion(
             );
 
             this.clear_link(Link::CurrentOrder);
+
+            if order_type.trigger_activity {
+                let activity = start_activity(ctx, location, commands);
+                commands.add_to_list(List::Partecipants, activity, this.id());
+            }
         }
     }
 }
@@ -1055,8 +1127,11 @@ fn update_intentions(ctx: &Things, this: &mut Thing) {
         if current_destination != ordered_destination {
             this.set_link(Link::Destination, ordered_destination);
             this.set_var(Var::MovementTime, 0.);
-        } else {
-            // If we are at the current destination, increment wait time
+        }
+
+        let current_location = this.parent(List::AtLocation);
+        // If we are at ordered destination, so wait timer should increase
+        if current_location == ordered_destination {
             this.set_var(Var::WaitTime, this.var(Var::WaitTime) + 1.);
         }
 
@@ -1186,11 +1261,12 @@ fn send_message(
     const LINKS: [Link; 2] = [Link::A, Link::B];
     assert!(params.len() <= LINKS.len());
 
-    let message = commands.spawn_and_append_to_list(List::Messages, recepient);
+    let (msg_ref, message) = commands.spawn();
     message.set_name(text);
     for (&link, &param) in LINKS.iter().zip(params) {
         message.set_link(link, param);
     }
+    commands.add_to_list(List::Messages, recepient, msg_ref);
 }
 
 fn assign_ownership(this: &mut Thing, owner: ThingId) {
@@ -1279,6 +1355,10 @@ fn render_thing(
 pub(crate) struct TokenCount([usize; TOKEN_TYPES.len()]);
 
 impl TokenCount {
+    pub fn total(&self) -> usize {
+        self.iter().map(|x| x.1).sum()
+    }
+
     pub fn iter(&self) -> impl Iterator<Item = (&'static TokenType, usize)> {
         self.0
             .iter()

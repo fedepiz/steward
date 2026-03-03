@@ -134,8 +134,11 @@ pub(crate) enum List {
     Subordinates,
     Messages,
     Orders,
+    // Tokens
     TokensSourced,
     TokensHeld,
+    // Activity
+    Partecipants,
 }
 
 impl Default for List {
@@ -750,36 +753,35 @@ impl Things {
         value
     }
 
-    fn appy_commands(&mut self, commands: Commands) {
-        for ListMutation {
-            list,
-            parent,
-            child,
-        } in commands.list_mutations
-        {
-            self.add_to_list(list, parent, child);
-        }
-
-        for id in commands.despawns {
+    fn appy_commands(&mut self, mut commands: Commands) {
+        for id in commands.despawns.drain(..) {
             self.despawn(id);
         }
 
-        for spawn in commands.spawns {
+        for (idx, spawn) in commands.spawns.drain(..).enumerate() {
             let thing = self.spawn();
             let this = thing.id;
             *thing = spawn.thing;
             thing.id = this;
+            commands.temp_id_map[idx] = thing.id;
+        }
 
-            // Save important state on the side
-            let (list, parent) = spawn.append_to_list;
-            if !parent.is_null() {
-                self.add_to_list(list, parent, this);
-            }
+        for ListMutation {
+            list,
+            parent,
+            child,
+        } in std::mem::take(&mut commands.list_mutations)
+        {
+            let parent = commands.resolve(parent);
+            let child = commands.resolve(child);
+            self.add_to_list(list, parent, child);
         }
     }
 }
 
+#[derive(Default)]
 pub(crate) struct Commands {
+    temp_id_map: Vec<ThingId>,
     list_mutations: Vec<ListMutation>,
     despawns: Vec<ThingId>,
     spawns: Vec<Spawn>,
@@ -787,14 +789,24 @@ pub(crate) struct Commands {
 
 impl Commands {
     fn new() -> Self {
-        Self {
-            list_mutations: vec![],
-            despawns: vec![],
-            spawns: vec![],
+        Self::default()
+    }
+
+    fn resolve(&self, rf: ThingRef) -> ThingId {
+        match rf {
+            ThingRef::Id(id) => id,
+            ThingRef::TempId(idx) => self.temp_id_map[idx as usize],
         }
     }
 
-    pub fn add_to_list(&mut self, list: List, parent: ThingId, child: ThingId) {
+    pub fn add_to_list(
+        &mut self,
+        list: List,
+        parent: impl Into<ThingRef>,
+        child: impl Into<ThingRef>,
+    ) {
+        let parent = parent.into();
+        let child = child.into();
         self.list_mutations.push(ListMutation {
             list,
             parent,
@@ -802,11 +814,11 @@ impl Commands {
         });
     }
 
-    pub fn remove_from_list(&mut self, list: List, child: ThingId) {
+    pub fn remove_from_list(&mut self, list: List, child: impl Into<ThingRef>) {
         self.list_mutations.push(ListMutation {
             list,
-            parent: ThingId::null(),
-            child,
+            parent: ThingId::null().into(),
+            child: child.into(),
         });
     }
 
@@ -814,29 +826,34 @@ impl Commands {
         self.despawns.push(id);
     }
 
-    pub fn spawn(&mut self) -> &mut Thing {
-        self.spawns.push(Default::default());
-        &mut self.spawns.last_mut().unwrap().thing
+    pub fn spawn(&mut self) -> (ThingRef, &mut Thing) {
+        let temp_id = ThingRef::TempId(self.temp_id_map.len() as u32);
+        self.temp_id_map.push(ThingId::default());
+        self.spawns.push(Spawn::default());
+        (temp_id, &mut self.spawns.last_mut().unwrap().thing)
     }
+}
 
-    pub fn spawn_and_append_to_list(&mut self, list: List, parent: ThingId) -> &mut Thing {
-        self.spawns.push(Spawn {
-            append_to_list: (list, parent),
-            ..Default::default()
-        });
-        &mut self.spawns.last_mut().unwrap().thing
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub(crate) enum ThingRef {
+    Id(ThingId),
+    TempId(u32),
+}
+
+impl From<ThingId> for ThingRef {
+    fn from(value: ThingId) -> Self {
+        Self::Id(value)
     }
 }
 
 #[derive(Clone, Copy)]
 struct ListMutation {
     list: List,
-    parent: ThingId,
-    child: ThingId,
+    parent: ThingRef,
+    child: ThingRef,
 }
 
 #[derive(Default)]
 struct Spawn {
     thing: Thing,
-    append_to_list: (List, ThingId),
 }
