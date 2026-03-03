@@ -75,6 +75,7 @@ impl Board {
                     mq::UniformDesc::new("border_highlight", mq::UniformType::Float4),
                     mq::UniformDesc::new("time", mq::UniformType::Float1),
                     mq::UniformDesc::new("pulse_intensity", mq::UniformType::Float1),
+                    mq::UniformDesc::new("transparency_intensity", mq::UniformType::Float1),
                 ],
                 textures: vec!["atlas_texture".to_owned()],
                 ..Default::default()
@@ -235,6 +236,8 @@ impl Board {
                         .set_uniform("border_highlight", (border_highlight,));
                     self.sprite_shader
                         .set_uniform("pulse_intensity", sprite.pulse_intensity);
+                    self.sprite_shader
+                        .set_uniform("transparency_intensity", sprite.transparency_intensity);
 
                     let source = sprite_atlas.get(sprite.image);
                     mq::draw_texture_ex(

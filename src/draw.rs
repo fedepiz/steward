@@ -30,6 +30,7 @@ pub(crate) struct Sprite {
     pub layer: u8,
     pub border_highlight: HighlightType,
     pub pulse_intensity: f32,
+    pub transparency_intensity: f32,
 }
 
 #[derive(Clone, Copy, Default)]

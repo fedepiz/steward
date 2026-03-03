@@ -69,6 +69,7 @@ pub(crate) enum Flag {
     IsSettlement,
     IsPerson,
     IsPath,
+    IsActivity,
     // Tokens are an abstract kind of thing used to model control of some kind of resource or power share.
     IsToken,
     Teleport,
@@ -299,6 +300,28 @@ pub(crate) struct Things {
 }
 
 impl Things {
+    fn detach_children_from_list(&mut self, list: List, parent: ThingId) {
+        let list_idx = list as usize;
+
+        let mut child = self.entries[parent.slot as usize].lists[list_idx]
+            .children
+            .0;
+        while !child.is_null() {
+            let slot = child.slot as usize;
+            let next = self.entries[slot].lists[list_idx].sibling;
+
+            let child_list = &mut self.entries[slot].lists[list_idx];
+            child_list.parent = ThingId::null();
+            child_list.sibling = ThingId::null();
+
+            child = next;
+        }
+
+        let parent_list = &mut self.entries[parent.slot as usize].lists[list_idx];
+        parent_list.children = (ThingId::null(), ThingId::null());
+        parent_list.length = 0;
+    }
+
     pub(crate) fn new() -> Self {
         let mut entries = Vec::from_iter((0..NUM_THINGS).map(|_| Thing::default()));
         // Create a 'chain' of next_free pointing at each other, with the last pointing to "the null"
@@ -369,6 +392,10 @@ impl Things {
 
         for list in List::iter() {
             self.remove_from_list(list, id);
+        }
+
+        for list in List::iter() {
+            self.detach_children_from_list(list, id);
         }
 
         // Check for tag and remove
@@ -522,45 +549,41 @@ impl Things {
     }
 
     pub(crate) fn remove_from_list(&mut self, list: List, child: ThingId) {
-        if child.is_null() {
+        if !child.is_valid() {
             return;
         }
 
         let list_idx = list as usize;
         let parent = self[child].lists[list_idx].parent;
-        if parent.is_null() {
+        if !parent.is_valid() {
+            let child_list = &mut self.entries[child.slot as usize].lists[list_idx];
+            child_list.parent = ThingId::null();
+            child_list.sibling = ThingId::null();
             return;
         }
 
-        let child_next = self[child].lists[list_idx].sibling;
-        let parent_head = self[parent].lists[list_idx].children.0;
-        let parent_tail = self[parent].lists[list_idx].children.1;
+        let parent_slot = parent.slot as usize;
+        let mut prev = ThingId::null();
+        let mut current = self.entries[parent_slot].lists[list_idx].children.0;
 
-        let prev = if parent_head == child {
-            ThingId::null()
-        } else {
-            let mut prev = ThingId::null();
-            let mut current = parent_head;
-            while !current.is_null() {
-                let next = self[current].lists[list_idx].sibling;
-                if next == child {
-                    prev = current;
-                    break;
-                }
-                current = next;
-            }
-            assert!(!prev.is_null());
-            prev
-        };
-
-        if prev.is_null() {
-            self[parent].lists[list_idx].children.0 = child_next;
-        } else {
-            self[prev].lists[list_idx].sibling = child_next;
+        while current.is_valid() && current != child {
+            prev = current;
+            current = self.entries[current.slot as usize].lists[list_idx].sibling;
         }
 
-        if parent_tail == child {
-            self[parent].lists[list_idx].children.1 = prev;
+        if current != child {
+            let child_list = &mut self.entries[child.slot as usize].lists[list_idx];
+            child_list.parent = ThingId::null();
+            child_list.sibling = ThingId::null();
+            return;
+        }
+
+        let next = self.entries[current.slot as usize].lists[list_idx].sibling;
+
+        if prev.is_null() {
+            self.entries[parent_slot].lists[list_idx].children.0 = next;
+        } else {
+            self.entries[prev.slot as usize].lists[list_idx].sibling = next;
         }
 
         {
@@ -570,10 +593,20 @@ impl Things {
         }
 
         {
-            let parent_list = &mut self[parent].lists[list_idx];
-            parent_list.length -= 1;
-            if parent_list.length == 0 {
-                parent_list.children = (ThingId::null(), ThingId::null());
+            let mut len = 0;
+            let mut tail = ThingId::null();
+            let mut cursor = self.entries[parent_slot].lists[list_idx].children.0;
+            while cursor.is_valid() {
+                len += 1;
+                tail = cursor;
+                cursor = self.entries[cursor.slot as usize].lists[list_idx].sibling;
+            }
+
+            let parent_list = &mut self.entries[parent_slot].lists[list_idx];
+            parent_list.length = len;
+            parent_list.children.1 = tail;
+            if len == 0 {
+                parent_list.children.0 = ThingId::null();
             }
         }
     }
@@ -680,8 +713,8 @@ impl Things {
         let mut commands = Commands::new();
 
         for (thing, target) in self.entries.iter().zip(write_buffer.iter_mut()) {
+            *target = *thing;
             if thing.id.is_valid() {
-                *target = *thing;
                 body(self, target, &mut commands);
             }
         }

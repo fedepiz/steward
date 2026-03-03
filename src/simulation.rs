@@ -216,7 +216,7 @@ pub(crate) fn setup(scratch: &Arena) -> Simulation {
                     x: row[5].as_num(),
                     y: row[6].as_num(),
                     size: 4,
-                    layer: 0,
+                    layer: 1,
                 };
                 this.set_flag(Flag::IsLocation, true);
                 this.set_flag(Flag::IsSettlement, true);
@@ -256,7 +256,7 @@ pub(crate) fn setup(scratch: &Arena) -> Simulation {
                 this.set_sprite(row[3].as_str().to_string().leak());
                 this.body = Body {
                     size: 2,
-                    layer: 1,
+                    layer: 2,
                     ..Default::default()
                 };
                 this.set_flag(Flag::IsPerson, true);
@@ -363,23 +363,30 @@ pub(crate) fn setup(scratch: &Arena) -> Simulation {
         }
     }
 
-    ctx.write_pass(|_, this, _| {
+    // End-of-setup pass
+    let mut nav_cache = NavCacheBuilder::new(1024);
+
+    let mut once = false;
+    ctx.write_pass(|ctx, this, commands| {
+        // Create a test activity at llan_heledd
+        if !once {
+            start_activity(ctx, ctx.lookup_tag("llan_heledd"), commands);
+            once = true;
+        }
+
         if this.flag(Flag::IsPerson) {
             // Determine persons' sprite
             let has_subordinates = this.list_len(List::Subordinates) > 0;
             this.set_sprite(if has_subordinates { "noble" } else { "soldier" });
         }
-    });
 
-    let mut nav_cache = NavCacheBuilder::new(1024);
-
-    ctx.readonly_pass(|_, this| {
         if this.flag(Flag::IsPath) {
             let a = this.link(Link::A);
             let b = this.link(Link::B);
             nav_cache.add_connection(a, b);
         }
     });
+
     let nav_cache = nav_cache.build();
 
     Simulation {
@@ -387,6 +394,21 @@ pub(crate) fn setup(scratch: &Arena) -> Simulation {
         things,
         nav_cache,
     }
+}
+
+fn start_activity(ctx: &Things, location: ThingId, commands: &mut Commands) {
+    let pos = ctx[location].body.pos();
+
+    let activity = commands.spawn_and_append_to_list(List::AtLocation, location);
+    activity.set_name("Test activity");
+    activity.set_sprite("raiding");
+    activity.set_flag(Flag::IsActivity, true);
+    activity.body = Body {
+        x: pos.x,
+        y: pos.y,
+        size: 2,
+        layer: 3,
+    };
 }
 
 fn calculate_tokens_at(ctx: &Things, holder: ThingId, source: ThingId) -> usize {
@@ -566,20 +588,8 @@ const ORDER_TYPES: [OrderType; 4] = [
         wants_to_be_inside: false,
         wait_time: 0.,
     },
-    OrderType {
-        name: "Move to #1",
-        completion_message: "#0 has arrived to #1",
-        move_to_destination: true,
-        wants_to_be_inside: false,
-        wait_time: 0.,
-    },
-    OrderType {
-        name: "Enter #1",
-        completion_message: "#0 has entered #1",
-        move_to_destination: true,
-        wants_to_be_inside: true,
-        wait_time: 0.,
-    },
+    order_types::MOVE,
+    order_types::ENTER,
     OrderType {
         name: "Wait",
         completion_message: "#0 has entered #1",
@@ -791,6 +801,15 @@ pub(crate) fn tick<'a>(sim: &mut Simulation, request: Request, arena: &'a Arena)
             // Automatic destruction of dependent objects
             if this.flag(Flag::MustBeOwned) && !ctx.exists(this.link(Link::GCOwner)) {
                 commands.despawn(this.id());
+            }
+
+            if this.flag(Flag::IsActivity) {
+                let wait_time = this.var(Var::WaitTime);
+                if wait_time > 200. {
+                    commands.despawn(this.id());
+                } else {
+                    this.set_var(Var::WaitTime, wait_time + 1.);
+                }
             }
 
             if this.flag(Flag::IsPerson) {
@@ -1109,6 +1128,11 @@ fn update_body_of_local_things(ctx: &Things, this: &mut Thing, delta: f32) -> Mo
         let mut idx: usize = 0;
         let mut len: usize = 0;
         for thing in ctx.iter_list_get(List::AtLocation, location.id()) {
+            // We only consider the people at a location
+            if !thing.flag(Flag::IsPerson) {
+                continue;
+            }
+
             if thing.id() == this.id() {
                 idx = len;
             }
@@ -1200,12 +1224,19 @@ fn render_thing(
             HighlightType::Nothing
         };
 
+        let transparency_intensity = if this.flag(Flag::IsActivity) {
+            0.5
+        } else {
+            0.0
+        };
+
         let sprite = Sprite {
             image: this.sprite(),
             bounds,
             layer: this.body.layer,
             border_highlight,
             pulse_intensity: if is_selected { 1.0 } else { 0.0 },
+            transparency_intensity,
         };
         draw_data.sprites.push(sprite);
 

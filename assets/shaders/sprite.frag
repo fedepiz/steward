@@ -8,6 +8,7 @@ uniform sampler2D atlas_texture;
 uniform vec4 border_highlight;
 uniform float time;
 uniform float pulse_intensity;
+uniform float transparency_intensity;
 
 // Border thickness in source texture pixels.
 // This is a shader-side constant on purpose: it keeps the effect stable and
@@ -49,10 +50,10 @@ bool is_near_solid_edge(vec2 at_uv) {
     return false;
 }
 
-// Pass: apply time-based pulsation to the sprite interior color.
-// `pulse_intensity` is expected to be in [0, 1]:
-// - 0 disables pulsation
-// - 1 uses full configured pulsation amplitude
+// Pass: apply time-based pulsation and transparency to sprite interior.
+// `pulse_intensity` and `transparency_intensity` are expected in [0, 1].
+// - 0 disables the corresponding effect
+// - 1 uses full configured amplitude
 vec4 sample_pulsed_sprite_color(vec4 base_color) {
     bool base_is_solid = base_color.a > SOLID_ALPHA_THRESHOLD;
 
@@ -61,10 +62,14 @@ vec4 sample_pulsed_sprite_color(vec4 base_color) {
 
     // Final brighten amount, clamped for safety to avoid overshooting.
     float pulse_amount = clamp(pulse_intensity, 0.0, 1.0) * pulse_wave * MAX_PULSE_BRIGHTEN;
+    // Fade amount in [0, 1]. At full intensity, the sprite alpha oscillates from
+    // fully opaque to fully transparent and back.
+    float fade_amount = clamp(transparency_intensity, 0.0, 1.0) * pulse_wave;
 
     // Pulsation affects only visible sprite pixels, not transparent background.
     vec3 pulsed_rgb = mix(base_color.rgb, vec3(1.0), pulse_amount);
-    return base_is_solid ? vec4(pulsed_rgb, base_color.a) : base_color;
+    float pulsed_alpha = base_color.a * (1.0 - fade_amount);
+    return base_is_solid ? vec4(pulsed_rgb, pulsed_alpha) : base_color;
 }
 
 // Pass: compute border highlight color for this fragment.
@@ -81,8 +86,8 @@ vec4 sample_border_highlight(vec2 at_uv, vec4 base_color) {
 // Current policy:
 // - Keep pulsed sprite interior for solid texels.
 // - Replace transparent edge pixels with border highlight.
-vec4 combine_passes(vec4 pulsed_sprite_color, vec4 border_color) {
-    bool sprite_is_solid = pulsed_sprite_color.a > SOLID_ALPHA_THRESHOLD;
+vec4 combine_passes(vec4 base_color, vec4 pulsed_sprite_color, vec4 border_color) {
+    bool sprite_is_solid = base_color.a > SOLID_ALPHA_THRESHOLD;
     return sprite_is_solid ? pulsed_sprite_color : border_color;
 }
 
@@ -93,5 +98,5 @@ void main() {
     vec4 pulsed_sprite_color = sample_pulsed_sprite_color(base_color);
     // Color from border.
     vec4 border_color = sample_border_highlight(uv, base_color);
-    frag_color = combine_passes(pulsed_sprite_color, border_color);
+    frag_color = combine_passes(base_color, pulsed_sprite_color, border_color);
 }
