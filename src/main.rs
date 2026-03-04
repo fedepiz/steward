@@ -1,7 +1,9 @@
 mod assets;
 mod board;
 mod build_ui;
+mod csr;
 mod draw;
+mod navigation;
 mod simulation;
 mod things;
 

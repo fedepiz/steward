@@ -1,5 +1,3 @@
-use std::marker::PhantomData;
-
 use util::{
     arena::Arena,
     geom::{Rect, V2},
@@ -7,8 +5,14 @@ use util::{
 
 use crate::{
     draw::*,
-    things::{self, *},
+    navigation::{NavCache, NavCacheBuilder},
+    things::*,
 };
+
+// Abstract scale to the travel cost
+const TRAVEL_COST_SCALE: f32 = 10.;
+// Movement lerp speed for bodies
+const MOVEMENT_LERP_SPEED: f32 = 2.0;
 
 pub(crate) struct Simulation {
     pub thick_num: u64,
@@ -79,122 +83,6 @@ const TOKEN_TYPES: [TokenType; 5] = [
 
 const PLAYER_TAG: &'static str = "player";
 const COMMS_TAG: &'static str = "communications";
-
-struct NavCacheBuilder {
-    graph: CsrBuilder<ThingId, ThingId>,
-    cache_size: usize,
-}
-
-impl NavCacheBuilder {
-    fn new(cache_size: usize) -> Self {
-        Self {
-            graph: CsrBuilder::new(),
-            cache_size,
-        }
-    }
-
-    fn add_connection(&mut self, a: ThingId, b: ThingId) {
-        self.graph.push(a, b);
-        self.graph.push(b, a);
-    }
-
-    fn build(self) -> NavCache {
-        NavCache {
-            graph: self.graph.build(),
-            cache: Vec::with_capacity(self.cache_size),
-            counters: NavCacheCounters::default(),
-        }
-    }
-}
-
-#[derive(Default, Clone, Copy)]
-struct NavCacheEntry {
-    source: ThingId,
-    destination: ThingId,
-    next_step: ThingId,
-}
-
-#[derive(Clone)]
-struct NavCache {
-    graph: Csr<ThingId, ThingId>,
-    cache: Vec<NavCacheEntry>,
-    counters: NavCacheCounters,
-}
-
-#[derive(Clone, Default)]
-struct NavCacheCounters {
-    num_hits: u64,
-    num_miss: u64,
-    num_reset: u64,
-}
-
-impl NavCache {
-    /// Returns the next hop from `source` toward `destination`.
-    ///
-    /// The cache stores `(source, destination) -> next_step` entries so repeated
-    /// queries can skip pathfinding. On a cache miss, this runs A* over the CSR
-    /// graph, caches each hop along the discovered path, and returns the first
-    /// step after `source`.
-    ///
-    /// If no path is found (or `source == destination`), this returns a null
-    /// `ThingId`.
-    fn pathfind(
-        &mut self,
-        source: ThingId,
-        destination: ThingId,
-        cost_fn: &impl Fn(ThingId, ThingId) -> i32,
-    ) -> ThingId {
-        // Find an existing step, if one exists
-        let entry = self
-            .cache
-            .iter()
-            .find(|entry| entry.source == source && entry.destination == destination);
-
-        // Return the next step if found
-        match entry {
-            Some(entry) => {
-                self.counters.num_hits = self.counters.num_hits.saturating_add(1);
-                return entry.next_step;
-            }
-            None => {}
-        };
-
-        // No step found, run pathfinding
-        let pathfind_result = pathfinding::directed::astar::astar(
-            &source,
-            |&node| {
-                self.graph
-                    .get_slice(node)
-                    .into_iter()
-                    .map(move |&x| (x, cost_fn(node, x)))
-            },
-            |&node| cost_fn(node, destination),
-            |&node| node == destination,
-        );
-        self.counters.num_miss = self.counters.num_miss.saturating_add(1);
-        let path = pathfind_result
-            .as_ref()
-            .map(|x| x.0.as_slice())
-            .unwrap_or_default();
-
-        // Blow the cache if out of room
-        if self.cache.len() + path.len() >= self.cache.capacity() {
-            self.counters.num_reset = self.counters.num_reset.saturating_add(1);
-            self.cache.clear();
-        }
-
-        // Cache the new steps
-        self.cache
-            .extend(path.windows(2).map(|steps| NavCacheEntry {
-                source: steps[0],
-                destination,
-                next_step: steps[1],
-            }));
-
-        // And return the next one, if any
-        path.get(1).copied().unwrap_or_default()
-    }
-}
 
 pub(crate) fn setup(scratch: &Arena) -> Simulation {
     let mut things = Things::new();
@@ -298,27 +186,8 @@ pub(crate) fn setup(scratch: &Arena) -> Simulation {
             let mut people = scratch.new_vec_with_capacity(num_people);
 
             for i in 0..num_people {
-                let person = ctx.spawn();
-                people.push(person.id());
-                let name = {
-                    let idx = settlement.id().slot() * 13 + person.id().slot() * 17;
-                    NAMES[idx % NAMES.len()]
-                };
-                person.set_name(name);
-                person.set_sprite("soldier");
-                person.set_flag(Flag::IsPerson, true);
-                person.body = Body {
-                    size: 2,
-                    layer: 1,
-                    ..Default::default()
-                };
-                person.set_flag(Flag::WantsToBeInside, true);
-                person.set_flag(Flag::IsInside, true);
-                person.set_flag(Flag::Teleport, true);
-
-                let person = person.id();
-
-                ctx.add_to_list(List::AtLocation, settlement.id(), person);
+                let person = create_person(ctx, settlement.id());
+                people.push(person);
 
                 let kinds: &[u16] = if i == 0 {
                     &[token_types::KINSHIP, token_types::ENCUMBENT]
@@ -390,6 +259,30 @@ pub(crate) fn setup(scratch: &Arena) -> Simulation {
     }
 }
 
+fn create_person(ctx: &mut Things, location: ThingId) -> ThingId {
+    let person = ctx.spawn();
+    let name = {
+        let idx = location.slot() * 13 + person.id().slot() * 17;
+        NAMES[idx % NAMES.len()]
+    };
+    person.set_name(name);
+    person.set_sprite("soldier");
+    person.set_flag(Flag::IsPerson, true);
+    person.body = Body {
+        size: 2,
+        layer: 1,
+        ..Default::default()
+    };
+    // Positioning
+    person.set_flag(Flag::WantsToBeInside, true);
+    person.set_flag(Flag::IsInside, true);
+    person.set_flag(Flag::Teleport, true);
+
+    let person = person.id();
+    ctx.add_to_list(List::AtLocation, location, person);
+    person
+}
+
 fn start_activity(ctx: &Things, location: ThingId, commands: &mut Commands) -> ThingRef {
     let pos = ctx[location].body.pos();
 
@@ -411,96 +304,6 @@ fn calculate_tokens_at(ctx: &Things, holder: ThingId, source: ThingId) -> usize 
     ctx.iter_list_get(List::TokensHeld, holder)
         .filter(|tok| tok.parent(List::TokensSourced) == source)
         .count()
-}
-
-trait Slot {
-    fn slot(&self) -> usize;
-}
-
-impl Slot for ThingId {
-    fn slot(&self) -> usize {
-        ThingId::slot(*self)
-    }
-}
-
-struct CsrBuilder<K, V> {
-    bins: Vec<usize>,
-    entries: Vec<(K, V)>,
-    max_slot: usize,
-}
-
-impl<K: Slot, V: Default + Clone> CsrBuilder<K, V> {
-    /// Creates an empty CSR builder with fixed bin capacity for all thing slots.
-    fn new() -> Self {
-        Self {
-            bins: vec![0; things::NUM_THINGS],
-            entries: vec![],
-            max_slot: 0,
-        }
-    }
-
-    /// Appends one adjacency value under `key`.
-    ///
-    /// Internally this increments the per-slot bin count and records the entry
-    /// for compaction during `build`.
-    fn push(&mut self, key: K, value: V) {
-        let slot = key.slot();
-        self.bins[slot] += 1;
-        self.entries.push((key, value));
-        self.max_slot = slot.max(self.max_slot);
-    }
-
-    /// Compacts pushed entries into CSR layout.
-    ///
-    /// Produces prefix offsets per key slot and a contiguous value array where
-    /// neighbors for a slot are stored in `values[offsets[i]..offsets[i + 1]]`.
-    fn build(self) -> Csr<K, V> {
-        let mut offsets = vec![0; self.max_slot + 2];
-        // Prefix sum to calculate offsets
-        for i in 0..=self.max_slot {
-            offsets[i + 1] = offsets[i] + self.bins[i];
-        }
-        let mut counts = self.bins;
-        counts.clear();
-        counts.resize(self.max_slot + 1, 0);
-
-        let mut values = vec![V::default(); self.entries.len()];
-
-        for (key, value) in self.entries {
-            let idx = offsets[key.slot()] + counts[key.slot()];
-            counts[key.slot()] += 1;
-            values[idx] = value
-        }
-
-        Csr {
-            key_typ: PhantomData,
-            offsets,
-            values,
-        }
-    }
-}
-
-#[derive(Default, Clone)]
-struct Csr<K, V> {
-    key_typ: PhantomData<K>,
-    offsets: Vec<usize>,
-    values: Vec<V>,
-}
-
-impl<K: Slot, V> Csr<K, V> {
-    /// Returns the adjacency slice for `id`.
-    ///
-    /// The returned slice is borrowed from internal CSR storage and is empty
-    /// when the slot is out of range or has no entries.
-    fn get_slice(&self, id: K) -> &[V] {
-        let idx = id.slot();
-        if idx + 1 >= self.offsets.len() {
-            return &[];
-        }
-        let start = self.offsets[idx];
-        let end = self.offsets[idx + 1];
-        &self.values[start..end]
-    }
 }
 
 #[derive(Default)]
@@ -817,7 +620,13 @@ pub(crate) fn tick<'a>(sim: &mut Simulation, request: Request, arena: &'a Arena)
         recepient: ThingId,
         change_type_to: u16,
     }
-    let mut transfer_tokens = vec![];
+
+    #[derive(Default)]
+    struct Effects {
+        transfer_tokens: Vec<TransferToken>,
+    }
+
+    let mut effects = Effects::default();
 
     for _ in 0..request.advance_time {
         sim.thick_num = sim.thick_num.wrapping_add(1);
@@ -837,7 +646,7 @@ pub(crate) fn tick<'a>(sim: &mut Simulation, request: Request, arena: &'a Arena)
                     // Enqueue some token transfers
                     let initiator = this.first(List::Partecipants);
                     let location = this.parent(List::AtLocation);
-                    transfer_tokens.push(TransferToken {
+                    effects.transfer_tokens.push(TransferToken {
                         source: location,
                         recepient: initiator,
                         change_type_to: 2,
@@ -864,8 +673,8 @@ pub(crate) fn tick<'a>(sim: &mut Simulation, request: Request, arena: &'a Arena)
     }
 
     sim.things.with_commands(|ctx, _| {
-        let _span = tracing::info_span!("Sequential commands").entered();
-        for transfer in transfer_tokens {
+        // Apply token transferral
+        for transfer in effects.transfer_tokens {
             // Get all the tokens at the source
             let tokens = arena.alloc_slice_iter(
                 ctx.iter_list_get(List::TokensSourced, transfer.source)
@@ -1159,7 +968,7 @@ fn progress_travel(
             // The cost of moving between two edges
             let cost_fn = |x, y| {
                 let dist = (ctx[x].body.pos() - ctx[y].body.pos()).magnitude();
-                (dist * 25.).round().max(0.) as i32
+                (dist * TRAVEL_COST_SCALE).round().max(0.) as i32
             };
 
             // Resolve navigation. This should always work, to be honest...
@@ -1200,7 +1009,6 @@ fn update_body_of_local_things(ctx: &Things, this: &mut Thing, delta: f32) -> Mo
         None => return MovementStatus::Moving,
     };
 
-    const MOVEMENT_SPEED: f32 = 2.0;
     // Find my position around the target
     let target = if this.flag(Flag::IsInside) {
         V2::new(location.body.x, location.body.y)
@@ -1233,7 +1041,7 @@ fn update_body_of_local_things(ctx: &Things, this: &mut Thing, delta: f32) -> Mo
         if dv.magnitude() < 0.1 {
             target
         } else {
-            current_pos + dv * delta * MOVEMENT_SPEED
+            current_pos + dv * delta * MOVEMENT_LERP_SPEED
         }
     };
 

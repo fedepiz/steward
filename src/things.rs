@@ -711,14 +711,23 @@ impl<'a> Iterator for ThingsIterator<'a> {
 }
 
 impl Things {
+    const SKIP_COPY_IF_POSSIBLE: bool = false;
+
     pub(crate) fn write_pass(&mut self, mut body: impl FnMut(&Things, &mut Thing, &mut Commands)) {
+        let _span = tracing::trace_span!("Write Pass").entered();
         let mut write_buffer = std::mem::take(&mut self.write_buffer);
         let mut commands = Commands::new();
 
         for (thing, target) in self.entries.iter().zip(write_buffer.iter_mut()) {
-            *target = *thing;
-            if thing.id.is_valid() {
-                body(self, target, &mut commands);
+            // Do the actual copy and update only if
+            // - thing is valid, and therefore logic runs on it
+            // - target has a different id than thing, in which case some structural spawning/despawning happened
+            // - SKIP_COPY_IF_POSSIBLE is false, in which case we are asking to always copy
+            if !Self::SKIP_COPY_IF_POSSIBLE || thing.id.is_valid() || thing.id() != target.id() {
+                *target = *thing;
+                if thing.id().is_valid() {
+                    body(self, target, &mut commands);
+                }
             }
         }
 
@@ -726,38 +735,6 @@ impl Things {
         std::mem::swap(&mut self.entries, &mut self.write_buffer);
         self.appy_commands(commands);
     }
-
-    // pub(crate) fn write_pass_par<T: Send + Sync>(
-    //     &mut self,
-    //     chunks: &mut [T],
-    //     body: impl Fn(&mut T, &Things, &mut Thing, &mut Commands) + 'static + Sync + Send,
-    // ) {
-    //     let read_chunks = self.entries.par_chunks(NUM_THINGS / 8);
-    //     let mut write_buffer = std::mem::take(&mut self.write_buffer);
-    //     let write_chunks = write_buffer.par_chunks_mut(NUM_THINGS / 8);
-
-    //     let mut commands = vec![];
-
-    //     let iter = chunks.par_iter_mut().zip(read_chunks.zip(write_chunks));
-
-    //     iter.map(|(data, (read_chunk, write_chunk))| {
-    //         let mut commands = Commands::new();
-    //         for (thing, target) in read_chunk.iter().zip(write_chunk) {
-    //             *target = *thing;
-    //             if thing.id.is_valid() {
-    //                 body(data, self, target, &mut commands);
-    //             }
-    //         }
-    //         commands
-    //     })
-    //     .collect_into_vec(&mut commands);
-
-    //     self.write_buffer = write_buffer;
-    //     std::mem::swap(&mut self.entries, &mut self.write_buffer);
-    //     for commands in commands {
-    //         self.appy_commands(commands);
-    //     }
-    // }
 
     pub(crate) fn exclusive_pass(&mut self, mut body: impl FnMut(&mut Self, Thing)) {
         for i in 0..self.entries.len() {
@@ -771,6 +748,7 @@ impl Things {
     }
 
     pub(crate) fn readonly_pass(&self, mut body: impl FnMut(&Things, &Thing)) {
+        let _span = tracing::info_span!("Readonly Pass").entered();
         for thing in &self.entries {
             if thing.id.is_valid() {
                 body(self, thing);
@@ -779,6 +757,7 @@ impl Things {
     }
 
     pub(crate) fn with_commands<R>(&mut self, f: impl FnOnce(&mut Self, &mut Commands) -> R) -> R {
+        let _span = tracing::info_span!("Sequential commands Pass").entered();
         let mut commands = Commands::new();
         let value = f(self, &mut commands);
         self.appy_commands(commands);
