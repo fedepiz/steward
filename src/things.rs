@@ -772,7 +772,7 @@ impl Things {
         for (idx, spawn) in commands.spawns.drain(..).enumerate() {
             let thing = self.spawn();
             let this = thing.id;
-            *thing = spawn.thing;
+            *thing = spawn;
             thing.id = this;
             commands.temp_id_map[idx] = thing.id;
         }
@@ -795,7 +795,7 @@ pub(crate) struct Commands {
     temp_id_map: Vec<ThingId>,
     list_mutations: Vec<ListMutation>,
     despawns: Vec<ThingId>,
-    spawns: Vec<Spawn>,
+    spawns: Vec<Thing>,
 }
 
 impl Commands {
@@ -840,8 +840,8 @@ impl Commands {
     pub fn spawn(&mut self) -> (ThingRef, &mut Thing) {
         let temp_id = ThingRef::TempId(self.temp_id_map.len() as u32);
         self.temp_id_map.push(ThingId::default());
-        self.spawns.push(Spawn::default());
-        (temp_id, &mut self.spawns.last_mut().unwrap().thing)
+        self.spawns.push(Thing::default());
+        (temp_id, self.spawns.last_mut().unwrap())
     }
 }
 
@@ -862,9 +862,4 @@ struct ListMutation {
     list: List,
     parent: ThingRef,
     child: ThingRef,
-}
-
-#[derive(Default)]
-struct Spawn {
-    thing: Thing,
 }
