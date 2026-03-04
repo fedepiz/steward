@@ -118,9 +118,11 @@ pub(super) fn root<'a>(
                             "Leader:",
                             this.parent(List::Possessions),
                         );
+                    }
 
+                    if !selected_entity.influence.is_empty() {
                         gui.heading("Local Influence", 6.);
-                        for holder in &selected_entity.local_power_tokens {
+                        for holder in &selected_entity.influence {
                             gui.row(|mut gui| {
                                 let name = if holder.id.is_null() {
                                     "Unclaimed:"
@@ -132,7 +134,9 @@ pub(super) fn root<'a>(
                                 gui.line_sized(str, 6.);
                             });
                         }
+                    }
 
+                    if this.flag(Flag::IsSettlement) {
                         gui.heading("Entities inside", 6.);
                         // Get entities inside the settlemetn
                         let things_inside = {

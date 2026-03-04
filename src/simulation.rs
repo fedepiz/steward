@@ -58,7 +58,6 @@ pub(crate) struct TokenType {
 }
 
 mod token_types {
-    pub const GENERIC: u16 = 0;
     pub const KINSHIP: u16 = 1;
     pub const DREAD: u16 = 2;
     pub const GIFT: u16 = 3;
@@ -113,16 +112,7 @@ pub(crate) fn setup(scratch: &Arena) -> Simulation {
 
                 // Populate the settlement with 10 tokens
                 for _ in 0..10 {
-                    let token = ctx.spawn();
-                    token.set_name("Token");
-                    token.set_flag(Flag::IsToken, true);
-                    token.set_handle(Handle::Type, 0);
-
-                    token.set_flag(Flag::MustBeOwned, true);
-                    token.set_link(Link::GCOwner, settlement);
-
-                    let token = token.id();
-                    ctx.add_to_list(List::TokensSourced, settlement, token);
+                    create_token_at(ctx, settlement);
                 }
             }
             "spawn_waypoint" => {
@@ -138,18 +128,6 @@ pub(crate) fn setup(scratch: &Arena) -> Simulation {
                 };
                 this.set_flag(Flag::IsLocation, true);
             }
-            "spawn_person" => {
-                let tag = row[1].as_str().to_string().leak();
-                let this = ctx.spawn_with_tag(tag);
-                this.set_name(row[2].as_str().to_string().leak());
-                this.set_sprite(row[3].as_str().to_string().leak());
-                this.body = Body {
-                    size: 2,
-                    layer: 2,
-                    ..Default::default()
-                };
-                this.set_flag(Flag::IsPerson, true);
-            }
             _ => {}
         }
     }
@@ -157,10 +135,15 @@ pub(crate) fn setup(scratch: &Arena) -> Simulation {
     for row in csv.rows() {
         match row[0].as_str() {
             "spawn_person" => {
-                let my_id = ctx.lookup_tag(row[1].as_str());
+                let tag = row[1].as_str().to_string().leak();
+                let name = row[2].as_str().to_string().leak();
+                let sprite = row[3].as_str().to_string().leak();
                 let location = ctx.lookup_tag(row[4].as_str());
-                ctx.add_to_list(List::AtLocation, location, my_id);
-                ctx[my_id].set_flag(Flag::Teleport, true);
+
+                let person = create_person(ctx, location, false);
+                ctx.set_tag(tag, person);
+                ctx[person].set_name(name);
+                ctx[person].set_sprite(sprite);
             }
             "connect_path" => {
                 let [a, b] = [1, 2].map(|i| ctx.lookup_tag(row[i].as_str()));
@@ -186,7 +169,7 @@ pub(crate) fn setup(scratch: &Arena) -> Simulation {
             let mut people = scratch.new_vec_with_capacity(num_people);
 
             for i in 0..num_people {
-                let person = create_person(ctx, settlement.id());
+                let person = create_person(ctx, settlement.id(), true);
                 people.push(person);
 
                 let kinds: &[u16] = if i == 0 {
@@ -216,6 +199,7 @@ pub(crate) fn setup(scratch: &Arena) -> Simulation {
     });
 
     // Use the "set_loyalty" commands
+    let mut effects = Effects::new();
     for row in csv.rows() {
         match row[0].as_str() {
             "set_loyalty" => {
@@ -228,10 +212,12 @@ pub(crate) fn setup(scratch: &Arena) -> Simulation {
                     .get(&ctx)
                     .parent(List::Possessions);
                 ctx.add_to_list(List::Subordinates, superior, subordinate);
+                effects.transfer_tokens(subordinate, superior, token_types::GIFT);
             }
             _ => {}
         }
     }
+    effects.perform(ctx, scratch);
 
     // End-of-setup pass
     let mut nav_cache = NavCacheBuilder::new(1024);
@@ -259,7 +245,7 @@ pub(crate) fn setup(scratch: &Arena) -> Simulation {
     }
 }
 
-fn create_person(ctx: &mut Things, location: ThingId) -> ThingId {
+fn create_person(ctx: &mut Things, location: ThingId, inside: bool) -> ThingId {
     let person = ctx.spawn();
     let name = {
         let idx = location.slot() * 13 + person.id().slot() * 17;
@@ -274,13 +260,32 @@ fn create_person(ctx: &mut Things, location: ThingId) -> ThingId {
         ..Default::default()
     };
     // Positioning
-    person.set_flag(Flag::WantsToBeInside, true);
-    person.set_flag(Flag::IsInside, true);
+    person.set_flag(Flag::WantsToBeInside, inside);
+    person.set_flag(Flag::IsInside, inside);
     person.set_flag(Flag::Teleport, true);
 
     let person = person.id();
     ctx.add_to_list(List::AtLocation, location, person);
+
+    for _ in 0..5 {
+        create_token_at(ctx, person);
+    }
+
     person
+}
+
+fn create_token_at(ctx: &mut Things, source: ThingId) -> ThingId {
+    let token = ctx.spawn();
+    token.set_name("Token");
+    token.set_flag(Flag::IsToken, true);
+    token.set_handle(Handle::Type, 0);
+
+    token.set_flag(Flag::MustBeOwned, true);
+    token.set_link(Link::GCOwner, source);
+
+    let token = token.id();
+    ctx.add_to_list(List::TokensSourced, source, token);
+    token
 }
 
 fn start_activity(ctx: &Things, location: ThingId, commands: &mut Commands) -> ThingRef {
@@ -574,7 +579,7 @@ pub(crate) struct EntityInfo<'a> {
     pub id: ThingId,
     pub name: &'a str,
     pub sprite: &'a str,
-    pub local_power_tokens: Vec<TokenHolderInfo<'a>>,
+    pub influence: Vec<TokenHolderInfo<'a>>,
 }
 
 pub(crate) struct TokenHolderInfo<'a> {
@@ -615,18 +620,7 @@ pub(crate) fn tick<'a>(sim: &mut Simulation, request: Request, arena: &'a Arena)
 
     let mut response = Response::new(arena);
 
-    struct TransferToken {
-        source: ThingId,
-        recepient: ThingId,
-        change_type_to: u16,
-    }
-
-    #[derive(Default)]
-    struct Effects {
-        transfer_tokens: Vec<TransferToken>,
-    }
-
-    let mut effects = Effects::default();
+    let mut effects = Effects::new();
 
     for _ in 0..request.advance_time {
         sim.thick_num = sim.thick_num.wrapping_add(1);
@@ -646,11 +640,7 @@ pub(crate) fn tick<'a>(sim: &mut Simulation, request: Request, arena: &'a Arena)
                     // Enqueue some token transfers
                     let initiator = this.first(List::Partecipants);
                     let location = this.parent(List::AtLocation);
-                    effects.transfer_tokens.push(TransferToken {
-                        source: location,
-                        recepient: initiator,
-                        change_type_to: 2,
-                    });
+                    effects.transfer_tokens(location, initiator, token_types::DREAD);
                 } else {
                     this.set_var(Var::WaitTime, wait_time + 1.);
                 }
@@ -672,29 +662,7 @@ pub(crate) fn tick<'a>(sim: &mut Simulation, request: Request, arena: &'a Arena)
         });
     }
 
-    sim.things.with_commands(|ctx, _| {
-        // Apply token transferral
-        for transfer in effects.transfer_tokens {
-            // Get all the tokens at the source
-            let tokens = arena.alloc_slice_iter(
-                ctx.iter_list_get(List::TokensSourced, transfer.source)
-                    .filter(|tok| transfer.recepient != tok.parent(List::TokensHeld)),
-            );
-            // Score and sort the tokens
-            tokens.sort_by_key(|token| {
-                if token.handle(Handle::Type) == 0 {
-                    100
-                } else {
-                    0
-                }
-            });
-
-            // Re-assign and transform type
-            let best_tok = tokens.last().map(|x| x.id()).unwrap_or_default();
-            ctx[best_tok].set_handle(Handle::Type, transfer.change_type_to);
-            ctx.add_to_list(List::TokensHeld, transfer.recepient, best_tok);
-        }
-    });
+    effects.perform(&mut sim.things, arena);
 
     let ctx = &sim.things;
 
@@ -820,37 +788,36 @@ pub(crate) fn tick<'a>(sim: &mut Simulation, request: Request, arena: &'a Arena)
                 response.selected_entity.name = this.name();
                 response.selected_entity.sprite = this.sprite();
 
-                if this.flag(Flag::IsLocation) {
-                    let tokens = &mut response.selected_entity.local_power_tokens;
-                    for token in ctx.iter_list_get(List::TokensSourced, this.id()) {
-                        let count = match tokens
-                            .iter()
-                            .position(|holder| holder.id == token.parent(List::TokensHeld))
-                        {
-                            Some(idx) => &mut tokens[idx],
-                            None => {
-                                let holder = token.parent(List::TokensHeld).get(ctx);
-                                let entry = TokenHolderInfo {
-                                    id: holder.id(),
-                                    name: holder.name(),
-                                    tokens: TokenCount::default(),
-                                };
-                                tokens.push(entry);
-                                tokens.last_mut().unwrap()
-                            }
-                        };
-                        count.tokens.0[token.handle(Handle::Type) as usize] += 1;
-                    }
-                    // Sort the entries. First the unclaimed one (null id),
-                    // thereafter the remaining in order of count.
-                    tokens.sort_by_key(|x| {
-                        if x.id.is_null() {
-                            0
-                        } else {
-                            1000 - x.tokens.total() + 1
+                // Populate selected entity influence
+                let tokens = &mut response.selected_entity.influence;
+                for token in ctx.iter_list_get(List::TokensSourced, this.id()) {
+                    let count = match tokens
+                        .iter()
+                        .position(|holder| holder.id == token.parent(List::TokensHeld))
+                    {
+                        Some(idx) => &mut tokens[idx],
+                        None => {
+                            let holder = token.parent(List::TokensHeld).get(ctx);
+                            let entry = TokenHolderInfo {
+                                id: holder.id(),
+                                name: holder.name(),
+                                tokens: TokenCount::default(),
+                            };
+                            tokens.push(entry);
+                            tokens.last_mut().unwrap()
                         }
-                    });
+                    };
+                    count.tokens.0[token.handle(Handle::Type) as usize] += 1;
                 }
+                // Sort the entries. First the unclaimed one (null id),
+                // thereafter the remaining in order of count.
+                tokens.sort_by_key(|x| {
+                    if x.id.is_null() {
+                        0
+                    } else {
+                        1000 - x.tokens.total() + 1
+                    }
+                });
             }
 
             render_thing(
@@ -1177,5 +1144,62 @@ impl TokenCount {
             .iter()
             .enumerate()
             .map(|(idx, value)| (&TOKEN_TYPES[idx], *value))
+    }
+}
+
+#[derive(Default)]
+struct Effects {
+    transfer_tokens: Vec<TransferToken>,
+}
+
+impl Effects {
+    fn transfer_tokens(
+        &mut self,
+        source: ThingId,
+        recepient: ThingId,
+        change_type_to: HandleValue,
+    ) {
+        self.transfer_tokens.push(TransferToken {
+            source,
+            recepient,
+            change_type_to,
+        });
+    }
+}
+
+struct TransferToken {
+    source: ThingId,
+    recepient: ThingId,
+    change_type_to: u16,
+}
+
+impl Effects {
+    fn new() -> Self {
+        Self::default()
+    }
+    fn perform(self, ctx: &mut Things, arena: &Arena) {
+        ctx.with_commands(|ctx, _| {
+            // Apply token transferral
+            for transfer in self.transfer_tokens {
+                // Get all the tokens at the source
+                let tokens = arena.alloc_slice_iter(
+                    ctx.iter_list_get(List::TokensSourced, transfer.source)
+                        .filter(|tok| transfer.recepient != tok.parent(List::TokensHeld)),
+                );
+                // Score and sort the tokens
+                tokens.sort_by_key(|token| {
+                    if token.handle(Handle::Type) == 0 {
+                        100
+                    } else {
+                        0
+                    }
+                });
+
+                // Re-assign and transform type
+                let best_tok = tokens.last().map(|x| x.id()).unwrap_or_default();
+                ctx[best_tok].set_handle(Handle::Type, transfer.change_type_to);
+                ctx.add_to_list(List::TokensHeld, transfer.recepient, best_tok);
+            }
+        });
     }
 }
