@@ -121,7 +121,7 @@ pub(super) fn root<'a>(
                     }
 
                     if !selected_entity.influence.is_empty() {
-                        gui.heading("Local Influence", 6.);
+                        gui.heading("Influence", 6.);
                         for holder in &selected_entity.influence {
                             gui.row(|mut gui| {
                                 let name = if holder.id.is_null() {
