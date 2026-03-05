@@ -80,6 +80,38 @@ const TOKEN_TYPES: [TokenType; 5] = [
     },
 ];
 
+struct ActivityType {
+    name: &'static str,
+    sprite: &'static str,
+}
+
+mod activity_types {
+    use super::*;
+    pub const NULL: ActivityType = ActivityType {
+        name: "null",
+        sprite: "",
+    };
+    pub const TRIBAL_ASSEMBLY: ActivityType = ActivityType {
+        name: "Tribal Assembly",
+        sprite: "activity_assembly",
+    };
+    pub const BATTLE: ActivityType = ActivityType {
+        name: "Battle",
+        sprite: "combat_marker",
+    };
+    pub const RAID: ActivityType = ActivityType {
+        name: "Raid",
+        sprite: "rading",
+    };
+}
+
+const ACTIVITY_TYPES: [ActivityType; 4] = [
+    activity_types::NULL,
+    activity_types::TRIBAL_ASSEMBLY,
+    activity_types::BATTLE,
+    activity_types::RAID,
+];
+
 const PLAYER_TAG: &'static str = "player";
 const COMMS_TAG: &'static str = "communications";
 
@@ -1329,14 +1361,15 @@ impl Effects {
     }
 }
 
-fn start_activity(ctx: &mut Things, activity_type: u16, location: ThingId) -> ThingId {
+fn start_activity(ctx: &mut Things, kind: u16, location: ThingId) -> ThingId {
     // Is there already an activity at the location? If so, abort.
     let pos = ctx[location].body.pos();
+    let activity_type = &ACTIVITY_TYPES[kind as usize];
 
     let activity = ctx.spawn();
-    activity.kind = activity_type;
-    activity.name = "Test activity";
-    activity.sprite = "activity_assembly";
+    activity.kind = kind;
+    activity.name = activity_type.name;
+    activity.sprite = activity_type.sprite;
     activity.set_flag(Flag::IsActivity, true);
     activity.body = Body {
         x: pos.x,
