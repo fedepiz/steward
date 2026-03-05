@@ -73,7 +73,6 @@ pub(crate) enum Flag {
     IsInvisible,
     // Insideness
     WantsToBeInside,
-    WantsToTriggerActivity,
     IsInside,
     IsOrder,
 }
@@ -145,6 +144,7 @@ pub(crate) struct Thing {
     pub destination: ThingId,
     // Orders
     pub current_order: ThingId,
+    pub activity_to_trigger: u16,
     // Path
     pub edge_from: ThingId,
     pub edge_to: ThingId,

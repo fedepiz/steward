@@ -223,12 +223,6 @@ pub(crate) fn setup(scratch: &Arena) -> Simulation {
     let mut nav_cache = NavCacheBuilder::new(1024);
 
     ctx.write_pass(|_, this, _| {
-        if this.flag(Flag::IsPerson) {
-            // Determine persons' sprite
-            let has_subordinates = this.list_len(List::Subordinates) > 0;
-            this.sprite = if has_subordinates { "noble" } else { "soldier" };
-        }
-
         if this.flag(Flag::IsPath) {
             nav_cache.add_connection(this.edge_from, this.edge_to);
         }
@@ -282,24 +276,6 @@ fn create_token_at(ctx: &mut Things, source: ThingId) -> ThingId {
     let token = token.id();
     ctx.add_to_list(List::TokensSourced, source, token);
     token
-}
-
-fn start_activity(ctx: &Things, location: ThingId, commands: &mut Commands) -> ThingRef {
-    // Is there already an activity at the location? If so, abort.
-    let pos = ctx[location].body.pos();
-
-    let (activity_ref, activity) = commands.spawn();
-    activity.name = "Test activity";
-    activity.sprite = "activity_assembly";
-    activity.set_flag(Flag::IsActivity, true);
-    activity.body = Body {
-        x: pos.x,
-        y: pos.y,
-        size: 2,
-        layer: 3,
-    };
-    commands.add_to_list(List::AtLocation, location, activity_ref);
-    activity_ref
 }
 
 fn calculate_tokens_at(ctx: &Things, holder: ThingId, source: ThingId) -> usize {
@@ -360,7 +336,7 @@ pub(crate) struct OrderType {
     move_to_destination: bool,
     wants_to_be_inside: bool,
     wait_time: f32,
-    trigger_activity: bool,
+    activity_to_trigger: u16,
 }
 
 mod order_types {
@@ -372,7 +348,7 @@ mod order_types {
         move_to_destination: true,
         wants_to_be_inside: false,
         wait_time: 0.,
-        trigger_activity: false,
+        activity_to_trigger: 0,
     };
     pub const ENTER: OrderType = OrderType {
         name: "Enter #1",
@@ -380,7 +356,7 @@ mod order_types {
         move_to_destination: true,
         wants_to_be_inside: true,
         wait_time: 0.,
-        trigger_activity: false,
+        activity_to_trigger: 0,
     };
     pub const CLAIM_KINSHIP: OrderType = OrderType {
         name: "Claim Kinship at #0",
@@ -388,7 +364,7 @@ mod order_types {
         move_to_destination: true,
         wants_to_be_inside: false,
         wait_time: 200.,
-        trigger_activity: true,
+        activity_to_trigger: 1,
     };
 }
 
@@ -399,7 +375,7 @@ const ORDER_TYPES: [OrderType; 5] = [
         move_to_destination: false,
         wants_to_be_inside: false,
         wait_time: 0.,
-        trigger_activity: false,
+        activity_to_trigger: 0,
     },
     order_types::MOVE,
     order_types::ENTER,
@@ -409,7 +385,7 @@ const ORDER_TYPES: [OrderType; 5] = [
         move_to_destination: false,
         wants_to_be_inside: false,
         wait_time: 1000.,
-        trigger_activity: false,
+        activity_to_trigger: 0,
     },
     order_types::CLAIM_KINSHIP,
 ];
@@ -598,9 +574,14 @@ pub(crate) fn tick<'a>(sim: &mut Simulation, request: Request, arena: &'a Arena)
         }
 
         // Grab the selected entity mutably
-        if let Some(this) = request.select_entity.get_as_valid_mut(ctx) {
+        if let Some(this) = request.select_entity.as_valid() {
             // We are sending a communication
             if request.communication.send {
+                // Despawn all current orders...
+                for order in ctx.iter_list(List::Orders, this) {
+                    commands.despawn(order);
+                }
+
                 for piece in &request.communication.enqueued_pieces {
                     let typ = &COMMUNICATION_TYPES[piece.type_idx];
                     if let Some(order_type) = typ.order {
@@ -613,12 +594,11 @@ pub(crate) fn tick<'a>(sim: &mut Simulation, request: Request, arena: &'a Arena)
 
     let mut response = Response::new(arena);
 
-    let mut effects = Effects::new();
-
     for _ in 0..request.advance_time {
         sim.thick_num = sim.thick_num.wrapping_add(1);
 
         let _span = tracing::info_span!("Advance-Step").entered();
+        let mut effects = Effects::new();
         sim.things.write_pass(|ctx, this, commands| {
             // Automatic destruction of dependent objects
             if !this.owner.is_null() && !ctx.exists(this.owner) {
@@ -659,8 +639,26 @@ pub(crate) fn tick<'a>(sim: &mut Simulation, request: Request, arena: &'a Arena)
             }
 
             if this.flag(Flag::IsPerson) {
+                {
+                    // Determine persons' sprite
+                    let has_subordinates = this.list_len(List::Subordinates) > 0;
+                    this.sprite = if has_subordinates { "noble" } else { "soldier" };
+                }
+
                 // Order completion
-                check_order_completion(ctx, this, commands, player);
+                if let Some(order) = this.first(List::Orders).get_as_valid(ctx) {
+                    let status = check_order_completion(this, order);
+                    if status.start_activity != 0 {
+                        effects.start_activity(StartActivity {
+                            activity_type: status.start_activity,
+                            initiator: this.id(),
+                            originating_order: order.id(),
+                        })
+                    }
+                    if status.is_complete {
+                        on_order_complete(this, order, commands, player);
+                    }
+                }
 
                 // Movement
                 update_intentions(ctx, this);
@@ -672,9 +670,9 @@ pub(crate) fn tick<'a>(sim: &mut Simulation, request: Request, arena: &'a Arena)
                 this.set_flag(Flag::IsInvisible, has_arrived && this.flag(Flag::IsInside));
             }
         });
-    }
 
-    effects.perform(&mut sim.things, arena);
+        effects.perform(&mut sim.things, arena);
+    }
 
     let ctx = &sim.things;
 
@@ -858,8 +856,7 @@ pub(crate) fn tick<'a>(sim: &mut Simulation, request: Request, arena: &'a Arena)
     response
 }
 
-fn add_order(this: &mut Thing, typ: &OrderType, destination: ThingId, commands: &mut Commands) {
-    // let order = commands.spawn_and_append_to_list(List::Orders, this.id());
+fn add_order(this: ThingId, typ: &OrderType, destination: ThingId, commands: &mut Commands) {
     let (order_ref, order) = commands.spawn();
 
     let order_type_idx = ORDER_TYPES.iter().position(|x| x.name == typ.name).unwrap() as u16;
@@ -870,47 +867,86 @@ fn add_order(this: &mut Thing, typ: &OrderType, destination: ThingId, commands: 
     order.set_flag(Flag::IsOrder, true);
     order.destination = destination;
     order.wait_time = order_type.wait_time;
-    order.owner = this.id();
+    order.owner = this;
+    order.activity_to_trigger = order_type.activity_to_trigger;
 
-    commands.add_to_list(List::Orders, this.id(), order_ref);
+    commands.add_to_list(List::Orders, this, order_ref);
 }
 
-fn check_order_completion(
-    ctx: &Things,
-    this: &mut Thing,
-    commands: &mut Commands,
-    player: ThingId,
-) {
-    if let Some(order) = this.first(List::Orders).get_as_valid(ctx) {
-        let order_type = get_order_type(order);
+#[derive(Default, Clone, Copy)]
+struct CheckOrderCompletion {
+    start_activity: u16,
+    is_complete: bool,
+}
 
-        let location = this.parent(List::AtLocation);
-        let is_at_activity = !this.parent(List::Partecipants).is_null();
+// fn check_order_completion(
+//     ctx: &Things,
+//     this: &mut Thing,
+//     commands: &mut Commands,
+//     player: ThingId,
+// ) {
+//     if let Some(order) = this.first(List::Orders).get_as_valid(ctx) {
+//         let order_type = get_order_type(order);
 
-        let arrived = location == order.destination;
-        let waited_sufficiently = this.wait_time >= order.wait_time;
+//         let location = this.parent(List::AtLocation);
+//         let is_at_activity = !this.parent(List::Partecipants).is_null();
 
-        if arrived && waited_sufficiently && !is_at_activity {
-            if this.flag(Flag::WantsToTriggerActivity) {
-                let activity = start_activity(ctx, location, commands);
-                commands.add_to_list(List::Partecipants, activity, this.id());
-                this.set_flag(Flag::WantsToTriggerActivity, false);
-            } else {
-                // Order completed
-                commands.despawn(order.id());
-                commands.remove_from_list(List::Orders, order.id());
-                // Send a message
-                send_message(
-                    commands,
-                    order_type.completion_message,
-                    &[this.id(), location],
-                    player,
-                );
+//         let arrived = location == order.destination;
+//         let waited_sufficiently = this.wait_time >= order.wait_time;
 
-                this.current_order = ThingId::null();
-            }
-        }
+//         // let activity = start_activity(ctx, location, commands);
+//         // commands.add_to_list(List::Partecipants, activity, this.id());
+//         // this.set_flag(Flag::WantsToTriggerActivity, false);
+
+//         if arrived && waited_sufficiently && !is_at_activity && order.activity_to_trigger == 0 {
+//             // Order completed
+//             commands.despawn(order.id());
+//             commands.remove_from_list(List::Orders, order.id());
+//             // Send a message
+//             send_message(
+//                 commands,
+//                 order_type.completion_message,
+//                 &[this.id(), location],
+//                 player,
+//             );
+
+//             this.current_order = ThingId::null();
+//         }
+//     }
+// }
+
+fn check_order_completion(this: &mut Thing, order: &Thing) -> CheckOrderCompletion {
+    let mut out = CheckOrderCompletion::default();
+
+    let location = this.parent(List::AtLocation);
+    let is_at_activity = !this.parent(List::Partecipants).is_null();
+
+    let arrived = location == order.destination;
+    let waited_sufficiently = this.wait_time >= order.wait_time;
+
+    if arrived && waited_sufficiently && !is_at_activity {
+        out.start_activity = order.activity_to_trigger;
+        out.is_complete = order.activity_to_trigger == 0;
     }
+
+    out
+}
+
+fn on_order_complete(this: &mut Thing, order: &Thing, commands: &mut Commands, player: ThingId) {
+    let order_type = &ORDER_TYPES[order.kind as usize];
+    let location = this.parent(List::AtLocation);
+    // Order completed
+    commands.despawn(order.id());
+    commands.remove_from_list(List::Orders, order.id());
+    // Send a message
+    send_message(
+        commands,
+        order_type.completion_message,
+        &[this.id(), location],
+        player,
+    );
+
+    this.current_order = ThingId::null();
 }
 
 fn update_intentions(ctx: &Things, this: &mut Thing) {
@@ -924,7 +960,6 @@ fn update_intentions(ctx: &Things, this: &mut Thing) {
         if this.current_order != order.id() {
             this.current_order = order.id();
             this.wait_time = 0.;
-            this.set_flag(Flag::WantsToTriggerActivity, order_type.trigger_activity);
         }
 
         let ordered_destination = if order_type.move_to_destination {
@@ -1170,6 +1205,7 @@ impl TokenCount {
 #[derive(Default)]
 struct Effects {
     transfer_tokens: Vec<TransferToken>,
+    start_activity: Vec<StartActivity>,
 }
 
 impl Effects {
@@ -1180,12 +1216,24 @@ impl Effects {
             change_type_to,
         });
     }
+
+    fn start_activity(&mut self, effect: StartActivity) {
+        self.start_activity.push(effect);
+    }
 }
 
+#[derive(Clone, Copy)]
 struct TransferToken {
     source: ThingId,
     recepient: ThingId,
     change_type_to: u16,
+}
+
+#[derive(Clone, Copy)]
+struct StartActivity {
+    activity_type: u16,
+    initiator: ThingId,
+    originating_order: ThingId,
 }
 
 impl Effects {
@@ -1209,6 +1257,47 @@ impl Effects {
                 ctx[best_tok].kind = transfer.change_type_to;
                 ctx.add_to_list(List::TokensHeld, transfer.recepient, best_tok);
             }
+
+            for effect in self.start_activity {
+                let location = ctx[effect.initiator].parent(List::AtLocation);
+                // Does an activity currently exist?
+                let location_has_activity = ctx
+                    .iter_list_get(List::AtLocation, location)
+                    .any(|x| x.flag(Flag::IsActivity));
+
+                if location_has_activity {
+                    continue;
+                }
+
+                let activity = start_activity(ctx, effect.activity_type, location);
+
+                if let Some(order) = effect.originating_order.get_as_valid_mut(ctx) {
+                    order.activity_to_trigger = 0;
+                }
+
+                ctx.add_to_list(List::Partecipants, activity, effect.initiator);
+            }
         });
     }
+}
+
+fn start_activity(ctx: &mut Things, activity_type: u16, location: ThingId) -> ThingId {
+    // Is there already an activity at the location? If so, abort.
+    let pos = ctx[location].body.pos();
+
+    let activity = ctx.spawn();
+    activity.kind = activity_type;
+    activity.name = "Test activity";
+    activity.sprite = "activity_assembly";
+    activity.set_flag(Flag::IsActivity, true);
+    activity.body = Body {
+        x: pos.x,
+        y: pos.y,
+        size: 2,
+        layer: 3,
+    };
+
+    let activity = activity.id();
+    ctx.add_to_list(List::AtLocation, location, activity);
+    activity
 }
