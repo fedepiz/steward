@@ -285,6 +285,7 @@ fn create_token_at(ctx: &mut Things, source: ThingId) -> ThingId {
 }
 
 fn start_activity(ctx: &Things, location: ThingId, commands: &mut Commands) -> ThingRef {
+    // Is there already an activity at the location? If so, abort.
     let pos = ctx[location].body.pos();
 
     let (activity_ref, activity) = commands.spawn();
@@ -631,8 +632,7 @@ pub(crate) fn tick<'a>(sim: &mut Simulation, request: Request, arena: &'a Arena)
                 // Eject partecipants that are no longer at this location
                 for target in ctx.iter_list(List::Partecipants, this.id()) {
                     let target = &ctx[target];
-                    let left_or_leaving = target.parent(List::AtLocation) != location
-                        || target.destination != location;
+                    let left_or_leaving = target.parent(List::AtLocation) != location;
                     if left_or_leaving {
                         commands.remove_from_list(List::Partecipants, target.id());
                     } else {
@@ -883,26 +883,31 @@ fn check_order_completion(
 ) {
     if let Some(order) = this.first(List::Orders).get_as_valid(ctx) {
         let order_type = get_order_type(order);
+
         let location = this.parent(List::AtLocation);
+        let is_at_activity = !this.parent(List::Partecipants).is_null();
+
         let arrived = location == order.destination;
         let waited_sufficiently = this.wait_time >= order.wait_time;
-        if arrived && waited_sufficiently {
-            // Order completed
-            commands.despawn(order.id());
-            commands.remove_from_list(List::Orders, order.id());
-            // Send a message
-            send_message(
-                commands,
-                order_type.completion_message,
-                &[this.id(), location],
-                player,
-            );
 
-            this.current_order = ThingId::null();
-
-            if order_type.trigger_activity {
+        if arrived && waited_sufficiently && !is_at_activity {
+            if this.flag(Flag::WantsToTriggerActivity) {
                 let activity = start_activity(ctx, location, commands);
                 commands.add_to_list(List::Partecipants, activity, this.id());
+                this.set_flag(Flag::WantsToTriggerActivity, false);
+            } else {
+                // Order completed
+                commands.despawn(order.id());
+                commands.remove_from_list(List::Orders, order.id());
+                // Send a message
+                send_message(
+                    commands,
+                    order_type.completion_message,
+                    &[this.id(), location],
+                    player,
+                );
+
+                this.current_order = ThingId::null();
             }
         }
     }
@@ -919,6 +924,7 @@ fn update_intentions(ctx: &Things, this: &mut Thing) {
         if this.current_order != order.id() {
             this.current_order = order.id();
             this.wait_time = 0.;
+            this.set_flag(Flag::WantsToTriggerActivity, order_type.trigger_activity);
         }
 
         let ordered_destination = if order_type.move_to_destination {

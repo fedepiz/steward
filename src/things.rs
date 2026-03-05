@@ -73,6 +73,7 @@ pub(crate) enum Flag {
     IsInvisible,
     // Insideness
     WantsToBeInside,
+    WantsToTriggerActivity,
     IsInside,
     IsOrder,
 }
