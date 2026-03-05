@@ -98,8 +98,8 @@ pub(crate) fn setup(scratch: &Arena) -> Simulation {
                 // let kind = row[1].as_str();
                 let tag = row[2].as_str().to_string().leak();
                 let this = ctx.spawn_with_tag(tag);
-                this.set_name(row[3].as_str().to_string().leak());
-                this.set_sprite(row[4].as_str().to_string().leak());
+                this.name = row[3].as_str().to_string().leak();
+                this.sprite = row[4].as_str().to_string().leak();
                 this.body = Body {
                     x: row[5].as_num(),
                     y: row[6].as_num(),
@@ -118,8 +118,8 @@ pub(crate) fn setup(scratch: &Arena) -> Simulation {
             "spawn_waypoint" => {
                 let tag = row[1].as_str().to_string().leak();
                 let this = ctx.spawn_with_tag(tag);
-                this.set_name("Waypoint");
-                this.set_sprite("way_5");
+                this.name = "Waypoint";
+                this.sprite = "way_5";
                 this.body = Body {
                     x: row[2].as_num(),
                     y: row[3].as_num(),
@@ -142,14 +142,14 @@ pub(crate) fn setup(scratch: &Arena) -> Simulation {
 
                 let person = create_person(ctx, location, false);
                 ctx.set_tag(tag, person);
-                ctx[person].set_name(name);
-                ctx[person].set_sprite(sprite);
+                ctx[person].name = name;
+                ctx[person].sprite = sprite;
             }
             "connect_path" => {
                 let [a, b] = [1, 2].map(|i| ctx.lookup_tag(row[i].as_str()));
                 let this = ctx.spawn();
-                this.set_link(Link::A, a);
-                this.set_link(Link::B, b);
+                this.edge_from = a;
+                this.edge_to = b;
                 this.set_flag(Flag::IsPath, true);
             }
             _ => {}
@@ -182,7 +182,7 @@ pub(crate) fn setup(scratch: &Arena) -> Simulation {
                         ctx.remove_from_list(List::TokensHeld, token);
                         ctx.add_to_list(List::TokensHeld, person, token);
                         let token = &mut ctx[token];
-                        token.set_handle(Handle::Type, kind);
+                        token.kind = kind;
                     }
                 }
             }
@@ -226,13 +226,11 @@ pub(crate) fn setup(scratch: &Arena) -> Simulation {
         if this.flag(Flag::IsPerson) {
             // Determine persons' sprite
             let has_subordinates = this.list_len(List::Subordinates) > 0;
-            this.set_sprite(if has_subordinates { "noble" } else { "soldier" });
+            this.sprite = if has_subordinates { "noble" } else { "soldier" };
         }
 
         if this.flag(Flag::IsPath) {
-            let a = this.link(Link::A);
-            let b = this.link(Link::B);
-            nav_cache.add_connection(a, b);
+            nav_cache.add_connection(this.edge_from, this.edge_to);
         }
     });
 
@@ -251,8 +249,8 @@ fn create_person(ctx: &mut Things, location: ThingId, inside: bool) -> ThingId {
         let idx = location.slot() * 13 + person.id().slot() * 17;
         NAMES[idx % NAMES.len()]
     };
-    person.set_name(name);
-    person.set_sprite("soldier");
+    person.name = name;
+    person.sprite = "soldier";
     person.set_flag(Flag::IsPerson, true);
     person.body = Body {
         size: 2,
@@ -276,12 +274,10 @@ fn create_person(ctx: &mut Things, location: ThingId, inside: bool) -> ThingId {
 
 fn create_token_at(ctx: &mut Things, source: ThingId) -> ThingId {
     let token = ctx.spawn();
-    token.set_name("Token");
+    token.name = "Token";
     token.set_flag(Flag::IsToken, true);
-    token.set_handle(Handle::Type, 0);
-
-    token.set_flag(Flag::MustBeOwned, true);
-    token.set_link(Link::GCOwner, source);
+    token.kind = 0;
+    token.owner = source;
 
     let token = token.id();
     ctx.add_to_list(List::TokensSourced, source, token);
@@ -292,8 +288,8 @@ fn start_activity(ctx: &Things, location: ThingId, commands: &mut Commands) -> T
     let pos = ctx[location].body.pos();
 
     let (activity_ref, activity) = commands.spawn();
-    activity.set_name("Test activity");
-    activity.set_sprite("raiding");
+    activity.name = "Test activity";
+    activity.sprite = "activity_assembly";
     activity.set_flag(Flag::IsActivity, true);
     activity.body = Body {
         x: pos.x,
@@ -419,26 +415,20 @@ const ORDER_TYPES: [OrderType; 5] = [
 
 #[inline]
 fn get_order_type<'a>(order: &Thing) -> &'a OrderType {
-    &ORDER_TYPES[order.handle(Handle::Type) as usize]
+    &ORDER_TYPES[order.kind as usize]
 }
 
 #[inline]
 fn render_order_name<'a>(arena: &'a Arena, ctx: &Things, order: &Thing) -> &'a str {
-    let params = &[
-        ctx[order.link(Link::GCOwner)].name(),
-        ctx[order.link(Link::Destination)].name(),
-    ];
-    render_template_string(arena, order.name(), params)
+    let params = &[ctx[order.owner].name, ctx[order.destination].name];
+    render_template_string(arena, order.name, params)
 }
 
 #[inline]
 fn render_message<'a>(arena: &'a Arena, ctx: &Things, message: ThingId) -> &'a str {
     let this = &ctx[message];
-    let params = &[
-        ctx[this.link(Link::A)].name(),
-        ctx[this.link(Link::B)].name(),
-    ];
-    render_template_string(arena, this.name(), params)
+    let params = this.params.map(|x| ctx[x].name);
+    render_template_string(arena, this.name, &params)
 }
 
 fn render_template_string<'a>(arena: &'a Arena, template: &str, params: &[&str]) -> &'a str {
@@ -628,13 +618,12 @@ pub(crate) fn tick<'a>(sim: &mut Simulation, request: Request, arena: &'a Arena)
         let _span = tracing::info_span!("Advance-Step").entered();
         sim.things.write_pass(|ctx, this, commands| {
             // Automatic destruction of dependent objects
-            if this.flag(Flag::MustBeOwned) && !ctx.exists(this.link(Link::GCOwner)) {
+            if !this.owner.is_null() && !ctx.exists(this.owner) {
                 commands.despawn(this.id());
             }
 
             if this.flag(Flag::IsActivity) {
-                let wait_time = this.var(Var::WaitTime);
-                if wait_time > 1000. {
+                if this.wait_time > 1000. {
                     // End of activity
                     commands.despawn(this.id());
                     // Enqueue some token transfers
@@ -642,7 +631,7 @@ pub(crate) fn tick<'a>(sim: &mut Simulation, request: Request, arena: &'a Arena)
                     let location = this.parent(List::AtLocation);
                     effects.transfer_tokens(location, initiator, token_types::DREAD);
                 } else {
-                    this.set_var(Var::WaitTime, wait_time + 1.);
+                    this.wait_time += 1.;
                 }
             }
 
@@ -718,7 +707,7 @@ pub(crate) fn tick<'a>(sim: &mut Simulation, request: Request, arena: &'a Arena)
         info.enqueued_pieces = {
             let iter = req.enqueued_pieces.iter().chain(&new_piece).map(|piece| {
                 let typ = &COMMUNICATION_TYPES[piece.type_idx];
-                let target_name = piece.target.get(ctx).name();
+                let target_name = piece.target.get(ctx).name;
                 let template = arena.fmt(format_args!("$sprite$plus {}", typ.long_name));
                 let name = render_template_string(arena, template, &[target_name]);
                 CommPieceInfo {
@@ -752,7 +741,7 @@ pub(crate) fn tick<'a>(sim: &mut Simulation, request: Request, arena: &'a Arena)
 
                 let target_param = target
                     .get_as_valid(ctx)
-                    .map(|x| x.name())
+                    .map(|x| x.name)
                     .unwrap_or(typ.target_type.name);
 
                 let name = render_template_string(arena, typ.long_name, &[target_param]);
@@ -785,8 +774,8 @@ pub(crate) fn tick<'a>(sim: &mut Simulation, request: Request, arena: &'a Arena)
             // Extract selected entity information
             if this.id() == request.select_entity {
                 response.selected_entity.id = this.id();
-                response.selected_entity.name = this.name();
-                response.selected_entity.sprite = this.sprite();
+                response.selected_entity.name = this.name;
+                response.selected_entity.sprite = this.sprite;
 
                 // Populate selected entity influence
                 let tokens = &mut response.selected_entity.influence;
@@ -800,14 +789,14 @@ pub(crate) fn tick<'a>(sim: &mut Simulation, request: Request, arena: &'a Arena)
                             let holder = token.parent(List::TokensHeld).get(ctx);
                             let entry = TokenHolderInfo {
                                 id: holder.id(),
-                                name: holder.name(),
+                                name: holder.name,
                                 tokens: TokenCount::default(),
                             };
                             tokens.push(entry);
                             tokens.last_mut().unwrap()
                         }
                     };
-                    count.tokens.0[token.handle(Handle::Type) as usize] += 1;
+                    count.tokens.0[token.kind as usize] += 1;
                 }
                 // Sort the entries. First the unclaimed one (null id),
                 // thereafter the remaining in order of count.
@@ -838,14 +827,14 @@ fn add_order(this: &mut Thing, typ: &OrderType, destination: ThingId, commands: 
     let (order_ref, order) = commands.spawn();
 
     let order_type_idx = ORDER_TYPES.iter().position(|x| x.name == typ.name).unwrap() as u16;
-    order.set_handle(Handle::Type, order_type_idx);
+    order.kind = order_type_idx;
 
     let order_type = get_order_type(order);
-    order.set_name(order_type.name);
+    order.name = order_type.name;
     order.set_flag(Flag::IsOrder, true);
-    order.set_link(Link::Destination, destination);
-    order.set_var(Var::WaitTime, order_type.wait_time);
-    assign_ownership(order, this.id());
+    order.destination = destination;
+    order.wait_time = order_type.wait_time;
+    order.owner = this.id();
 
     commands.add_to_list(List::Orders, this.id(), order_ref);
 }
@@ -859,8 +848,8 @@ fn check_order_completion(
     if let Some(order) = this.first(List::Orders).get_as_valid(ctx) {
         let order_type = get_order_type(order);
         let location = this.parent(List::AtLocation);
-        let arrived = location == order.link(Link::Destination);
-        let waited_sufficiently = this.var(Var::WaitTime) >= order.var(Var::WaitTime);
+        let arrived = location == order.destination;
+        let waited_sufficiently = this.wait_time >= order.wait_time;
         if arrived && waited_sufficiently {
             // Order completed
             commands.despawn(order.id());
@@ -873,7 +862,7 @@ fn check_order_completion(
                 player,
             );
 
-            this.clear_link(Link::CurrentOrder);
+            this.current_order = ThingId::null();
 
             if order_type.trigger_activity {
                 let activity = start_activity(ctx, location, commands);
@@ -884,21 +873,20 @@ fn check_order_completion(
 }
 
 fn update_intentions(ctx: &Things, this: &mut Thing) {
-    let current_order = this.link(Link::CurrentOrder);
     // Take the current destination, and the destination from other sources
-    let current_destination = this.link(Link::Destination);
+    let current_destination = this.destination;
 
     if let Some(order) = this.first(List::Orders).get_as_valid(ctx) {
         let order_type = get_order_type(order);
 
         // This is a new order! Reset stuff like wait time etc
-        if current_order != order.id() {
-            this.set_link(Link::CurrentOrder, order.id());
-            this.set_var(Var::WaitTime, 0.);
+        if this.current_order != order.id() {
+            this.current_order = order.id();
+            this.wait_time = 0.;
         }
 
         let ordered_destination = if order_type.move_to_destination {
-            order.link(Link::Destination)
+            order.destination
         } else {
             current_destination
         };
@@ -906,14 +894,14 @@ fn update_intentions(ctx: &Things, this: &mut Thing) {
         // If the current destination is different then the ordered one, we should
         // change our destination and reset the movmement timer, and go 'outside'
         if current_destination != ordered_destination {
-            this.set_link(Link::Destination, ordered_destination);
-            this.set_var(Var::MovementTime, 0.);
+            this.destination = ordered_destination;
+            this.movement_time = 0.;
         }
 
         let current_location = this.parent(List::AtLocation);
         // If we are at ordered destination, so wait timer should increase
         if current_location == ordered_destination {
-            this.set_var(Var::WaitTime, this.var(Var::WaitTime) + 1.);
+            this.wait_time += 1.;
         }
 
         this.set_flag(Flag::WantsToBeInside, order_type.wants_to_be_inside);
@@ -928,8 +916,7 @@ fn progress_travel(
 ) {
     let current_location = this.parent(List::AtLocation);
     // Only makes sense if we have a destination
-    let destination = this.link(Link::Destination);
-    if let Some(destination) = destination.as_valid() {
+    if let Some(destination) = this.destination.as_valid() {
         // If we are not yet arrived
         if current_location != destination {
             // The cost of moving between two edges
@@ -946,14 +933,13 @@ fn progress_travel(
                 // Now we know where to go next, let's see if we are there yet
                 let next_step_cost = cost_fn(current_location, next_step) as f32;
                 // We have moved...this much (it would be reset if we changed destination)
-                let mov_time = this.var(Var::MovementTime);
-                if mov_time >= next_step_cost {
+                if this.movement_time >= next_step_cost {
                     // We moved enough! Reset movement time, transfer location
-                    this.set_var(Var::MovementTime, 0.);
+                    this.movement_time = 0.;
                     commands.add_to_list(List::AtLocation, next_step, this.id());
                 } else {
                     // Otherwise, just step up the movement time
-                    this.set_var(Var::MovementTime, mov_time + 1.);
+                    this.movement_time += 1.;
                 }
             }
         }
@@ -961,7 +947,7 @@ fn progress_travel(
 
     let wants_to_be_inside = this.flag(Flag::WantsToBeInside);
     let is_inside =
-        wants_to_be_inside && (destination.is_null() || current_location == destination);
+        wants_to_be_inside && (this.destination.is_null() || current_location == this.destination);
     this.set_flag(Flag::IsInside, is_inside);
 }
 
@@ -1038,20 +1024,12 @@ fn send_message(
     params: &[ThingId],
     recepient: ThingId,
 ) {
-    const LINKS: [Link; 2] = [Link::A, Link::B];
-    assert!(params.len() <= LINKS.len());
-
     let (msg_ref, message) = commands.spawn();
-    message.set_name(text);
-    for (&link, &param) in LINKS.iter().zip(params) {
-        message.set_link(link, param);
+    message.name = text;
+    for (slot, value) in message.params.iter_mut().zip(params) {
+        *slot = *value;
     }
     commands.add_to_list(List::Messages, recepient, msg_ref);
-}
-
-fn assign_ownership(this: &mut Thing, owner: ThingId) {
-    this.set_flag(Flag::MustBeOwned, true);
-    this.set_link(Link::GCOwner, owner);
 }
 
 fn render_thing(
@@ -1065,7 +1043,7 @@ fn render_thing(
         return;
     }
 
-    if this.body.size > 0 && !this.sprite().is_empty() {
+    if this.body.size > 0 && !this.sprite.is_empty() {
         let is_selected = this.id() == selected_id;
 
         let size = this.body.size as f32;
@@ -1087,7 +1065,7 @@ fn render_thing(
         };
 
         let sprite = Sprite {
-            image: this.sprite(),
+            image: this.sprite,
             bounds,
             layer: this.body.layer,
             border_highlight,
@@ -1098,7 +1076,7 @@ fn render_thing(
 
         let show_name = is_selected || this.flag(Flag::IsSettlement);
         if show_name {
-            let name = this.name();
+            let name = this.name;
             if !name.is_empty() {
                 let layer = this.body.layer.max(if is_selected { 3 } else { 0 });
                 draw_data.labels.push(Label {
@@ -1118,8 +1096,8 @@ fn render_thing(
     }
 
     if this.flag(Flag::IsPath) {
-        let a = this.link(self::Link::A);
-        let b = this.link(self::Link::B);
+        let a = this.edge_from;
+        let b = this.edge_to;
         if a.is_valid() && b.is_valid() {
             let a_pos = V2::new(ctx[a].body.x, ctx[a].body.y);
             let b_pos = V2::new(ctx[b].body.x, ctx[b].body.y);
@@ -1153,12 +1131,7 @@ struct Effects {
 }
 
 impl Effects {
-    fn transfer_tokens(
-        &mut self,
-        source: ThingId,
-        recepient: ThingId,
-        change_type_to: HandleValue,
-    ) {
+    fn transfer_tokens(&mut self, source: ThingId, recepient: ThingId, change_type_to: u16) {
         self.transfer_tokens.push(TransferToken {
             source,
             recepient,
@@ -1187,17 +1160,11 @@ impl Effects {
                         .filter(|tok| transfer.recepient != tok.parent(List::TokensHeld)),
                 );
                 // Score and sort the tokens
-                tokens.sort_by_key(|token| {
-                    if token.handle(Handle::Type) == 0 {
-                        100
-                    } else {
-                        0
-                    }
-                });
+                tokens.sort_by_key(|token| if token.kind == 0 { 100 } else { 0 });
 
                 // Re-assign and transform type
                 let best_tok = tokens.last().map(|x| x.id()).unwrap_or_default();
-                ctx[best_tok].set_handle(Handle::Type, transfer.change_type_to);
+                ctx[best_tok].kind = transfer.change_type_to;
                 ctx.add_to_list(List::TokensHeld, transfer.recepient, best_tok);
             }
         });

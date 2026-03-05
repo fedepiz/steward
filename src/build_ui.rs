@@ -86,7 +86,7 @@ pub(super) fn root<'a>(
                             gui.row(|mut gui| {
                                 gui.line_sized(title, 2.);
                                 let entity = entity.get_as_valid(things);
-                                let name = entity.map(|x| x.name()).unwrap_or("Vacant");
+                                let name = entity.map(|x| x.name).unwrap_or("Vacant");
                                 if gui.button_generic(
                                     gui.arena().alloc_str(name),
                                     4.,
@@ -156,7 +156,7 @@ pub(super) fn root<'a>(
                             gui.row(|mut gui| {
                                 let name = gui
                                     .arena()
-                                    .fmt(format_args!("{}##sel_inside_{idx}", thing.name()));
+                                    .fmt(format_args!("{}##sel_inside_{idx}", thing.name));
                                 if gui.button_sized(name, 4.) {
                                     request.select_entity = thing.id();
                                 }
@@ -178,7 +178,7 @@ pub(super) fn root<'a>(
                         Some(this) => {
                             {
                                 let name =
-                                    gui.arena().fmt(format_args!("Orders for: {}", this.name()));
+                                    gui.arena().fmt(format_args!("Orders for: {}", this.name));
                                 gui.line_sized(name, 10.);
                             }
 

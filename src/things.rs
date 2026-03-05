@@ -62,9 +62,6 @@ impl ThingId {
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug, EnumIter, EnumCount)]
 pub(crate) enum Flag {
     Dummy,
-    // This flag indicates the thing requires an owner (in Link) to be valid, or else it
-    // will automatically despawn itselfs
-    MustBeOwned,
     IsLocation,
     IsSettlement,
     IsPerson,
@@ -87,43 +84,8 @@ impl Default for Flag {
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug, EnumIter, EnumCount)]
-pub(crate) enum Var {
-    Dummy,
-    MovementTime,
-    WaitTime,
-}
-
-#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug, EnumIter, EnumCount)]
-pub(crate) enum Handle {
-    Type,
-}
-
-pub(crate) type HandleValue = u16;
-
-#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug, EnumIter, EnumCount)]
-pub(crate) enum Link {
-    Dummy,
-    // A link that, in combination with the flag MustBeOwned, specified dynamic lifetime for this
-    // thing. Used commonly for 'parts' of a whole
-    GCOwner,
-    // Generic A -> B links
-    A,
-    B,
-    Destination,
-    CurrentOrder,
-}
-
-impl Default for Link {
-    fn default() -> Self {
-        Link::Dummy
-    }
-}
-
-#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug, EnumIter, EnumCount)]
 pub(crate) enum List {
     Dummy,
-    // Generic subparts list
-    Parts,
     // Links a location to all the movable people currently at that location (inside or outside)
     AtLocation,
     // Links a person to all the thing they 'possess'.
@@ -158,51 +120,39 @@ struct ListThingData {
 }
 
 const NUM_FLAGS: usize = Flag::COUNT;
-const NUM_VARS: usize = Var::COUNT;
-const NUM_HANDLES: usize = Handle::COUNT;
-const NUM_LINKS: usize = Link::COUNT;
 const NUM_LISTS: usize = List::COUNT;
 
 #[derive(Clone, Copy, Default)]
 pub(crate) struct Thing {
     id: ThingId,
+    flags: BitSet<NUM_FLAGS>,
     next_free: ThingId,
     tag: &'static str,
     tag_chain_next: ThingId,
-    name: &'static str,
-    sprite: &'static str,
-    flags: BitSet<NUM_FLAGS>,
-    vars: [f32; NUM_VARS],
-    handles: [u16; NUM_HANDLES],
-    links: [ThingId; NUM_LINKS],
+    pub name: &'static str,
     lists: [ListThingData; NUM_LISTS],
-    pub(crate) body: Body,
+    // Generic
+    pub owner: ThingId,
+    pub kind: u16,
+    // Movement
+    pub sprite: &'static str,
+    pub body: Body,
+    pub wait_time: f32,
+    pub movement_time: f32,
+    pub destination: ThingId,
+    // Orders
+    pub current_order: ThingId,
+    // Path
+    pub edge_from: ThingId,
+    pub edge_to: ThingId,
+    // Generic parameter things
+    pub params: [ThingId; 4],
 }
 
 impl Thing {
     #[inline]
     pub(crate) fn id(&self) -> ThingId {
         self.id
-    }
-
-    #[inline]
-    pub(crate) fn name(&self) -> &'static str {
-        self.name
-    }
-
-    #[inline]
-    pub(crate) fn set_name(&mut self, name: &'static str) {
-        self.name = name;
-    }
-
-    #[inline]
-    pub(crate) fn sprite(&self) -> &'static str {
-        self.sprite
-    }
-
-    #[inline]
-    pub(crate) fn set_sprite(&mut self, sprite: &'static str) {
-        self.sprite = sprite;
     }
 
     #[inline]
@@ -213,41 +163,6 @@ impl Thing {
     #[inline]
     pub(crate) fn flag(&self, flag: Flag) -> bool {
         self.flags.get(flag as usize)
-    }
-
-    #[inline]
-    pub(crate) fn set_var(&mut self, var: Var, value: f32) {
-        self.vars[var as usize] = value;
-    }
-
-    #[inline]
-    pub(crate) fn var(&self, var: Var) -> f32 {
-        self.vars[var as usize]
-    }
-
-    #[inline]
-    pub(crate) fn set_handle(&mut self, handle: Handle, value: HandleValue) {
-        self.handles[handle as usize] = value;
-    }
-
-    #[inline]
-    pub(crate) fn handle(&self, handle: Handle) -> HandleValue {
-        self.handles[handle as usize]
-    }
-
-    #[inline]
-    pub(crate) fn set_link(&mut self, link: Link, value: ThingId) {
-        self.links[link as usize] = value;
-    }
-
-    #[inline]
-    pub(crate) fn clear_link(&mut self, link: Link) {
-        self.set_link(link, ThingId::null());
-    }
-
-    #[inline]
-    pub(crate) fn link(&self, link: Link) -> ThingId {
-        self.links[link as usize]
     }
 
     #[inline]
