@@ -81,6 +81,7 @@ const TOKEN_TYPES: [TokenType; 5] = [
 ];
 
 struct ActivityType {
+    idx: u16,
     name: &'static str,
     sprite: &'static str,
 }
@@ -88,18 +89,22 @@ struct ActivityType {
 mod activity_types {
     use super::*;
     pub const NULL: ActivityType = ActivityType {
+        idx: 0,
         name: "null",
         sprite: "",
     };
     pub const TRIBAL_ASSEMBLY: ActivityType = ActivityType {
+        idx: 1,
         name: "Tribal Assembly",
         sprite: "activity_assembly",
     };
     pub const BATTLE: ActivityType = ActivityType {
+        idx: 2,
         name: "Battle",
         sprite: "combat_marker",
     };
     pub const RAID: ActivityType = ActivityType {
+        idx: 3,
         name: "Raid",
         sprite: "rading",
     };
@@ -361,18 +366,18 @@ pub(crate) struct CommPieceRequest {
     pub target: ThingId,
 }
 
-#[derive(Default, Clone, Copy)]
+#[derive(Clone, Copy)]
 pub(crate) struct OrderType {
     pub name: &'static str,
     completion_message: &'static str,
     move_to_destination: bool,
     wants_to_be_inside: bool,
     wait_time: u32,
-    activity_to_trigger: u16,
+    activity_to_trigger: &'static ActivityType,
 }
 
 mod order_types {
-    use crate::simulation::OrderType;
+    use crate::simulation::{OrderType, activity_types};
 
     pub const MOVE: OrderType = OrderType {
         name: "Move to #1",
@@ -380,7 +385,7 @@ mod order_types {
         move_to_destination: true,
         wants_to_be_inside: false,
         wait_time: 0,
-        activity_to_trigger: 0,
+        activity_to_trigger: &activity_types::NULL,
     };
     pub const ENTER: OrderType = OrderType {
         name: "Enter #1",
@@ -388,7 +393,15 @@ mod order_types {
         move_to_destination: true,
         wants_to_be_inside: true,
         wait_time: 0,
-        activity_to_trigger: 0,
+        activity_to_trigger: &activity_types::NULL,
+    };
+    pub const WAIT: OrderType = OrderType {
+        name: "Wait",
+        completion_message: "#0 has entered #1",
+        move_to_destination: false,
+        wants_to_be_inside: false,
+        wait_time: 1000,
+        activity_to_trigger: &activity_types::NULL,
     };
     pub const CLAIM_KINSHIP: OrderType = OrderType {
         name: "Claim Kinship at #0",
@@ -396,7 +409,7 @@ mod order_types {
         move_to_destination: true,
         wants_to_be_inside: false,
         wait_time: 200,
-        activity_to_trigger: 1,
+        activity_to_trigger: &activity_types::TRIBAL_ASSEMBLY,
     };
 }
 
@@ -407,18 +420,11 @@ const ORDER_TYPES: [OrderType; 5] = [
         move_to_destination: false,
         wants_to_be_inside: false,
         wait_time: 0,
-        activity_to_trigger: 0,
+        activity_to_trigger: &activity_types::NULL,
     },
     order_types::MOVE,
     order_types::ENTER,
-    OrderType {
-        name: "Wait",
-        completion_message: "#0 has entered #1",
-        move_to_destination: false,
-        wants_to_be_inside: false,
-        wait_time: 1000,
-        activity_to_trigger: 0,
-    },
+    order_types::WAIT,
     order_types::CLAIM_KINSHIP,
 ];
 
@@ -631,6 +637,7 @@ pub(crate) fn tick<'a>(sim: &mut Simulation, request: Request, arena: &'a Arena)
 
         let _span = tracing::info_span!("Advance-Step").entered();
         let mut effects = Effects::new();
+
         sim.things.write_pass(|ctx, this, commands| {
             // Automatic destruction of dependent objects
             if !this.owner.is_null() && !ctx.exists(this.owner) {
@@ -661,10 +668,20 @@ pub(crate) fn tick<'a>(sim: &mut Simulation, request: Request, arena: &'a Arena)
                 }
 
                 if is_complete {
-                    // Enqueue some token transfers
-                    let initiator = this.first(List::Partecipants);
-                    let location = this.parent(List::AtLocation);
-                    effects.transfer_tokens(location, initiator, token_types::DREAD);
+                    // Completion triggers different actions, depending on the activity type...
+                    match this.kind {
+                        x if x == activity_types::RAID.idx => {
+                            let initiator = this.first(List::Partecipants);
+                            let location = this.parent(List::AtLocation);
+                            effects.transfer_tokens(location, initiator, token_types::DREAD);
+                        }
+                        x if x == activity_types::TRIBAL_ASSEMBLY.idx => {
+                            let initiator = this.first(List::Partecipants);
+                            let location = this.parent(List::AtLocation);
+                            effects.transfer_tokens(location, initiator, token_types::KINSHIP);
+                        }
+                        _ => {}
+                    }
                 } else {
                     this.wait_time = this.wait_time.saturating_add(1);
                 }
@@ -907,7 +924,7 @@ fn add_order(this: ThingId, typ: &OrderType, destination: ThingId, commands: &mu
     order.destination = destination;
     order.wait_time = order_type.wait_time;
     order.owner = this;
-    order.activity_to_trigger = order_type.activity_to_trigger;
+    order.activity_to_trigger = order_type.activity_to_trigger.idx;
 
     commands.add_to_list(List::Orders, this, order_ref);
 }
@@ -918,16 +935,18 @@ struct CheckOrderCompletion {
     is_complete: bool,
 }
 
-fn check_order_completion(this: &mut Thing, order: &Thing) -> CheckOrderCompletion {
+fn check_order_completion(this: &Thing, order: &Thing) -> CheckOrderCompletion {
     let mut out = CheckOrderCompletion::default();
+    let kind = &ORDER_TYPES[order.kind as usize];
 
     let location = this.parent(List::AtLocation);
     let is_at_activity = !this.parent(List::Partecipants).is_null();
 
     let arrived = location == order.destination;
     let waited_sufficiently = this.wait_time >= order.wait_time;
+    let insideness_matches = this.flag(Flag::IsInside) == kind.wants_to_be_inside;
 
-    if arrived && waited_sufficiently && !is_at_activity {
+    if arrived && waited_sufficiently && insideness_matches && !is_at_activity {
         out.start_activity = order.activity_to_trigger;
         out.is_complete = order.activity_to_trigger == 0;
     }
@@ -1168,7 +1187,7 @@ fn update_body_of_local_things(ctx: &Things, this: &mut Thing, delta: f32) -> Mo
 
 fn pos_around(body: Body, idx: usize, len: usize) -> V2 {
     // Find my position around the target
-    let angle = std::f32::consts::TAU * (idx as f32 / len as f32);
+    let angle = std::f32::consts::TAU * (idx as f32 / len.max(1) as f32);
     let radius = body.size as f32 * 0.75;
     let cx = body.x + angle.cos() * radius;
     let cy = body.y + angle.sin() * radius;
@@ -1320,6 +1339,7 @@ impl Effects {
     fn new() -> Self {
         Self::default()
     }
+
     fn perform(self, ctx: &mut Things, arena: &Arena) {
         ctx.with_commands(|ctx, _| {
             // Apply token transferral

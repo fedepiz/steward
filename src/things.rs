@@ -178,10 +178,10 @@ impl Thing {
         self.lists[list as usize].children.0
     }
 
-    #[inline]
-    pub(crate) fn last(&self, list: List) -> ThingId {
-        self.lists[list as usize].children.1
-    }
+    // #[inline]
+    // pub(crate) fn last(&self, list: List) -> ThingId {
+    //     self.lists[list as usize].children.1
+    // }
 
     #[inline]
     pub(crate) fn list_len(&self, list: List) -> usize {
