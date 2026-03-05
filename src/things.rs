@@ -94,7 +94,9 @@ pub(crate) enum List {
     Possessions,
     // Links a 'liege' to all the people who are 'loyal' to them
     Subordinates,
+    // Links messages to the player object
     Messages,
+    // Links the order chain to the person that has received said orders
     Orders,
     // Tokens
     TokensSourced,
@@ -129,9 +131,9 @@ pub(crate) struct Thing {
     next_free: ThingId,
     tag: &'static str,
     tag_chain_next: ThingId,
-    pub name: &'static str,
     lists: [ListThingData; NUM_LISTS],
     // Generic
+    pub name: &'static str,
     pub owner: ThingId,
     pub kind: u16,
     // Movement

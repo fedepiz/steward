@@ -570,6 +570,8 @@ pub(crate) struct EntityInfo<'a> {
     pub name: &'a str,
     pub sprite: &'a str,
     pub influence: Vec<TokenHolderInfo<'a>>,
+    pub show_partecipants: bool,
+    pub partecipants: Vec<(ThingId, &'static str)>,
 }
 
 pub(crate) struct TokenHolderInfo<'a> {
@@ -773,12 +775,13 @@ pub(crate) fn tick<'a>(sim: &mut Simulation, request: Request, arena: &'a Arena)
         ctx.readonly_pass(|ctx, this| {
             // Extract selected entity information
             if this.id() == request.select_entity {
-                response.selected_entity.id = this.id();
-                response.selected_entity.name = this.name;
-                response.selected_entity.sprite = this.sprite;
+                let info = &mut response.selected_entity;
+                info.id = this.id();
+                info.name = this.name;
+                info.sprite = this.sprite;
 
                 // Populate selected entity influence
-                let tokens = &mut response.selected_entity.influence;
+                let tokens = &mut info.influence;
                 for token in ctx.iter_list_get(List::TokensSourced, this.id()) {
                     let count = match tokens
                         .iter()
@@ -807,6 +810,18 @@ pub(crate) fn tick<'a>(sim: &mut Simulation, request: Request, arena: &'a Arena)
                         1000 - x.tokens.total() + 1
                     }
                 });
+
+                // Populate selected entity paretcipants
+                if this.flag(Flag::IsActivity) {
+                    info.show_partecipants = true;
+                    info.partecipants = ctx
+                        .iter_list(List::Partecipants, this.id())
+                        .map(|partecipant| {
+                            let name = ctx[partecipant].name;
+                            (partecipant, name)
+                        })
+                        .collect();
+                }
             }
 
             render_thing(

@@ -135,6 +135,17 @@ pub(super) fn root<'a>(
                             });
                         }
                     }
+                    if selected_entity.show_partecipants {
+                        gui.heading("Partecipants", 6.);
+                        for &(id, name) in &selected_entity.partecipants {
+                            gui.row(|mut gui| {
+                                let name = gui.arena().alloc_str(name);
+                                if gui.button_generic(gui.arena().alloc_str(name), 4., true) {
+                                    request.select_entity = id;
+                                }
+                            });
+                        }
+                    }
 
                     if this.flag(Flag::IsSettlement) {
                         gui.heading("Entities inside", 6.);
