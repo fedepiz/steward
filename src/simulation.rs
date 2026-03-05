@@ -625,9 +625,30 @@ pub(crate) fn tick<'a>(sim: &mut Simulation, request: Request, arena: &'a Arena)
             }
 
             if this.flag(Flag::IsActivity) {
-                if this.wait_time > 1000. {
-                    // End of activity
+                let location = this.parent(List::AtLocation);
+
+                let mut num_valid_partecipants = 0;
+                // Eject partecipants that are no longer at this location
+                for target in ctx.iter_list(List::Partecipants, this.id()) {
+                    let target = &ctx[target];
+                    let left_or_leaving = target.parent(List::AtLocation) != location
+                        || target.destination != location;
+                    if left_or_leaving {
+                        commands.remove_from_list(List::Partecipants, target.id());
+                    } else {
+                        num_valid_partecipants += 1;
+                    }
+                }
+
+                let is_complete = this.wait_time > 1000.;
+                let is_over = is_complete || num_valid_partecipants == 0;
+
+                // End of activity
+                if is_over {
                     commands.despawn(this.id());
+                }
+
+                if is_complete {
                     // Enqueue some token transfers
                     let initiator = this.first(List::Partecipants);
                     let location = this.parent(List::AtLocation);
