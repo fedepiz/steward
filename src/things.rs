@@ -139,7 +139,7 @@ pub(crate) struct Thing {
     // Movement
     pub sprite: &'static str,
     pub body: Body,
-    pub wait_time: f32,
+    pub wait_time: u32,
     pub movement_time: f32,
     pub destination: ThingId,
     // Orders

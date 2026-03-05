@@ -335,7 +335,7 @@ pub(crate) struct OrderType {
     completion_message: &'static str,
     move_to_destination: bool,
     wants_to_be_inside: bool,
-    wait_time: f32,
+    wait_time: u32,
     activity_to_trigger: u16,
 }
 
@@ -347,7 +347,7 @@ mod order_types {
         completion_message: "#0 has arrived to #1",
         move_to_destination: true,
         wants_to_be_inside: false,
-        wait_time: 0.,
+        wait_time: 0,
         activity_to_trigger: 0,
     };
     pub const ENTER: OrderType = OrderType {
@@ -355,7 +355,7 @@ mod order_types {
         completion_message: "#0 has entered #1",
         move_to_destination: true,
         wants_to_be_inside: true,
-        wait_time: 0.,
+        wait_time: 0,
         activity_to_trigger: 0,
     };
     pub const CLAIM_KINSHIP: OrderType = OrderType {
@@ -363,7 +363,7 @@ mod order_types {
         completion_message: "#0 has arrived to #1",
         move_to_destination: true,
         wants_to_be_inside: false,
-        wait_time: 200.,
+        wait_time: 200,
         activity_to_trigger: 1,
     };
 }
@@ -374,7 +374,7 @@ const ORDER_TYPES: [OrderType; 5] = [
         completion_message: "THIS IS A DUMMMY ORDER TYPE",
         move_to_destination: false,
         wants_to_be_inside: false,
-        wait_time: 0.,
+        wait_time: 0,
         activity_to_trigger: 0,
     },
     order_types::MOVE,
@@ -384,7 +384,7 @@ const ORDER_TYPES: [OrderType; 5] = [
         completion_message: "#0 has entered #1",
         move_to_destination: false,
         wants_to_be_inside: false,
-        wait_time: 1000.,
+        wait_time: 1000,
         activity_to_trigger: 0,
     },
     order_types::CLAIM_KINSHIP,
@@ -620,7 +620,7 @@ pub(crate) fn tick<'a>(sim: &mut Simulation, request: Request, arena: &'a Arena)
                     }
                 }
 
-                let is_complete = this.wait_time > 1000.;
+                let is_complete = this.wait_time > 1000;
                 let is_over = is_complete || num_valid_partecipants == 0;
 
                 // End of activity
@@ -634,7 +634,7 @@ pub(crate) fn tick<'a>(sim: &mut Simulation, request: Request, arena: &'a Arena)
                     let location = this.parent(List::AtLocation);
                     effects.transfer_tokens(location, initiator, token_types::DREAD);
                 } else {
-                    this.wait_time += 1.;
+                    this.wait_time = this.wait_time.saturating_add(1);
                 }
             }
 
@@ -645,8 +645,15 @@ pub(crate) fn tick<'a>(sim: &mut Simulation, request: Request, arena: &'a Arena)
                     this.sprite = if has_subordinates { "noble" } else { "soldier" };
                 }
 
-                // Order completion
+                // Order checks
                 if let Some(order) = this.first(List::Orders).get_as_valid(ctx) {
+                    // This is a new order! Reset stuff like wait time
+                    if this.current_order != order.id() {
+                        this.current_order = order.id();
+                        this.wait_time = 0;
+                    }
+
+                    // Check if the order is complete or not
                     let status = check_order_completion(this, order);
                     if status.start_activity != 0 {
                         effects.start_activity(StartActivity {
@@ -661,7 +668,7 @@ pub(crate) fn tick<'a>(sim: &mut Simulation, request: Request, arena: &'a Arena)
                 }
 
                 // Movement
-                update_intentions(ctx, this);
+                update_intentions(ctx, this, commands);
                 progress_travel(ctx, this, commands, &mut sim.nav_cache);
                 let movement_status = update_body_of_local_things(ctx, this, request.delta);
                 let has_arrived = matches!(movement_status, MovementStatus::Arrived);
@@ -879,42 +886,6 @@ struct CheckOrderCompletion {
     is_complete: bool,
 }
 
-// fn check_order_completion(
-//     ctx: &Things,
-//     this: &mut Thing,
-//     commands: &mut Commands,
-//     player: ThingId,
-// ) {
-//     if let Some(order) = this.first(List::Orders).get_as_valid(ctx) {
-//         let order_type = get_order_type(order);
-
-//         let location = this.parent(List::AtLocation);
-//         let is_at_activity = !this.parent(List::Partecipants).is_null();
-
-//         let arrived = location == order.destination;
-//         let waited_sufficiently = this.wait_time >= order.wait_time;
-
-//         // let activity = start_activity(ctx, location, commands);
-//         // commands.add_to_list(List::Partecipants, activity, this.id());
-//         // this.set_flag(Flag::WantsToTriggerActivity, false);
-
-//         if arrived && waited_sufficiently && !is_at_activity && order.activity_to_trigger == 0 {
-//             // Order completed
-//             commands.despawn(order.id());
-//             commands.remove_from_list(List::Orders, order.id());
-//             // Send a message
-//             send_message(
-//                 commands,
-//                 order_type.completion_message,
-//                 &[this.id(), location],
-//                 player,
-//             );
-
-//             this.current_order = ThingId::null();
-//         }
-//     }
-// }
-
 fn check_order_completion(this: &mut Thing, order: &Thing) -> CheckOrderCompletion {
     let mut out = CheckOrderCompletion::default();
 
@@ -949,39 +920,116 @@ fn on_order_complete(this: &mut Thing, order: &Thing, commands: &mut Commands, p
     this.current_order = ThingId::null();
 }
 
-fn update_intentions(ctx: &Things, this: &mut Thing) {
-    // Take the current destination, and the destination from other sources
-    let current_destination = this.destination;
+#[derive(Clone, Copy, Default)]
+struct Intention {
+    destination: ThingId,
+    wants_to_be_inside: Option<bool>,
+    join_activity: ThingId,
+    score: i64,
+}
 
-    if let Some(order) = this.first(List::Orders).get_as_valid(ctx) {
-        let order_type = get_order_type(order);
+// And intention derived from an order
+fn intention_from_order(order: &Thing) -> Intention {
+    let order_type = get_order_type(order);
 
-        // This is a new order! Reset stuff like wait time etc
-        if this.current_order != order.id() {
-            this.current_order = order.id();
-            this.wait_time = 0.;
-        }
+    let destination = if order_type.move_to_destination {
+        order.destination
+    } else {
+        ThingId::null()
+    };
+    let wants_to_be_inside = Some(order_type.wants_to_be_inside);
 
-        let ordered_destination = if order_type.move_to_destination {
-            order.destination
-        } else {
-            current_destination
+    Intention {
+        destination,
+        wants_to_be_inside,
+        join_activity: ThingId::null(),
+        score: 100,
+    }
+}
+
+// An intention that is driven by self-decision in the moment
+fn opportunistic_intention(ctx: &Things, this: &Thing) -> Intention {
+    let mut intention = Intention::default();
+    let location = this.parent(List::AtLocation);
+
+    let activity_here = activity_at_location(ctx, location);
+    if !activity_here.is_null() {
+        intention.destination = location;
+        intention.join_activity = activity_at_location(ctx, location);
+        intention.score += 1000;
+    }
+    intention
+}
+
+fn activity_at_location(ctx: &Things, location: ThingId) -> ThingId {
+    ctx.iter_list_get(List::AtLocation, location)
+        .find(|x| x.flag(Flag::IsActivity))
+        .map(|x| x.id())
+        .unwrap_or_default()
+}
+
+fn update_intentions(ctx: &Things, this: &mut Thing, commands: &mut Commands) {
+    let order = this.current_order;
+    // Determine the current intentions
+    let intention = {
+        // The current intention, that attempts to uphold the 'status quo'
+        let current_intention = Intention {
+            destination: this.destination,
+            wants_to_be_inside: Some(this.flag(Flag::WantsToBeInside)),
+            join_activity: this.parent(List::Partecipants),
+            score: 0,
         };
 
-        // If the current destination is different then the ordered one, we should
-        // change our destination and reset the movmement timer, and go 'outside'
-        if current_destination != ordered_destination {
-            this.destination = ordered_destination;
-            this.movement_time = 0.;
-        }
+        // Calculate an intention from the current order if there is one.
+        // Otherwise, reuse the current intention
+        let intention_from_order = if order.is_null() {
+            current_intention
+        } else {
+            intention_from_order(order.get(ctx))
+        };
 
-        let current_location = this.parent(List::AtLocation);
-        // If we are at ordered destination, so wait timer should increase
-        if current_location == ordered_destination {
-            this.wait_time += 1.;
-        }
+        // The list of all possible intents,
+        let choices = [
+            current_intention,
+            intention_from_order,
+            opportunistic_intention(ctx, this),
+        ];
+        // Pick the one with the best score
+        choices.into_iter().max_by_key(|x| x.score).unwrap()
+    };
 
-        this.set_flag(Flag::WantsToBeInside, order_type.wants_to_be_inside);
+    // Acutate intents
+
+    // If the current destination is different then the ordered one, we should
+    // change our destination and reset the movmement timer
+    if !intention.destination.is_null() && this.destination != intention.destination {
+        this.movement_time = 0.;
+        this.set_flag(Flag::IsInside, false);
+    }
+
+    let current_location = this.parent(List::AtLocation);
+
+    // Update the destination
+    if !intention.destination.is_null() {
+        this.destination = intention.destination
+    };
+
+    // Enter if you want to be inside
+    if let Some(value) = intention.wants_to_be_inside {
+        this.set_flag(Flag::WantsToBeInside, value);
+    }
+
+    // Join a new activity
+    if let Some(activity) = intention.join_activity.as_valid()
+        && activity != this.parent(List::Partecipants)
+    {
+        assert!(ctx[activity].flag(Flag::IsActivity));
+        commands.add_to_list(List::Partecipants, activity, this.id());
+    }
+
+    // If we are at ordered destination, so wait timer should increase
+    if current_location == this.destination {
+        this.wait_time = this.wait_time.saturating_add(1);
     }
 }
 
