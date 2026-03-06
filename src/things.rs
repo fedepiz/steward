@@ -414,6 +414,14 @@ impl Things {
     }
 
     pub(crate) fn iter_list(&self, list: List, id: ThingId) -> ListChildrenIter<'_> {
+        if id.is_null() {
+            return ListChildrenIter {
+                things: self,
+                list,
+                next: ThingId::null(),
+                len: 0,
+            };
+        }
         assert!(id.is_valid());
         assert!(self.entries[id.slot as usize].id == id);
 

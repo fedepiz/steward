@@ -84,6 +84,7 @@ struct ActivityType {
     idx: u16,
     name: &'static str,
     sprite: &'static str,
+    wait_time: u32,
 }
 
 mod activity_types {
@@ -92,21 +93,25 @@ mod activity_types {
         idx: 0,
         name: "null",
         sprite: "",
+        wait_time: 0,
     };
     pub const TRIBAL_ASSEMBLY: ActivityType = ActivityType {
         idx: 1,
         name: "Tribal Assembly",
         sprite: "activity_assembly",
+        wait_time: 1000,
     };
     pub const BATTLE: ActivityType = ActivityType {
         idx: 2,
         name: "Battle",
         sprite: "combat_marker",
+        wait_time: 200,
     };
     pub const RAID: ActivityType = ActivityType {
         idx: 3,
         name: "Raid",
         sprite: "rading",
+        wait_time: 500,
     };
 }
 
@@ -595,6 +600,11 @@ pub(crate) struct TokenHolderInfo<'a> {
     pub tokens: TokenCount,
 }
 
+#[derive(Default, Clone, Copy)]
+struct Intent {
+    order_completion: OrderStatus,
+}
+
 pub(crate) fn tick<'a>(sim: &mut Simulation, request: Request, arena: &'a Arena) -> Response<'a> {
     let _span = tracing::info_span!("Tick").entered();
 
@@ -638,13 +648,13 @@ pub(crate) fn tick<'a>(sim: &mut Simulation, request: Request, arena: &'a Arena)
         let _span = tracing::info_span!("Advance-Step").entered();
         let mut effects = Effects::new();
 
+        let intents = arena.alloc_slice_exact((0..NUM_THINGS).map(|_| Intent::default()));
+
         sim.things.write_pass(|ctx, this, commands| {
-            // Automatic destruction of dependent objects
-            if !this.owner.is_null() && !ctx.exists(this.owner) {
-                commands.despawn(this.id());
-            }
+            let intent = &mut intents[this.id().slot()];
 
             if this.flag(Flag::IsActivity) {
+                let activity_type = &ACTIVITY_TYPES[this.kind as usize];
                 let location = this.parent(List::AtLocation);
 
                 let mut num_valid_partecipants = 0;
@@ -659,7 +669,7 @@ pub(crate) fn tick<'a>(sim: &mut Simulation, request: Request, arena: &'a Arena)
                     }
                 }
 
-                let is_complete = this.wait_time > 1000;
+                let is_complete = this.wait_time >= activity_type.wait_time;
                 let is_over = is_complete || num_valid_partecipants == 0;
 
                 // End of activity
@@ -680,6 +690,30 @@ pub(crate) fn tick<'a>(sim: &mut Simulation, request: Request, arena: &'a Arena)
                             let location = this.parent(List::AtLocation);
                             effects.transfer_tokens(location, initiator, token_types::KINSHIP);
                         }
+                        x if x == activity_types::BATTLE.idx => {
+                            // Sort in two sides: bandits and non bandits
+                            let mut bandits =
+                                arena.new_vec_with_capacity(this.list_len(List::Partecipants));
+                            let mut others =
+                                arena.new_vec_with_capacity(this.list_len(List::Partecipants));
+                            for entry in ctx.iter_list_get(List::Partecipants, this.id()) {
+                                if entry.name == "Bandit" {
+                                    bandits.push(entry);
+                                } else {
+                                    others.push(entry);
+                                }
+                            }
+                            // Simple 50% roll: remove all the bandits or all the people
+                            let losers = if sim.thick_num % 2 == 0 {
+                                bandits
+                            } else {
+                                others
+                            };
+                            for x in losers {
+                                println!("Despawning loser: {}", x.name);
+                                commands.despawn(x.id());
+                            }
+                        }
                         _ => {}
                     }
                 } else {
@@ -688,31 +722,67 @@ pub(crate) fn tick<'a>(sim: &mut Simulation, request: Request, arena: &'a Arena)
             }
 
             if this.flag(Flag::IsPerson) {
-                {
-                    // Determine persons' sprite
-                    let has_subordinates = this.list_len(List::Subordinates) > 0;
-                    this.sprite = if has_subordinates { "noble" } else { "soldier" };
-                }
-
                 // Order checks
                 if let Some(order) = this.first(List::Orders).get_as_valid(ctx) {
-                    // This is a new order! Reset stuff like wait time
-                    if this.current_order != order.id() {
-                        this.current_order = order.id();
-                        this.wait_time = 0;
-                    }
-
                     // Check if the order is complete or not
                     let status = check_order_completion(this, order);
                     if status.start_activity != 0 {
                         effects.start_activity(StartActivity {
-                            activity_type: status.start_activity,
+                            activity_type: &ACTIVITY_TYPES[status.start_activity as usize],
                             initiator: this.id(),
                             originating_order: order.id(),
                         })
                     }
+
+                    intent.order_completion = status;
+                }
+            }
+        });
+
+        effects.perform(&mut sim.things, arena);
+
+        sim.things.write_pass(|ctx, this, commands| {
+            let intent = &mut intents[this.id().slot()];
+            // Automatic destruction of dependent objects
+            if !this.owner.is_null() && !ctx.exists(this.owner) {
+                commands.despawn(this.id());
+            }
+
+            if this.flag(Flag::IsActivity) {}
+
+            if this.flag(Flag::IsPerson) {
+                {
+                    // Determine persons' sprite
+                    let has_subordinates = this.list_len(List::Subordinates) > 0;
+                    if has_subordinates {
+                        this.sprite = "noble"
+                    };
+                }
+
+                // React to order changes
+                if this.current_order != this.first(List::Orders) {
+                    this.current_order = this.first(List::Orders);
+                    this.wait_time = 0;
+                }
+
+                {
+                    let status = &intent.order_completion;
                     if status.is_complete {
-                        on_order_complete(this, order, commands, player);
+                        let order = &ctx[status.order_id];
+                        let order_type = &ORDER_TYPES[order.kind as usize];
+                        let location = this.parent(List::AtLocation);
+                        // Order completed
+                        commands.despawn(order.id());
+                        commands.remove_from_list(List::Orders, order.id());
+                        // Send a message
+                        send_message(
+                            commands,
+                            order_type.completion_message,
+                            &[this.id(), location],
+                            player,
+                        );
+
+                        this.current_order = ThingId::null();
                     }
                 }
 
@@ -726,8 +796,6 @@ pub(crate) fn tick<'a>(sim: &mut Simulation, request: Request, arena: &'a Arena)
                 this.set_flag(Flag::IsInvisible, has_arrived && this.flag(Flag::IsInside));
             }
         });
-
-        effects.perform(&mut sim.things, arena);
     }
 
     let ctx = &sim.things;
@@ -930,13 +998,16 @@ fn add_order(this: ThingId, typ: &OrderType, destination: ThingId, commands: &mu
 }
 
 #[derive(Default, Clone, Copy)]
-struct CheckOrderCompletion {
+struct OrderStatus {
+    order_id: ThingId,
     start_activity: u16,
     is_complete: bool,
 }
 
-fn check_order_completion(this: &Thing, order: &Thing) -> CheckOrderCompletion {
-    let mut out = CheckOrderCompletion::default();
+fn check_order_completion(this: &Thing, order: &Thing) -> OrderStatus {
+    let mut out = OrderStatus::default();
+    out.order_id = order.id();
+
     let kind = &ORDER_TYPES[order.kind as usize];
 
     let location = this.parent(List::AtLocation);
@@ -952,23 +1023,6 @@ fn check_order_completion(this: &Thing, order: &Thing) -> CheckOrderCompletion {
     }
 
     out
-}
-
-fn on_order_complete(this: &mut Thing, order: &Thing, commands: &mut Commands, player: ThingId) {
-    let order_type = &ORDER_TYPES[order.kind as usize];
-    let location = this.parent(List::AtLocation);
-    // Order completed
-    commands.despawn(order.id());
-    commands.remove_from_list(List::Orders, order.id());
-    // Send a message
-    send_message(
-        commands,
-        order_type.completion_message,
-        &[this.id(), location],
-        player,
-    );
-
-    this.current_order = ThingId::null();
 }
 
 #[derive(Clone, Copy, Default)]
@@ -1330,7 +1384,7 @@ struct TransferToken {
 
 #[derive(Clone, Copy)]
 struct StartActivity {
-    activity_type: u16,
+    activity_type: &'static ActivityType,
     initiator: ThingId,
     originating_order: ThingId,
 }
@@ -1381,13 +1435,11 @@ impl Effects {
     }
 }
 
-fn start_activity(ctx: &mut Things, kind: u16, location: ThingId) -> ThingId {
-    // Is there already an activity at the location? If so, abort.
+fn start_activity(ctx: &mut Things, activity_type: &ActivityType, location: ThingId) -> ThingId {
     let pos = ctx[location].body.pos();
-    let activity_type = &ACTIVITY_TYPES[kind as usize];
 
     let activity = ctx.spawn();
-    activity.kind = kind;
+    activity.kind = activity_type.idx;
     activity.name = activity_type.name;
     activity.sprite = activity_type.sprite;
     activity.set_flag(Flag::IsActivity, true);
@@ -1400,5 +1452,9 @@ fn start_activity(ctx: &mut Things, kind: u16, location: ThingId) -> ThingId {
 
     let activity = activity.id();
     ctx.add_to_list(List::AtLocation, location, activity);
+    println!(
+        "Started activity {} at {}({location:?})",
+        activity_type.name, ctx[location].name
+    );
     activity
 }

@@ -20,6 +20,7 @@ spawn_person,test,"Callum",soldier,llan_heledd
 spawn_person,test2,"Einar",soldier,caer_ligualid
 spawn_person,test3,"Eadweard",soldier,caer_wenddoleu
 spawn_person,test4,"Oswiu",soldier,caer_ligualid
+spawn_person,bandit,"Bandit",bandit,way_caer_wenddoleu_west
 set_loyalty,llan_heledd,caer_ligualid
 set_loyalty,caer_wenddoleu,caer_ligualid
 set_loyalty,din_drust,caer_ligualid
