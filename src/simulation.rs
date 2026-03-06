@@ -1,5 +1,5 @@
 use util::{
-    arena::Arena,
+    arena::{AVec, Arena},
     geom::{Rect, V2},
 };
 
@@ -241,9 +241,8 @@ pub(crate) fn setup(scratch: &Arena) -> Simulation {
     });
 
     // Use the "set_loyalty" commands
-    let mut effects = Effects::new();
     for row in csv.rows() {
-        match row[0].as_str() {
+        ctx.with_commands(|ctx, commands| match row[0].as_str() {
             "set_loyalty" => {
                 let subordinate = ctx
                     .lookup_tag(row[1].as_str())
@@ -254,12 +253,15 @@ pub(crate) fn setup(scratch: &Arena) -> Simulation {
                     .get(&ctx)
                     .parent(List::Possessions);
                 ctx.add_to_list(List::Subordinates, superior, subordinate);
-                effects.transfer_tokens(subordinate, superior, token_types::GIFT);
+
+                if let Some(token) = ctx.iter_list(List::TokensSourced, subordinate).next() {
+                    commands.despawn(token);
+                    add_token(subordinate, superior, token_types::GIFT, commands);
+                }
             }
             _ => {}
-        }
+        });
     }
-    effects.perform(ctx, scratch);
 
     // End-of-setup pass
     let mut nav_cache = NavCacheBuilder::new(1024);
@@ -600,9 +602,58 @@ pub(crate) struct TokenHolderInfo<'a> {
     pub tokens: TokenCount,
 }
 
-#[derive(Default, Clone, Copy)]
-struct Intent {
+struct Intent<'a> {
+    despawn: bool,
     order_completion: OrderStatus,
+    start_activity: AVec<'a, StartActivity>,
+    transfer_tokens: AVec<'a, TransferToken>,
+}
+
+impl<'a> Intent<'a> {
+    fn new(arena: &'a Arena) -> Self {
+        Self {
+            despawn: false,
+            order_completion: OrderStatus::default(),
+            start_activity: arena.new_vec(),
+            transfer_tokens: arena.new_vec(),
+        }
+    }
+}
+
+struct Intents<'a> {
+    arena: &'a Arena,
+    dummy: Intent<'a>,
+    items: AVec<'a, Option<Intent<'a>>>,
+}
+
+impl<'a> Intents<'a> {
+    fn new(arena: &'a Arena) -> Self {
+        Self {
+            arena,
+            dummy: Intent::new(arena),
+            items: arena.new_vec(),
+        }
+    }
+
+    fn reset(&mut self) {
+        let _span = tracing::info_span!("Intent preparation").entered();
+        self.items.clear();
+        self.items.extend((0..NUM_THINGS).map(|_| None));
+    }
+}
+
+impl<'a> std::ops::Index<ThingId> for Intents<'a> {
+    type Output = Intent<'a>;
+
+    fn index(&self, index: ThingId) -> &Self::Output {
+        self.items[index.slot()].as_ref().unwrap_or(&self.dummy)
+    }
+}
+
+impl<'a> std::ops::IndexMut<ThingId> for Intents<'a> {
+    fn index_mut(&mut self, index: ThingId) -> &mut Self::Output {
+        self.items[index.slot()].get_or_insert(Intent::new(self.arena))
+    }
 }
 
 pub(crate) fn tick<'a>(sim: &mut Simulation, request: Request, arena: &'a Arena) -> Response<'a> {
@@ -642,39 +693,25 @@ pub(crate) fn tick<'a>(sim: &mut Simulation, request: Request, arena: &'a Arena)
 
     let mut response = Response::new(arena);
 
+    let mut intents = Intents::new(arena);
     for _ in 0..request.advance_time {
         sim.thick_num = sim.thick_num.wrapping_add(1);
 
         let _span = tracing::info_span!("Advance-Step").entered();
-        let mut effects = Effects::new();
 
-        let intents = arena.alloc_slice_exact((0..NUM_THINGS).map(|_| Intent::default()));
+        // Reset intents
+        intents.reset();
 
-        sim.things.write_pass(|ctx, this, commands| {
-            let intent = &mut intents[this.id().slot()];
-
+        sim.things.readonly_pass(|ctx, this| {
             if this.flag(Flag::IsActivity) {
                 let activity_type = &ACTIVITY_TYPES[this.kind as usize];
-                let location = this.parent(List::AtLocation);
-
-                let mut num_valid_partecipants = 0;
-                // Eject partecipants that are no longer at this location
-                for target in ctx.iter_list(List::Partecipants, this.id()) {
-                    let target = &ctx[target];
-                    let left_or_leaving = target.parent(List::AtLocation) != location;
-                    if left_or_leaving {
-                        commands.remove_from_list(List::Partecipants, target.id());
-                    } else {
-                        num_valid_partecipants += 1;
-                    }
-                }
 
                 let is_complete = this.wait_time >= activity_type.wait_time;
-                let is_over = is_complete || num_valid_partecipants == 0;
+                let is_over = is_complete || this.list_len(List::Partecipants) == 0;
 
                 // End of activity
                 if is_over {
-                    commands.despawn(this.id());
+                    intents[this.id()].despawn = true;
                 }
 
                 if is_complete {
@@ -683,12 +720,18 @@ pub(crate) fn tick<'a>(sim: &mut Simulation, request: Request, arena: &'a Arena)
                         x if x == activity_types::RAID.idx => {
                             let initiator = this.first(List::Partecipants);
                             let location = this.parent(List::AtLocation);
-                            effects.transfer_tokens(location, initiator, token_types::DREAD);
+                            intents[location].transfer_tokens.push(TransferToken {
+                                recepient: initiator,
+                                change_type_to: token_types::DREAD,
+                            });
                         }
                         x if x == activity_types::TRIBAL_ASSEMBLY.idx => {
                             let initiator = this.first(List::Partecipants);
                             let location = this.parent(List::AtLocation);
-                            effects.transfer_tokens(location, initiator, token_types::KINSHIP);
+                            intents[location].transfer_tokens.push(TransferToken {
+                                recepient: initiator,
+                                change_type_to: token_types::KINSHIP,
+                            });
                         }
                         x if x == activity_types::BATTLE.idx => {
                             // Sort in two sides: bandits and non bandits
@@ -711,44 +754,151 @@ pub(crate) fn tick<'a>(sim: &mut Simulation, request: Request, arena: &'a Arena)
                             };
                             for x in losers {
                                 println!("Despawning loser: {}", x.name);
-                                commands.despawn(x.id());
+                                intents[x.id()].despawn = true;
                             }
                         }
                         _ => {}
                     }
                 } else {
-                    this.wait_time = this.wait_time.saturating_add(1);
                 }
             }
 
-            if this.flag(Flag::IsPerson) {
-                // Order checks
-                if let Some(order) = this.first(List::Orders).get_as_valid(ctx) {
+            if this.flag(Flag::IsOrder) {
+                let order = &*this;
+                let holder = order.parent(List::Orders).get(ctx);
+                let is_active = holder.first(List::Orders) == order.id();
+                if is_active {
+                    let location = holder.parent(List::AtLocation);
                     // Check if the order is complete or not
-                    let status = check_order_completion(this, order);
-                    if status.start_activity != 0 {
-                        effects.start_activity(StartActivity {
-                            activity_type: &ACTIVITY_TYPES[status.start_activity as usize],
-                            initiator: this.id(),
+                    let mut status = OrderStatus::default();
+                    status.order_id = order.id();
+
+                    let kind = &ORDER_TYPES[order.kind as usize];
+
+                    let is_at_activity = !holder.parent(List::Partecipants).is_null();
+
+                    let arrived = location == order.destination;
+                    let waited_sufficiently = holder.wait_time >= order.wait_time;
+                    let insideness_matches = holder.flag(Flag::IsInside) == kind.wants_to_be_inside;
+
+                    let mut activity_to_trigger = 0;
+                    if arrived && waited_sufficiently && insideness_matches && !is_at_activity {
+                        activity_to_trigger = order.activity_to_trigger;
+                        status.is_complete = order.activity_to_trigger == 0;
+                    }
+
+                    if activity_to_trigger != 0 {
+                        intents[location].start_activity.push(StartActivity {
+                            activity_type: &ACTIVITY_TYPES[activity_to_trigger as usize],
+                            initiator: holder.id(),
                             originating_order: order.id(),
                         })
                     }
 
-                    intent.order_completion = status;
+                    intents[holder.id()].order_completion = status;
                 }
             }
         });
 
-        effects.perform(&mut sim.things, arena);
-
         sim.things.write_pass(|ctx, this, commands| {
-            let intent = &mut intents[this.id().slot()];
+            let intent = &intents[this.id()];
+
             // Automatic destruction of dependent objects
-            if !this.owner.is_null() && !ctx.exists(this.owner) {
+            if intent.despawn || (!this.owner.is_null() && !ctx.exists(this.owner)) {
                 commands.despawn(this.id());
             }
 
-            if this.flag(Flag::IsActivity) {}
+            // Generic token transfer
+            for transfer in &intent.transfer_tokens {
+                // Get all the tokens at the source
+                let tokens = arena.alloc_slice_iter(
+                    ctx.iter_list_get(List::TokensSourced, this.id())
+                        .filter(|tok| transfer.recepient != tok.parent(List::TokensHeld)),
+                );
+                // Score and sort the tokens
+                tokens.sort_by_key(|token| if token.kind == 0 { 100 } else { 0 });
+
+                // Destroy the best token
+                let best_tok = tokens.last().map(|x| x.id()).unwrap_or_default();
+                commands.despawn(best_tok);
+
+                // And allocate a new token
+                add_token(
+                    this.id(),
+                    transfer.recepient,
+                    transfer.change_type_to,
+                    commands,
+                );
+            }
+
+            if let Some(activity) = this.parent(List::Partecipants).get_as_valid(ctx) {
+                let my_location = this.parent(List::AtLocation);
+                let is_moving = this.destination.is_null() && this.destination != my_location;
+
+                // Eject partecipants that are no longer at this location
+                if is_moving || my_location != activity.parent(List::AtLocation) {
+                    commands.remove_from_list(List::Partecipants, this.id());
+                }
+            }
+
+            if this.flag(Flag::IsActivity) {
+                this.wait_time = this.wait_time.saturating_add(1);
+            }
+
+            if this.flag(Flag::IsLocation) {
+                let current_activity = ctx
+                    .iter_list_get(List::AtLocation, this.id())
+                    .find(|x| x.flag(Flag::IsActivity))
+                    .map(|x| x.id())
+                    .unwrap_or_default();
+
+                let new_activity = intent.start_activity.iter().next();
+
+                if let Some(new_activity) = new_activity
+                    && new_activity.activity_type.idx != current_activity.get(ctx).kind
+                {
+                    commands.despawn(current_activity);
+                    let activity_type = new_activity.activity_type;
+                    {
+                        let pos = this.body.pos();
+
+                        let (activity_ref, activity) = commands.spawn();
+                        activity.kind = activity_type.idx;
+                        activity.name = activity_type.name;
+                        activity.sprite = activity_type.sprite;
+                        activity.set_flag(Flag::IsActivity, true);
+                        activity.body = Body {
+                            x: pos.x,
+                            y: pos.y,
+                            size: 2,
+                            layer: 3,
+                        };
+                        activity.current_order = new_activity.originating_order;
+                        commands.add_to_list(List::AtLocation, this.id(), activity_ref);
+                        commands.add_to_list(
+                            List::Partecipants,
+                            activity_ref,
+                            new_activity.initiator,
+                        );
+                        println!("{} Activity spawn enqueued", sim.thick_num);
+                    }
+                }
+            }
+
+            if this.flag(Flag::IsOrder) {
+                let order = &mut *this;
+                let parent = order.parent(List::Orders).get(ctx);
+                let is_active = parent.first(List::Orders) == order.id();
+                if is_active {
+                    let current_activity = parent.parent(List::Partecipants).get(ctx);
+                    if order.activity_to_trigger != 0
+                        && current_activity.current_order == order.id()
+                    {
+                        println!("{} Reset activity trigger", sim.thick_num);
+                        this.activity_to_trigger = 0;
+                    }
+                }
+            }
 
             if this.flag(Flag::IsPerson) {
                 {
@@ -787,7 +937,7 @@ pub(crate) fn tick<'a>(sim: &mut Simulation, request: Request, arena: &'a Arena)
                 }
 
                 // Movement
-                update_intentions(ctx, this, commands);
+                tasking(ctx, this, commands);
                 progress_travel(ctx, this, commands, &mut sim.nav_cache);
                 let movement_status = update_body_of_local_things(ctx, this, request.delta);
                 let has_arrived = matches!(movement_status, MovementStatus::Arrived);
@@ -1000,33 +1150,11 @@ fn add_order(this: ThingId, typ: &OrderType, destination: ThingId, commands: &mu
 #[derive(Default, Clone, Copy)]
 struct OrderStatus {
     order_id: ThingId,
-    start_activity: u16,
     is_complete: bool,
 }
 
-fn check_order_completion(this: &Thing, order: &Thing) -> OrderStatus {
-    let mut out = OrderStatus::default();
-    out.order_id = order.id();
-
-    let kind = &ORDER_TYPES[order.kind as usize];
-
-    let location = this.parent(List::AtLocation);
-    let is_at_activity = !this.parent(List::Partecipants).is_null();
-
-    let arrived = location == order.destination;
-    let waited_sufficiently = this.wait_time >= order.wait_time;
-    let insideness_matches = this.flag(Flag::IsInside) == kind.wants_to_be_inside;
-
-    if arrived && waited_sufficiently && insideness_matches && !is_at_activity {
-        out.start_activity = order.activity_to_trigger;
-        out.is_complete = order.activity_to_trigger == 0;
-    }
-
-    out
-}
-
 #[derive(Clone, Copy, Default)]
-struct Intention {
+struct Task {
     destination: ThingId,
     wants_to_be_inside: Option<bool>,
     join_activity: ThingId,
@@ -1034,7 +1162,7 @@ struct Intention {
 }
 
 // And intention derived from an order
-fn intention_from_order(order: &Thing) -> Intention {
+fn task_from_order(order: &Thing) -> Task {
     let order_type = get_order_type(order);
 
     let destination = if order_type.move_to_destination {
@@ -1044,7 +1172,7 @@ fn intention_from_order(order: &Thing) -> Intention {
     };
     let wants_to_be_inside = Some(order_type.wants_to_be_inside);
 
-    Intention {
+    Task {
         destination,
         wants_to_be_inside,
         join_activity: ThingId::null(),
@@ -1053,8 +1181,8 @@ fn intention_from_order(order: &Thing) -> Intention {
 }
 
 // An intention that is driven by self-decision in the moment
-fn opportunistic_intention(ctx: &Things, this: &Thing) -> Intention {
-    let mut intention = Intention::default();
+fn opportunistic_task(ctx: &Things, this: &Thing) -> Task {
+    let mut intention = Task::default();
     let location = this.parent(List::AtLocation);
 
     let activity_here = activity_at_location(ctx, location);
@@ -1073,12 +1201,12 @@ fn activity_at_location(ctx: &Things, location: ThingId) -> ThingId {
         .unwrap_or_default()
 }
 
-fn update_intentions(ctx: &Things, this: &mut Thing, commands: &mut Commands) {
+fn tasking(ctx: &Things, this: &mut Thing, commands: &mut Commands) {
     let order = this.current_order;
     // Determine the current intentions
-    let intention = {
+    let task = {
         // The current intention, that attempts to uphold the 'status quo'
-        let current_intention = Intention {
+        let current_task = Task {
             destination: this.destination,
             wants_to_be_inside: Some(this.flag(Flag::WantsToBeInside)),
             join_activity: this.parent(List::Partecipants),
@@ -1087,18 +1215,14 @@ fn update_intentions(ctx: &Things, this: &mut Thing, commands: &mut Commands) {
 
         // Calculate an intention from the current order if there is one.
         // Otherwise, reuse the current intention
-        let intention_from_order = if order.is_null() {
-            current_intention
+        let task_from_order = if order.is_null() {
+            current_task
         } else {
-            intention_from_order(order.get(ctx))
+            task_from_order(order.get(ctx))
         };
 
         // The list of all possible intents,
-        let choices = [
-            current_intention,
-            intention_from_order,
-            opportunistic_intention(ctx, this),
-        ];
+        let choices = [current_task, task_from_order, opportunistic_task(ctx, this)];
         // Pick the one with the best score
         choices.into_iter().max_by_key(|x| x.score).unwrap()
     };
@@ -1107,7 +1231,7 @@ fn update_intentions(ctx: &Things, this: &mut Thing, commands: &mut Commands) {
 
     // If the current destination is different then the ordered one, we should
     // change our destination and reset the movmement timer
-    if !intention.destination.is_null() && this.destination != intention.destination {
+    if !task.destination.is_null() && this.destination != task.destination {
         this.movement_time = 0.;
         this.set_flag(Flag::IsInside, false);
     }
@@ -1115,17 +1239,17 @@ fn update_intentions(ctx: &Things, this: &mut Thing, commands: &mut Commands) {
     let current_location = this.parent(List::AtLocation);
 
     // Update the destination
-    if !intention.destination.is_null() {
-        this.destination = intention.destination
+    if !task.destination.is_null() {
+        this.destination = task.destination
     };
 
     // Enter if you want to be inside
-    if let Some(value) = intention.wants_to_be_inside {
+    if let Some(value) = task.wants_to_be_inside {
         this.set_flag(Flag::WantsToBeInside, value);
     }
 
     // Join a new activity
-    if let Some(activity) = intention.join_activity.as_valid()
+    if let Some(activity) = task.join_activity.as_valid()
         && activity != this.parent(List::Partecipants)
     {
         assert!(ctx[activity].flag(Flag::IsActivity));
@@ -1355,29 +1479,8 @@ impl TokenCount {
     }
 }
 
-#[derive(Default)]
-struct Effects {
-    transfer_tokens: Vec<TransferToken>,
-    start_activity: Vec<StartActivity>,
-}
-
-impl Effects {
-    fn transfer_tokens(&mut self, source: ThingId, recepient: ThingId, change_type_to: u16) {
-        self.transfer_tokens.push(TransferToken {
-            source,
-            recepient,
-            change_type_to,
-        });
-    }
-
-    fn start_activity(&mut self, effect: StartActivity) {
-        self.start_activity.push(effect);
-    }
-}
-
 #[derive(Clone, Copy)]
 struct TransferToken {
-    source: ThingId,
     recepient: ThingId,
     change_type_to: u16,
 }
@@ -1389,72 +1492,10 @@ struct StartActivity {
     originating_order: ThingId,
 }
 
-impl Effects {
-    fn new() -> Self {
-        Self::default()
-    }
-
-    fn perform(self, ctx: &mut Things, arena: &Arena) {
-        ctx.with_commands(|ctx, _| {
-            // Apply token transferral
-            for transfer in self.transfer_tokens {
-                // Get all the tokens at the source
-                let tokens = arena.alloc_slice_iter(
-                    ctx.iter_list_get(List::TokensSourced, transfer.source)
-                        .filter(|tok| transfer.recepient != tok.parent(List::TokensHeld)),
-                );
-                // Score and sort the tokens
-                tokens.sort_by_key(|token| if token.kind == 0 { 100 } else { 0 });
-
-                // Re-assign and transform type
-                let best_tok = tokens.last().map(|x| x.id()).unwrap_or_default();
-                ctx[best_tok].kind = transfer.change_type_to;
-                ctx.add_to_list(List::TokensHeld, transfer.recepient, best_tok);
-            }
-
-            for effect in self.start_activity {
-                let location = ctx[effect.initiator].parent(List::AtLocation);
-                // Does an activity currently exist?
-                let location_has_activity = ctx
-                    .iter_list_get(List::AtLocation, location)
-                    .any(|x| x.flag(Flag::IsActivity));
-
-                if location_has_activity {
-                    continue;
-                }
-
-                let activity = start_activity(ctx, effect.activity_type, location);
-
-                if let Some(order) = effect.originating_order.get_as_valid_mut(ctx) {
-                    order.activity_to_trigger = 0;
-                }
-
-                ctx.add_to_list(List::Partecipants, activity, effect.initiator);
-            }
-        });
-    }
-}
-
-fn start_activity(ctx: &mut Things, activity_type: &ActivityType, location: ThingId) -> ThingId {
-    let pos = ctx[location].body.pos();
-
-    let activity = ctx.spawn();
-    activity.kind = activity_type.idx;
-    activity.name = activity_type.name;
-    activity.sprite = activity_type.sprite;
-    activity.set_flag(Flag::IsActivity, true);
-    activity.body = Body {
-        x: pos.x,
-        y: pos.y,
-        size: 2,
-        layer: 3,
-    };
-
-    let activity = activity.id();
-    ctx.add_to_list(List::AtLocation, location, activity);
-    println!(
-        "Started activity {} at {}({location:?})",
-        activity_type.name, ctx[location].name
-    );
-    activity
+fn add_token(source: ThingId, recepient: ThingId, kind: u16, commands: &mut Commands) {
+    let (tok_ref, token) = commands.spawn();
+    token.kind = kind;
+    token.set_flag(Flag::IsToken, true);
+    commands.add_to_list(List::TokensSourced, source, tok_ref);
+    commands.add_to_list(List::TokensHeld, recepient, tok_ref);
 }

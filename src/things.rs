@@ -39,11 +39,6 @@ impl ThingId {
     }
 
     #[inline]
-    pub(crate) fn get_as_valid_mut(self, ctx: &mut Things) -> Option<&mut Thing> {
-        self.as_valid().map(|x| x.get_mut(ctx))
-    }
-
-    #[inline]
     pub(crate) fn slot(self) -> usize {
         self.slot as usize
     }
@@ -51,11 +46,6 @@ impl ThingId {
     #[inline]
     pub(crate) fn get(self, things: &Things) -> &Thing {
         &things[self]
-    }
-
-    #[inline]
-    pub(crate) fn get_mut(self, ctx: &mut Things) -> &mut Thing {
-        &mut ctx[self]
     }
 }
 
@@ -760,7 +750,9 @@ impl Commands {
     }
 
     pub fn despawn(&mut self, id: ThingId) {
-        self.despawns.push(id);
+        if !id.is_null() {
+            self.despawns.push(id);
+        }
     }
 
     pub fn spawn(&mut self) -> (ThingRef, &mut Thing) {
