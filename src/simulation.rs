@@ -810,9 +810,6 @@ fn advance_read<'a>(sim: &mut Simulation, arena: &'a Arena, intents: &mut Intent
             if is_active {
                 let location = holder.parent(List::AtLocation);
                 // Check if the order is complete or not
-                let mut status = OrderStatus::default();
-                status.order_id = order.id();
-
                 let kind = &ORDER_TYPES[order.kind as usize];
 
                 let is_at_activity = !holder.parent(List::Partecipants).is_null();
@@ -821,21 +818,23 @@ fn advance_read<'a>(sim: &mut Simulation, arena: &'a Arena, intents: &mut Intent
                 let waited_sufficiently = holder.wait_time >= order.wait_time;
                 let insideness_matches = holder.flag(Flag::IsInside) == kind.wants_to_be_inside;
 
-                let mut activity_to_trigger = 0;
+                let mut is_complete = false;
                 if arrived && waited_sufficiently && insideness_matches && !is_at_activity {
-                    activity_to_trigger = order.activity_to_trigger;
-                    status.is_complete = order.activity_to_trigger == 0;
+                    is_complete = order.activity_to_trigger == 0;
+
+                    if order.activity_to_trigger != 0 {
+                        intents[location].start_activity.push(StartActivity {
+                            activity_type: &ACTIVITY_TYPES[order.activity_to_trigger as usize],
+                            initiator: holder.id(),
+                            originating_order: order.id(),
+                        })
+                    }
                 }
 
-                if activity_to_trigger != 0 {
-                    intents[location].start_activity.push(StartActivity {
-                        activity_type: &ACTIVITY_TYPES[activity_to_trigger as usize],
-                        initiator: holder.id(),
-                        originating_order: order.id(),
-                    })
-                }
-
-                intents[holder.id()].order_completion = status;
+                intents[holder.id()].order_completion = OrderStatus {
+                    order_id: order.id(),
+                    is_complete,
+                };
             }
         }
     });
