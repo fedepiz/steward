@@ -759,7 +759,33 @@ pub(crate) fn tick<'a>(sim: &mut Simulation, request: Request, arena: &'a Arena)
                         }
                         _ => {}
                     }
-                } else {
+                }
+            }
+
+            if this.flag(Flag::IsLocation) {
+                let location = this;
+                let people_here = &*arena.alloc_slice_iter(
+                    ctx.iter_list_get(List::AtLocation, location.id())
+                        .filter(|x| x.flag(Flag::IsPerson)),
+                );
+
+                for subject in people_here {
+                    for target in people_here {
+                        if subject.id() == target.id() {
+                            continue;
+                        }
+
+                        if subject.name == "Bandit"
+                            && !subject.flag(Flag::IsInside)
+                            && !target.flag(Flag::IsInside)
+                        {
+                            intents[location.id()].start_activity.push(StartActivity {
+                                activity_type: &activity_types::BATTLE,
+                                initiator: subject.id(),
+                                originating_order: ThingId::null(),
+                            });
+                        }
+                    }
                 }
             }
 
