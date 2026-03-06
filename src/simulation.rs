@@ -659,11 +659,22 @@ impl<'a> std::ops::IndexMut<ThingId> for Intents<'a> {
 pub(crate) fn tick<'a>(sim: &mut Simulation, request: Request, arena: &'a Arena) -> Response<'a> {
     let _span = tracing::info_span!("Tick").entered();
 
-    for id in request.despawns {
-        sim.things.despawn(id);
+    process_inputs(sim, &request);
+
+    let mut intents = Intents::new(arena);
+    for _ in 0..request.advance_time {
+        advance_step(sim, arena, &mut intents, request.delta);
     }
 
+    prepare_response(sim, arena, &request)
+}
+
+fn process_inputs(sim: &mut Simulation, request: &Request) {
     let player = sim.things.lookup_tag(PLAYER_TAG);
+
+    for &id in &request.despawns {
+        sim.things.despawn(id);
+    }
 
     sim.things.with_commands(|ctx, commands| {
         if request.messages.delete_all {
@@ -690,470 +701,287 @@ pub(crate) fn tick<'a>(sim: &mut Simulation, request: Request, arena: &'a Arena)
             }
         }
     });
+}
 
-    let mut response = Response::new(arena);
+fn advance_step<'a>(sim: &mut Simulation, arena: &'a Arena, intents: &mut Intents<'a>, delta: f32) {
+    sim.thick_num = sim.thick_num.wrapping_add(1);
 
-    let mut intents = Intents::new(arena);
-    for _ in 0..request.advance_time {
-        sim.thick_num = sim.thick_num.wrapping_add(1);
+    let _span = tracing::info_span!("Advance-Step").entered();
 
-        let _span = tracing::info_span!("Advance-Step").entered();
+    // Reset intents
+    intents.reset();
 
-        // Reset intents
-        intents.reset();
+    advance_read(sim, arena, intents);
+    advance_write(sim, arena, intents, delta);
+}
 
-        sim.things.readonly_pass(|ctx, this| {
-            if this.flag(Flag::IsActivity) {
-                let activity_type = &ACTIVITY_TYPES[this.kind as usize];
+fn advance_read<'a>(sim: &mut Simulation, arena: &'a Arena, intents: &mut Intents<'a>) {
+    sim.things.readonly_pass(|ctx, this| {
+        if this.flag(Flag::IsActivity) {
+            let activity_type = &ACTIVITY_TYPES[this.kind as usize];
 
-                let is_complete = this.wait_time >= activity_type.wait_time;
-                let is_over = is_complete || this.list_len(List::Partecipants) == 0;
+            let is_complete = this.wait_time >= activity_type.wait_time;
+            let is_over = is_complete || this.list_len(List::Partecipants) == 0;
 
-                // End of activity
-                if is_over {
-                    intents[this.id()].despawn = true;
-                }
-
-                if is_complete {
-                    // Completion triggers different actions, depending on the activity type...
-                    match this.kind {
-                        x if x == activity_types::RAID.idx => {
-                            let initiator = this.first(List::Partecipants);
-                            let location = this.parent(List::AtLocation);
-                            intents[location].transfer_tokens.push(TransferToken {
-                                recepient: initiator,
-                                change_type_to: token_types::DREAD,
-                            });
-                        }
-                        x if x == activity_types::TRIBAL_ASSEMBLY.idx => {
-                            let initiator = this.first(List::Partecipants);
-                            let location = this.parent(List::AtLocation);
-                            intents[location].transfer_tokens.push(TransferToken {
-                                recepient: initiator,
-                                change_type_to: token_types::KINSHIP,
-                            });
-                        }
-                        x if x == activity_types::BATTLE.idx => {
-                            // Sort in two sides: bandits and non bandits
-                            let mut bandits =
-                                arena.new_vec_with_capacity(this.list_len(List::Partecipants));
-                            let mut others =
-                                arena.new_vec_with_capacity(this.list_len(List::Partecipants));
-                            for entry in ctx.iter_list_get(List::Partecipants, this.id()) {
-                                if entry.name == "Bandit" {
-                                    bandits.push(entry);
-                                } else {
-                                    others.push(entry);
-                                }
-                            }
-                            // Simple 50% roll: remove all the bandits or all the people
-                            let losers = if sim.thick_num % 2 == 0 {
-                                bandits
-                            } else {
-                                others
-                            };
-                            for x in losers {
-                                println!("Despawning loser: {}", x.name);
-                                intents[x.id()].despawn = true;
-                            }
-                        }
-                        _ => {}
-                    }
-                }
+            // End of activity
+            if is_over {
+                intents[this.id()].despawn = true;
             }
 
-            if this.flag(Flag::IsLocation) {
-                let location = this;
-                let people_here = &*arena.alloc_slice_iter(
-                    ctx.iter_list_get(List::AtLocation, location.id())
-                        .filter(|x| x.flag(Flag::IsPerson)),
-                );
-
-                for subject in people_here {
-                    for target in people_here {
-                        if subject.id() == target.id() {
-                            continue;
-                        }
-
-                        if subject.name == "Bandit"
-                            && !subject.flag(Flag::IsInside)
-                            && !target.flag(Flag::IsInside)
-                        {
-                            intents[location.id()].start_activity.push(StartActivity {
-                                activity_type: &activity_types::BATTLE,
-                                initiator: subject.id(),
-                                originating_order: ThingId::null(),
-                            });
-                        }
-                    }
-                }
-            }
-
-            if this.flag(Flag::IsOrder) {
-                let order = &*this;
-                let holder = order.parent(List::Orders).get(ctx);
-                let is_active = holder.first(List::Orders) == order.id();
-                if is_active {
-                    let location = holder.parent(List::AtLocation);
-                    // Check if the order is complete or not
-                    let mut status = OrderStatus::default();
-                    status.order_id = order.id();
-
-                    let kind = &ORDER_TYPES[order.kind as usize];
-
-                    let is_at_activity = !holder.parent(List::Partecipants).is_null();
-
-                    let arrived = location == order.destination;
-                    let waited_sufficiently = holder.wait_time >= order.wait_time;
-                    let insideness_matches = holder.flag(Flag::IsInside) == kind.wants_to_be_inside;
-
-                    let mut activity_to_trigger = 0;
-                    if arrived && waited_sufficiently && insideness_matches && !is_at_activity {
-                        activity_to_trigger = order.activity_to_trigger;
-                        status.is_complete = order.activity_to_trigger == 0;
-                    }
-
-                    if activity_to_trigger != 0 {
-                        intents[location].start_activity.push(StartActivity {
-                            activity_type: &ACTIVITY_TYPES[activity_to_trigger as usize],
-                            initiator: holder.id(),
-                            originating_order: order.id(),
-                        })
-                    }
-
-                    intents[holder.id()].order_completion = status;
-                }
-            }
-        });
-
-        sim.things.write_pass(|ctx, this, commands| {
-            let intent = &intents[this.id()];
-
-            // Automatic destruction of dependent objects
-            if intent.despawn || (!this.owner.is_null() && !ctx.exists(this.owner)) {
-                commands.despawn(this.id());
-            }
-
-            // Generic token transfer
-            for transfer in &intent.transfer_tokens {
-                // Get all the tokens at the source
-                let tokens = arena.alloc_slice_iter(
-                    ctx.iter_list_get(List::TokensSourced, this.id())
-                        .filter(|tok| transfer.recepient != tok.parent(List::TokensHeld)),
-                );
-                // Score and sort the tokens
-                tokens.sort_by_key(|token| if token.kind == 0 { 100 } else { 0 });
-
-                // Destroy the best token
-                let best_tok = tokens.last().map(|x| x.id()).unwrap_or_default();
-                commands.despawn(best_tok);
-
-                // And allocate a new token
-                add_token(
-                    this.id(),
-                    transfer.recepient,
-                    transfer.change_type_to,
-                    commands,
-                );
-            }
-
-            if let Some(activity) = this.parent(List::Partecipants).get_as_valid(ctx) {
-                let my_location = this.parent(List::AtLocation);
-                let is_moving = this.destination.is_null() && this.destination != my_location;
-
-                // Eject partecipants that are no longer at this location
-                if is_moving || my_location != activity.parent(List::AtLocation) {
-                    commands.remove_from_list(List::Partecipants, this.id());
-                }
-            }
-
-            if this.flag(Flag::IsActivity) {
-                this.wait_time = this.wait_time.saturating_add(1);
-            }
-
-            if this.flag(Flag::IsLocation) {
-                let current_activity = ctx
-                    .iter_list_get(List::AtLocation, this.id())
-                    .find(|x| x.flag(Flag::IsActivity))
-                    .map(|x| x.id())
-                    .unwrap_or_default();
-
-                let new_activity = intent.start_activity.iter().next();
-
-                if let Some(new_activity) = new_activity
-                    && new_activity.activity_type.idx != current_activity.get(ctx).kind
-                {
-                    commands.despawn(current_activity);
-                    let activity_type = new_activity.activity_type;
-                    {
-                        let pos = this.body.pos();
-
-                        let (activity_ref, activity) = commands.spawn();
-                        activity.kind = activity_type.idx;
-                        activity.name = activity_type.name;
-                        activity.sprite = activity_type.sprite;
-                        activity.set_flag(Flag::IsActivity, true);
-                        activity.body = Body {
-                            x: pos.x,
-                            y: pos.y,
-                            size: 2,
-                            layer: 3,
-                        };
-                        activity.current_order = new_activity.originating_order;
-                        commands.add_to_list(List::AtLocation, this.id(), activity_ref);
-                        commands.add_to_list(
-                            List::Partecipants,
-                            activity_ref,
-                            new_activity.initiator,
-                        );
-                        println!("{} Activity spawn enqueued", sim.thick_num);
-                    }
-                }
-            }
-
-            if this.flag(Flag::IsOrder) {
-                let order = &mut *this;
-                let parent = order.parent(List::Orders).get(ctx);
-                let is_active = parent.first(List::Orders) == order.id();
-                if is_active {
-                    let current_activity = parent.parent(List::Partecipants).get(ctx);
-                    if order.activity_to_trigger != 0
-                        && current_activity.current_order == order.id()
-                    {
-                        println!("{} Reset activity trigger", sim.thick_num);
-                        this.activity_to_trigger = 0;
-                    }
-                }
-            }
-
-            if this.flag(Flag::IsPerson) {
-                {
-                    // Determine persons' sprite
-                    let has_subordinates = this.list_len(List::Subordinates) > 0;
-                    if has_subordinates {
-                        this.sprite = "noble"
-                    };
-                }
-
-                // React to order changes
-                if this.current_order != this.first(List::Orders) {
-                    this.current_order = this.first(List::Orders);
-                    this.wait_time = 0;
-                }
-
-                {
-                    let status = &intent.order_completion;
-                    if status.is_complete {
-                        let order = &ctx[status.order_id];
-                        let order_type = &ORDER_TYPES[order.kind as usize];
+            if is_complete {
+                // Completion triggers different actions, depending on the activity type...
+                match this.kind {
+                    x if x == activity_types::RAID.idx => {
+                        let initiator = this.first(List::Partecipants);
                         let location = this.parent(List::AtLocation);
-                        // Order completed
-                        commands.despawn(order.id());
-                        commands.remove_from_list(List::Orders, order.id());
-                        // Send a message
-                        send_message(
-                            commands,
-                            order_type.completion_message,
-                            &[this.id(), location],
-                            player,
-                        );
-
-                        this.current_order = ThingId::null();
+                        intents[location].transfer_tokens.push(TransferToken {
+                            recepient: initiator,
+                            change_type_to: token_types::DREAD,
+                        });
                     }
+                    x if x == activity_types::TRIBAL_ASSEMBLY.idx => {
+                        let initiator = this.first(List::Partecipants);
+                        let location = this.parent(List::AtLocation);
+                        intents[location].transfer_tokens.push(TransferToken {
+                            recepient: initiator,
+                            change_type_to: token_types::KINSHIP,
+                        });
+                    }
+                    x if x == activity_types::BATTLE.idx => {
+                        // Sort in two sides: bandits and non bandits
+                        let mut bandits =
+                            arena.new_vec_with_capacity(this.list_len(List::Partecipants));
+                        let mut others =
+                            arena.new_vec_with_capacity(this.list_len(List::Partecipants));
+                        for entry in ctx.iter_list_get(List::Partecipants, this.id()) {
+                            if entry.name == "Bandit" {
+                                bandits.push(entry);
+                            } else {
+                                others.push(entry);
+                            }
+                        }
+                        // Simple 50% roll: remove all the bandits or all the people
+                        let losers = if sim.thick_num % 2 == 0 {
+                            bandits
+                        } else {
+                            others
+                        };
+                        for x in losers {
+                            println!("Despawning loser: {}", x.name);
+                            intents[x.id()].despawn = true;
+                        }
+                    }
+                    _ => {}
                 }
-
-                // Movement
-                tasking(ctx, this, commands);
-                progress_travel(ctx, this, commands, &mut sim.nav_cache);
-                let movement_status = update_body_of_local_things(ctx, this, request.delta);
-                let has_arrived = matches!(movement_status, MovementStatus::Arrived);
-
-                // A person is invisible if it is not yet arrived at its destination, nor is inside
-                this.set_flag(Flag::IsInvisible, has_arrived && this.flag(Flag::IsInside));
-            }
-        });
-    }
-
-    let ctx = &sim.things;
-
-    // Message overview
-    if request.messages.page_size > 0 {
-        let num_messages = player.get(&ctx).list_len(List::Messages);
-        let number_of_pages = (num_messages.saturating_sub(1) / request.messages.page_size) + 1;
-        let current_page = request.messages.current_page.clamp(1, number_of_pages);
-        let to_skip = current_page.saturating_sub(1) * request.messages.page_size;
-
-        let list = arena.alloc_slice_exact(
-            ctx.iter_list(List::Messages, player)
-                .skip(to_skip)
-                .take(num_messages)
-                .map(|msg| (msg, render_message(arena, &ctx, msg))),
-        );
-        list.reverse();
-        response.messages.list = list;
-        response.messages.current_page = current_page;
-        response.messages.number_of_pages = number_of_pages;
-    };
-
-    // Expanded message
-    response.messages.expanded = request
-        .messages
-        .expanded
-        .as_valid()
-        .map(|id| (id, render_message(arena, &ctx, id)));
-
-    // Order
-    {
-        let selected_entity = request.select_entity.get(ctx);
-        let order = selected_entity.first(List::Orders).get_as_valid(ctx);
-        response.order.name = order
-            .map(|order| render_order_name(arena, &ctx, order))
-            .unwrap_or("No order");
-    }
-
-    // Communications
-    let req = &request.communication;
-    let can_enqueue = req.selected_option.is_some() && req.target.is_valid();
-    if !req.send {
-        let info = &mut response.communication;
-
-        let new_piece = if can_enqueue {
-            let target = req.target;
-            req.selected_option
-                .map(|type_idx| CommPieceRequest { type_idx, target })
-        } else {
-            None
-        };
-
-        info.enqueued_pieces = {
-            let iter = req.enqueued_pieces.iter().chain(&new_piece).map(|piece| {
-                let typ = &COMMUNICATION_TYPES[piece.type_idx];
-                let target_name = piece.target.get(ctx).name;
-                let template = arena.fmt(format_args!("$sprite$plus {}", typ.long_name));
-                let name = render_template_string(arena, template, &[target_name]);
-                CommPieceInfo {
-                    type_idx: piece.type_idx,
-                    target: piece.target,
-                    name,
-                }
-            });
-            let mut vec = arena.new_vec_with_capacity(req.enqueued_pieces.len() + 1);
-            vec.extend(iter);
-            vec.into_bump_slice()
-        };
-
-        info.options = arena.alloc_slice_exact(
-            COMMUNICATION_TYPES
-                .iter()
-                .enumerate()
-                .map(|(idx, typ)| (idx, typ.short_name)),
-        );
-
-        // If we have not enqueued the message, we carry over the data as it is
-        if !can_enqueue {
-            if let Some(idx) = req.selected_option {
-                let typ = &COMMUNICATION_TYPES[idx];
-
-                let target = if typ.target_type.check(req.target.get(ctx)) {
-                    req.target
-                } else {
-                    ThingId::null()
-                };
-
-                let target_param = target
-                    .get_as_valid(ctx)
-                    .map(|x| x.name)
-                    .unwrap_or(typ.target_type.name);
-
-                let name = render_template_string(arena, typ.long_name, &[target_param]);
-                info.selected_option = Some((idx, name));
-                info.target = target;
             }
         }
 
-        info.pick_target = info.selected_option.is_some() && info.target.is_null();
-        info.ready_to_send = !info.enqueued_pieces.is_empty();
-    }
-    response.communication.just_sent = request.communication.send;
+        if this.flag(Flag::IsLocation) {
+            let location = this;
+            let people_here = &*arena.alloc_slice_iter(
+                ctx.iter_list_get(List::AtLocation, location.id())
+                    .filter(|x| x.flag(Flag::IsPerson)),
+            );
 
-    // Big pass, including renderings
-    {
-        let _span = tracing::info_span!("Present pass").entered();
-        // Determine the target type for highlighting (if any)
-        let target_type = if !response.communication.pick_target {
-            Default::default()
-        } else {
-            response
-                .communication
-                .selected_option
-                .map(|x| COMMUNICATION_TYPES[x.0].target_type)
-                .unwrap_or_default()
-        };
-
-        // PRESENT PASS
-        ctx.readonly_pass(|ctx, this| {
-            // Extract selected entity information
-            if this.id() == request.select_entity {
-                let info = &mut response.selected_entity;
-                info.id = this.id();
-                info.name = this.name;
-                info.sprite = this.sprite;
-
-                // Populate selected entity influence
-                let tokens = &mut info.influence;
-                for token in ctx.iter_list_get(List::TokensSourced, this.id()) {
-                    let count = match tokens
-                        .iter()
-                        .position(|holder| holder.id == token.parent(List::TokensHeld))
-                    {
-                        Some(idx) => &mut tokens[idx],
-                        None => {
-                            let holder = token.parent(List::TokensHeld).get(ctx);
-                            let entry = TokenHolderInfo {
-                                id: holder.id(),
-                                name: holder.name,
-                                tokens: TokenCount::default(),
-                            };
-                            tokens.push(entry);
-                            tokens.last_mut().unwrap()
-                        }
-                    };
-                    count.tokens.0[token.kind as usize] += 1;
-                }
-                // Sort the entries. First the unclaimed one (null id),
-                // thereafter the remaining in order of count.
-                tokens.sort_by_key(|x| {
-                    if x.id.is_null() {
-                        0
-                    } else {
-                        1000 - x.tokens.total() + 1
+            for subject in people_here {
+                for target in people_here {
+                    if subject.id() == target.id() {
+                        continue;
                     }
-                });
 
-                // Populate selected entity paretcipants
-                if this.flag(Flag::IsActivity) {
-                    info.show_partecipants = true;
-                    info.partecipants = ctx
-                        .iter_list(List::Partecipants, this.id())
-                        .map(|partecipant| {
-                            let name = ctx[partecipant].name;
-                            (partecipant, name)
-                        })
-                        .collect();
+                    if subject.name == "Bandit"
+                        && !subject.flag(Flag::IsInside)
+                        && !target.flag(Flag::IsInside)
+                    {
+                        intents[location.id()].start_activity.push(StartActivity {
+                            activity_type: &activity_types::BATTLE,
+                            initiator: subject.id(),
+                            originating_order: ThingId::null(),
+                        });
+                    }
+                }
+            }
+        }
+
+        if this.flag(Flag::IsOrder) {
+            let order = &*this;
+            let holder = order.parent(List::Orders).get(ctx);
+            let is_active = holder.first(List::Orders) == order.id();
+            if is_active {
+                let location = holder.parent(List::AtLocation);
+                // Check if the order is complete or not
+                let mut status = OrderStatus::default();
+                status.order_id = order.id();
+
+                let kind = &ORDER_TYPES[order.kind as usize];
+
+                let is_at_activity = !holder.parent(List::Partecipants).is_null();
+
+                let arrived = location == order.destination;
+                let waited_sufficiently = holder.wait_time >= order.wait_time;
+                let insideness_matches = holder.flag(Flag::IsInside) == kind.wants_to_be_inside;
+
+                let mut activity_to_trigger = 0;
+                if arrived && waited_sufficiently && insideness_matches && !is_at_activity {
+                    activity_to_trigger = order.activity_to_trigger;
+                    status.is_complete = order.activity_to_trigger == 0;
+                }
+
+                if activity_to_trigger != 0 {
+                    intents[location].start_activity.push(StartActivity {
+                        activity_type: &ACTIVITY_TYPES[activity_to_trigger as usize],
+                        initiator: holder.id(),
+                        originating_order: order.id(),
+                    })
+                }
+
+                intents[holder.id()].order_completion = status;
+            }
+        }
+    });
+}
+
+fn advance_write<'a>(sim: &mut Simulation, arena: &Arena, intents: &Intents, delta: f32) {
+    let player = sim.things.lookup_tag(PLAYER_TAG);
+
+    sim.things.write_pass(|ctx, this, commands| {
+        let intent = &intents[this.id()];
+
+        // Automatic destruction of dependent objects
+        if intent.despawn || (!this.owner.is_null() && !ctx.exists(this.owner)) {
+            commands.despawn(this.id());
+        }
+
+        // Generic token transfer
+        for transfer in &intent.transfer_tokens {
+            // Get all the tokens at the source
+            let tokens = arena.alloc_slice_iter(
+                ctx.iter_list_get(List::TokensSourced, this.id())
+                    .filter(|tok| transfer.recepient != tok.parent(List::TokensHeld)),
+            );
+            // Score and sort the tokens
+            tokens.sort_by_key(|token| if token.kind == 0 { 100 } else { 0 });
+
+            // Destroy the best token
+            let best_tok = tokens.last().map(|x| x.id()).unwrap_or_default();
+            commands.despawn(best_tok);
+
+            // And allocate a new token
+            add_token(
+                this.id(),
+                transfer.recepient,
+                transfer.change_type_to,
+                commands,
+            );
+        }
+
+        if let Some(activity) = this.parent(List::Partecipants).get_as_valid(ctx) {
+            let my_location = this.parent(List::AtLocation);
+            let is_moving = this.destination.is_null() && this.destination != my_location;
+
+            // Eject partecipants that are no longer at this location
+            if is_moving || my_location != activity.parent(List::AtLocation) {
+                commands.remove_from_list(List::Partecipants, this.id());
+            }
+        }
+
+        if this.flag(Flag::IsActivity) {
+            this.wait_time = this.wait_time.saturating_add(1);
+        }
+
+        if this.flag(Flag::IsLocation) {
+            let current_activity = ctx
+                .iter_list_get(List::AtLocation, this.id())
+                .find(|x| x.flag(Flag::IsActivity))
+                .map(|x| x.id())
+                .unwrap_or_default();
+
+            let new_activity = intent.start_activity.iter().next();
+
+            if let Some(new_activity) = new_activity
+                && new_activity.activity_type.idx != current_activity.get(ctx).kind
+            {
+                commands.despawn(current_activity);
+                let activity_type = new_activity.activity_type;
+                {
+                    let pos = this.body.pos();
+
+                    let (activity_ref, activity) = commands.spawn();
+                    activity.kind = activity_type.idx;
+                    activity.name = activity_type.name;
+                    activity.sprite = activity_type.sprite;
+                    activity.set_flag(Flag::IsActivity, true);
+                    activity.body = Body {
+                        x: pos.x,
+                        y: pos.y,
+                        size: 2,
+                        layer: 3,
+                    };
+                    activity.current_order = new_activity.originating_order;
+                    commands.add_to_list(List::AtLocation, this.id(), activity_ref);
+                    commands.add_to_list(List::Partecipants, activity_ref, new_activity.initiator);
+                }
+            }
+        }
+
+        if this.flag(Flag::IsOrder) {
+            let order = &mut *this;
+            let parent = order.parent(List::Orders).get(ctx);
+            let is_active = parent.first(List::Orders) == order.id();
+            if is_active {
+                let current_activity = parent.parent(List::Partecipants).get(ctx);
+                if order.activity_to_trigger != 0 && current_activity.current_order == order.id() {
+                    this.activity_to_trigger = 0;
+                }
+            }
+        }
+
+        if this.flag(Flag::IsPerson) {
+            {
+                // Determine persons' sprite
+                let has_subordinates = this.list_len(List::Subordinates) > 0;
+                if has_subordinates {
+                    this.sprite = "noble"
+                };
+            }
+
+            // React to order changes
+            if this.current_order != this.first(List::Orders) {
+                this.current_order = this.first(List::Orders);
+                this.wait_time = 0;
+            }
+
+            {
+                let status = &intent.order_completion;
+                if status.is_complete {
+                    let order = &ctx[status.order_id];
+                    let order_type = &ORDER_TYPES[order.kind as usize];
+                    let location = this.parent(List::AtLocation);
+                    // Order completed
+                    commands.despawn(order.id());
+                    commands.remove_from_list(List::Orders, order.id());
+                    // Send a message
+                    send_message(
+                        commands,
+                        order_type.completion_message,
+                        &[this.id(), location],
+                        player,
+                    );
+
+                    this.current_order = ThingId::null();
                 }
             }
 
-            render_thing(
-                ctx,
-                this,
-                &mut response.draw_data,
-                request.select_entity,
-                target_type,
-            );
-        });
-    }
+            // Movement
+            tasking(ctx, this, commands);
+            progress_travel(ctx, this, commands, &mut sim.nav_cache);
+            let movement_status = update_body_of_local_things(ctx, this, delta);
+            let has_arrived = matches!(movement_status, MovementStatus::Arrived);
 
-    response
+            // A person is invisible if it is not yet arrived at its destination, nor is inside
+            this.set_flag(Flag::IsInvisible, has_arrived && this.flag(Flag::IsInside));
+        }
+    });
 }
 
 fn add_order(this: ThingId, typ: &OrderType, destination: ThingId, commands: &mut Commands) {
@@ -1524,4 +1352,188 @@ fn add_token(source: ThingId, recepient: ThingId, kind: u16, commands: &mut Comm
     token.set_flag(Flag::IsToken, true);
     commands.add_to_list(List::TokensSourced, source, tok_ref);
     commands.add_to_list(List::TokensHeld, recepient, tok_ref);
+}
+
+fn prepare_response<'a>(sim: &mut Simulation, arena: &'a Arena, request: &Request) -> Response<'a> {
+    let mut response = Response::new(arena);
+    let ctx = &sim.things;
+    let player = ctx.lookup_tag(PLAYER_TAG);
+
+    // Message overview
+    if request.messages.page_size > 0 {
+        let num_messages = player.get(&ctx).list_len(List::Messages);
+        let number_of_pages = (num_messages.saturating_sub(1) / request.messages.page_size) + 1;
+        let current_page = request.messages.current_page.clamp(1, number_of_pages);
+        let to_skip = current_page.saturating_sub(1) * request.messages.page_size;
+
+        let list = arena.alloc_slice_exact(
+            ctx.iter_list(List::Messages, player)
+                .skip(to_skip)
+                .take(num_messages)
+                .map(|msg| (msg, render_message(arena, &ctx, msg))),
+        );
+        list.reverse();
+        response.messages.list = list;
+        response.messages.current_page = current_page;
+        response.messages.number_of_pages = number_of_pages;
+    };
+
+    // Expanded message
+    response.messages.expanded = request
+        .messages
+        .expanded
+        .as_valid()
+        .map(|id| (id, render_message(arena, &ctx, id)));
+
+    // Order
+    {
+        let selected_entity = request.select_entity.get(ctx);
+        let order = selected_entity.first(List::Orders).get_as_valid(ctx);
+        response.order.name = order
+            .map(|order| render_order_name(arena, &ctx, order))
+            .unwrap_or("No order");
+    }
+
+    // Communications
+    let req = &request.communication;
+    let can_enqueue = req.selected_option.is_some() && req.target.is_valid();
+    if !req.send {
+        let info = &mut response.communication;
+
+        let new_piece = if can_enqueue {
+            let target = req.target;
+            req.selected_option
+                .map(|type_idx| CommPieceRequest { type_idx, target })
+        } else {
+            None
+        };
+
+        info.enqueued_pieces = {
+            let iter = req.enqueued_pieces.iter().chain(&new_piece).map(|piece| {
+                let typ = &COMMUNICATION_TYPES[piece.type_idx];
+                let target_name = piece.target.get(ctx).name;
+                let template = arena.fmt(format_args!("$sprite$plus {}", typ.long_name));
+                let name = render_template_string(arena, template, &[target_name]);
+                CommPieceInfo {
+                    type_idx: piece.type_idx,
+                    target: piece.target,
+                    name,
+                }
+            });
+            let mut vec = arena.new_vec_with_capacity(req.enqueued_pieces.len() + 1);
+            vec.extend(iter);
+            vec.into_bump_slice()
+        };
+
+        info.options = arena.alloc_slice_exact(
+            COMMUNICATION_TYPES
+                .iter()
+                .enumerate()
+                .map(|(idx, typ)| (idx, typ.short_name)),
+        );
+
+        // If we have not enqueued the message, we carry over the data as it is
+        if !can_enqueue {
+            if let Some(idx) = req.selected_option {
+                let typ = &COMMUNICATION_TYPES[idx];
+
+                let target = if typ.target_type.check(req.target.get(ctx)) {
+                    req.target
+                } else {
+                    ThingId::null()
+                };
+
+                let target_param = target
+                    .get_as_valid(ctx)
+                    .map(|x| x.name)
+                    .unwrap_or(typ.target_type.name);
+
+                let name = render_template_string(arena, typ.long_name, &[target_param]);
+                info.selected_option = Some((idx, name));
+                info.target = target;
+            }
+        }
+
+        info.pick_target = info.selected_option.is_some() && info.target.is_null();
+        info.ready_to_send = !info.enqueued_pieces.is_empty();
+    }
+    response.communication.just_sent = request.communication.send;
+
+    // Big pass, including renderings
+    {
+        let _span = tracing::info_span!("Present pass").entered();
+        // Determine the target type for highlighting (if any)
+        let target_type = if !response.communication.pick_target {
+            Default::default()
+        } else {
+            response
+                .communication
+                .selected_option
+                .map(|x| COMMUNICATION_TYPES[x.0].target_type)
+                .unwrap_or_default()
+        };
+
+        // PRESENT PASS
+        sim.things.readonly_pass(|ctx, this| {
+            // Extract selected entity information
+            if this.id() == request.select_entity {
+                let info = &mut response.selected_entity;
+                info.id = this.id();
+                info.name = this.name;
+                info.sprite = this.sprite;
+
+                // Populate selected entity influence
+                let tokens = &mut info.influence;
+                for token in ctx.iter_list_get(List::TokensSourced, this.id()) {
+                    let count = match tokens
+                        .iter()
+                        .position(|holder| holder.id == token.parent(List::TokensHeld))
+                    {
+                        Some(idx) => &mut tokens[idx],
+                        None => {
+                            let holder = token.parent(List::TokensHeld).get(ctx);
+                            let entry = TokenHolderInfo {
+                                id: holder.id(),
+                                name: holder.name,
+                                tokens: TokenCount::default(),
+                            };
+                            tokens.push(entry);
+                            tokens.last_mut().unwrap()
+                        }
+                    };
+                    count.tokens.0[token.kind as usize] += 1;
+                }
+                // Sort the entries. First the unclaimed one (null id),
+                // thereafter the remaining in order of count.
+                tokens.sort_by_key(|x| {
+                    if x.id.is_null() {
+                        0
+                    } else {
+                        1000 - x.tokens.total() + 1
+                    }
+                });
+
+                // Populate selected entity paretcipants
+                if this.flag(Flag::IsActivity) {
+                    info.show_partecipants = true;
+                    info.partecipants = ctx
+                        .iter_list(List::Partecipants, this.id())
+                        .map(|partecipant| {
+                            let name = ctx[partecipant].name;
+                            (partecipant, name)
+                        })
+                        .collect();
+                }
+            }
+
+            render_thing(
+                ctx,
+                this,
+                &mut response.draw_data,
+                request.select_entity,
+                target_type,
+            );
+        });
+    }
+    response
 }
