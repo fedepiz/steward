@@ -604,7 +604,7 @@ pub(crate) struct TokenHolderInfo<'a> {
 
 struct Intent<'a> {
     despawn: bool,
-    order_completion: OrderStatus,
+    is_complete: bool,
     start_activity: AVec<'a, StartActivity>,
     transfer_tokens: AVec<'a, TransferToken>,
 }
@@ -613,7 +613,7 @@ impl<'a> Intent<'a> {
     fn new(arena: &'a Arena) -> Self {
         Self {
             despawn: false,
-            order_completion: OrderStatus::default(),
+            is_complete: false,
             start_activity: arena.new_vec(),
             transfer_tokens: arena.new_vec(),
         }
@@ -831,10 +831,7 @@ fn advance_read<'a>(sim: &mut Simulation, arena: &'a Arena, intents: &mut Intent
                     }
                 }
 
-                intents[holder.id()].order_completion = OrderStatus {
-                    order_id: order.id(),
-                    is_complete,
-                };
+                intents[order.id()].is_complete = is_complete;
             }
         }
     });
@@ -874,52 +871,35 @@ fn advance_write<'a>(sim: &mut Simulation, arena: &Arena, intents: &Intents, del
             );
         }
 
+        // Eject partecipants that are no longer at this location
         if let Some(activity) = this.parent(List::Partecipants).get_as_valid(ctx) {
             let my_location = this.parent(List::AtLocation);
-            let is_moving = this.destination.is_null() && this.destination != my_location;
 
-            // Eject partecipants that are no longer at this location
-            if is_moving || my_location != activity.parent(List::AtLocation) {
+            if my_location != activity.parent(List::AtLocation) {
                 commands.remove_from_list(List::Partecipants, this.id());
             }
         }
 
+        // Advance activity timer
         if this.flag(Flag::IsActivity) {
             this.wait_time = this.wait_time.saturating_add(1);
         }
 
         if this.flag(Flag::IsLocation) {
-            let current_activity = ctx
-                .iter_list_get(List::AtLocation, this.id())
-                .find(|x| x.flag(Flag::IsActivity))
-                .map(|x| x.id())
-                .unwrap_or_default();
-
+            // Location activity resolution
+            let current_activity = activity_at_location(ctx, this.id());
             let new_activity = intent.start_activity.iter().next();
 
-            if let Some(new_activity) = new_activity
-                && new_activity.activity_type.idx != current_activity.get(ctx).kind
+            if let Some(action) = new_activity
+                && action.activity_type.idx != current_activity.get(ctx).kind
             {
+                let &StartActivity {
+                    activity_type,
+                    initiator,
+                    originating_order,
+                } = action;
                 commands.despawn(current_activity);
-                let activity_type = new_activity.activity_type;
-                {
-                    let pos = this.body.pos();
-
-                    let (activity_ref, activity) = commands.spawn();
-                    activity.kind = activity_type.idx;
-                    activity.name = activity_type.name;
-                    activity.sprite = activity_type.sprite;
-                    activity.set_flag(Flag::IsActivity, true);
-                    activity.body = Body {
-                        x: pos.x,
-                        y: pos.y,
-                        size: 2,
-                        layer: 3,
-                    };
-                    activity.current_order = new_activity.originating_order;
-                    commands.add_to_list(List::AtLocation, this.id(), activity_ref);
-                    commands.add_to_list(List::Partecipants, activity_ref, new_activity.initiator);
-                }
+                start_activity(this, activity_type, initiator, originating_order, commands);
             }
         }
 
@@ -928,9 +908,28 @@ fn advance_write<'a>(sim: &mut Simulation, arena: &Arena, intents: &Intents, del
             let parent = order.parent(List::Orders).get(ctx);
             let is_active = parent.first(List::Orders) == order.id();
             if is_active {
+                // Order activity tracking update
                 let current_activity = parent.parent(List::Partecipants).get(ctx);
                 if order.activity_to_trigger != 0 && current_activity.current_order == order.id() {
                     this.activity_to_trigger = 0;
+                }
+
+                // Detect order competion
+                if intent.is_complete {
+                    let order = &mut *this;
+                    let holder = order.parent(List::Orders).get(ctx);
+                    let order_type = &ORDER_TYPES[order.kind as usize];
+                    let location = holder.parent(List::AtLocation);
+                    // Order completed
+                    commands.despawn(order.id());
+                    commands.remove_from_list(List::Orders, order.id());
+                    // Send a message
+                    send_message(
+                        commands,
+                        order_type.completion_message,
+                        &[holder.id(), location],
+                        player,
+                    );
                 }
             }
         }
@@ -950,27 +949,6 @@ fn advance_write<'a>(sim: &mut Simulation, arena: &Arena, intents: &Intents, del
                 this.wait_time = 0;
             }
 
-            {
-                let status = &intent.order_completion;
-                if status.is_complete {
-                    let order = &ctx[status.order_id];
-                    let order_type = &ORDER_TYPES[order.kind as usize];
-                    let location = this.parent(List::AtLocation);
-                    // Order completed
-                    commands.despawn(order.id());
-                    commands.remove_from_list(List::Orders, order.id());
-                    // Send a message
-                    send_message(
-                        commands,
-                        order_type.completion_message,
-                        &[this.id(), location],
-                        player,
-                    );
-
-                    this.current_order = ThingId::null();
-                }
-            }
-
             // Movement
             tasking(ctx, this, commands);
             progress_travel(ctx, this, commands, &mut sim.nav_cache);
@@ -981,6 +959,30 @@ fn advance_write<'a>(sim: &mut Simulation, arena: &Arena, intents: &Intents, del
             this.set_flag(Flag::IsInvisible, has_arrived && this.flag(Flag::IsInside));
         }
     });
+}
+
+fn start_activity(
+    this: &Thing,
+    activity_type: &ActivityType,
+    initiator: ThingId,
+    originating_order: ThingId,
+    commands: &mut Commands,
+) {
+    let pos = this.body.pos();
+    let (activity_ref, activity) = commands.spawn();
+    activity.kind = activity_type.idx;
+    activity.name = activity_type.name;
+    activity.sprite = activity_type.sprite;
+    activity.set_flag(Flag::IsActivity, true);
+    activity.body = Body {
+        x: pos.x,
+        y: pos.y,
+        size: 2,
+        layer: 3,
+    };
+    activity.current_order = originating_order;
+    commands.add_to_list(List::AtLocation, this.id(), activity_ref);
+    commands.add_to_list(List::Partecipants, activity_ref, initiator);
 }
 
 fn add_order(this: ThingId, typ: &OrderType, destination: ThingId, commands: &mut Commands) {
@@ -998,12 +1000,6 @@ fn add_order(this: ThingId, typ: &OrderType, destination: ThingId, commands: &mu
     order.activity_to_trigger = order_type.activity_to_trigger.idx;
 
     commands.add_to_list(List::Orders, this, order_ref);
-}
-
-#[derive(Default, Clone, Copy)]
-struct OrderStatus {
-    order_id: ThingId,
-    is_complete: bool,
 }
 
 #[derive(Clone, Copy, Default)]
