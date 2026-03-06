@@ -704,13 +704,10 @@ fn process_inputs(sim: &mut Simulation, request: &Request) {
 }
 
 fn advance_step<'a>(sim: &mut Simulation, arena: &'a Arena, intents: &mut Intents<'a>, delta: f32) {
-    sim.thick_num = sim.thick_num.wrapping_add(1);
-
     let _span = tracing::info_span!("Advance-Step").entered();
-
+    sim.thick_num = sim.thick_num.wrapping_add(1);
     // Reset intents
     intents.reset();
-
     advance_read(sim, arena, intents);
     advance_write(sim, arena, intents, delta);
 }
