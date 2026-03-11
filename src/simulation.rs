@@ -53,33 +53,6 @@ const NAMES: &'static [&'static str] = &[
     "Tutagual",
 ];
 
-pub(crate) struct TokenType {
-    pub sprite: &'static str,
-}
-
-mod token_types {
-    pub const KINSHIP: u16 = 1;
-    pub const DREAD: u16 = 2;
-    pub const GIFT: u16 = 3;
-    pub const ENCUMBENT: u16 = 4;
-}
-
-const TOKEN_TYPES: [TokenType; 5] = [
-    TokenType {
-        sprite: "tok_generic",
-    },
-    TokenType {
-        sprite: "tok_kinship",
-    },
-    TokenType {
-        sprite: "tok_dread",
-    },
-    TokenType { sprite: "tok_gift" },
-    TokenType {
-        sprite: "tok_encumbent",
-    },
-];
-
 struct ActivityType {
     idx: u16,
     name: &'static str,
@@ -150,12 +123,6 @@ pub(crate) fn setup(scratch: &Arena) -> Simulation {
                 };
                 this.set_flag(Flag::IsLocation, true);
                 this.set_flag(Flag::IsSettlement, true);
-                let settlement = this.id();
-
-                // Populate the settlement with 10 tokens
-                for _ in 0..10 {
-                    create_token_at(ctx, settlement);
-                }
             }
             "spawn_waypoint" => {
                 let tag = row[1].as_str().to_string().leak();
@@ -202,47 +169,23 @@ pub(crate) fn setup(scratch: &Arena) -> Simulation {
         // Populate settlements
         if this.flag(Flag::IsSettlement) {
             let settlement = &this;
-            // Get the list of tokens here
-            let mut tokens = scratch
-                .alloc_slice_iter(ctx.iter_list(List::TokensSourced, settlement.id()))
-                .into_iter();
-
             let num_people = 3;
             let mut people = scratch.new_vec_with_capacity(num_people);
 
-            for i in 0..num_people {
+            for _ in 0..num_people {
                 let person = create_person(ctx, settlement.id(), true);
                 people.push(person);
-
-                let kinds: &[u16] = if i == 0 {
-                    &[token_types::KINSHIP, token_types::ENCUMBENT]
-                } else {
-                    &[token_types::KINSHIP]
-                };
-                for &kind in kinds {
-                    if let Some(token) = tokens.next().copied() {
-                        ctx.remove_from_list(List::TokensHeld, token);
-                        ctx.add_to_list(List::TokensHeld, person, token);
-                        let token = &mut ctx[token];
-                        token.kind = kind;
-                    }
-                }
             }
 
             // Strongest person is leader
-            let strongest_person = people
-                .iter()
-                .copied()
-                .max_by_key(|&person| calculate_tokens_at(ctx, person, settlement.id()))
-                .unwrap_or_default();
-
+            let strongest_person = people.get(0).copied().unwrap_or_default();
             ctx.add_to_list(List::Possessions, strongest_person, settlement.id());
         }
     });
 
     // Use the "set_loyalty" commands
     for row in csv.rows() {
-        ctx.with_commands(|ctx, commands| match row[0].as_str() {
+        ctx.with_commands(|ctx, _| match row[0].as_str() {
             "set_loyalty" => {
                 let subordinate = ctx
                     .lookup_tag(row[1].as_str())
@@ -253,11 +196,6 @@ pub(crate) fn setup(scratch: &Arena) -> Simulation {
                     .get(&ctx)
                     .parent(List::Possessions);
                 ctx.add_to_list(List::Subordinates, superior, subordinate);
-
-                if let Some(token) = ctx.iter_list(List::TokensSourced, subordinate).next() {
-                    commands.despawn(token);
-                    add_token(subordinate, superior, token_types::GIFT, commands);
-                }
             }
             _ => {}
         });
@@ -303,29 +241,7 @@ fn create_person(ctx: &mut Things, location: ThingId, inside: bool) -> ThingId {
     let person = person.id();
     ctx.add_to_list(List::AtLocation, location, person);
 
-    for _ in 0..5 {
-        create_token_at(ctx, person);
-    }
-
     person
-}
-
-fn create_token_at(ctx: &mut Things, source: ThingId) -> ThingId {
-    let token = ctx.spawn();
-    token.name = "Token";
-    token.set_flag(Flag::IsToken, true);
-    token.kind = 0;
-    token.owner = source;
-
-    let token = token.id();
-    ctx.add_to_list(List::TokensSourced, source, token);
-    token
-}
-
-fn calculate_tokens_at(ctx: &Things, holder: ThingId, source: ThingId) -> usize {
-    ctx.iter_list_get(List::TokensHeld, holder)
-        .filter(|tok| tok.parent(List::TokensSourced) == source)
-        .count()
 }
 
 #[derive(Default)]
@@ -591,22 +507,14 @@ pub(crate) struct EntityInfo<'a> {
     pub id: ThingId,
     pub name: &'a str,
     pub sprite: &'a str,
-    pub influence: Vec<TokenHolderInfo<'a>>,
     pub show_partecipants: bool,
     pub partecipants: Vec<(ThingId, &'static str)>,
-}
-
-pub(crate) struct TokenHolderInfo<'a> {
-    pub id: ThingId,
-    pub name: &'a str,
-    pub tokens: TokenCount,
 }
 
 struct Intent<'a> {
     despawn: bool,
     is_complete: bool,
     start_activity: AVec<'a, StartActivity>,
-    transfer_tokens: AVec<'a, TransferToken>,
 }
 
 impl<'a> Intent<'a> {
@@ -615,7 +523,6 @@ impl<'a> Intent<'a> {
             despawn: false,
             is_complete: false,
             start_activity: arena.new_vec(),
-            transfer_tokens: arena.new_vec(),
         }
     }
 }
@@ -728,22 +635,8 @@ fn advance_read<'a>(sim: &mut Simulation, arena: &'a Arena, intents: &mut Intent
             if is_complete {
                 // Completion triggers different actions, depending on the activity type...
                 match this.kind {
-                    x if x == activity_types::RAID.idx => {
-                        let initiator = this.first(List::Partecipants);
-                        let location = this.parent(List::AtLocation);
-                        intents[location].transfer_tokens.push(TransferToken {
-                            recepient: initiator,
-                            change_type_to: token_types::DREAD,
-                        });
-                    }
-                    x if x == activity_types::TRIBAL_ASSEMBLY.idx => {
-                        let initiator = this.first(List::Partecipants);
-                        let location = this.parent(List::AtLocation);
-                        intents[location].transfer_tokens.push(TransferToken {
-                            recepient: initiator,
-                            change_type_to: token_types::KINSHIP,
-                        });
-                    }
+                    x if x == activity_types::RAID.idx => {}
+                    x if x == activity_types::TRIBAL_ASSEMBLY.idx => {}
                     x if x == activity_types::BATTLE.idx => {
                         // Sort in two sides: bandits and non bandits
                         let mut bandits =
@@ -843,29 +736,6 @@ fn advance_write<'a>(sim: &mut Simulation, arena: &Arena, intents: &Intents, del
         // Automatic destruction of dependent objects
         if intent.despawn || (!this.owner.is_null() && !ctx.exists(this.owner)) {
             commands.despawn(this.id());
-        }
-
-        // Generic token transfer
-        for transfer in &intent.transfer_tokens {
-            // Get all the tokens at the source
-            let tokens = arena.alloc_slice_iter(
-                ctx.iter_list_get(List::TokensSourced, this.id())
-                    .filter(|tok| transfer.recepient != tok.parent(List::TokensHeld)),
-            );
-            // Score and sort the tokens
-            tokens.sort_by_key(|token| if token.kind == 0 { 100 } else { 0 });
-
-            // Destroy the best token
-            let best_tok = tokens.last().map(|x| x.id()).unwrap_or_default();
-            commands.despawn(best_tok);
-
-            // And allocate a new token
-            add_token(
-                this.id(),
-                transfer.recepient,
-                transfer.change_type_to,
-                commands,
-            );
         }
 
         // Eject partecipants that are no longer at this location
@@ -1309,41 +1179,11 @@ fn render_thing(
     }
 }
 
-#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Default)]
-pub(crate) struct TokenCount([usize; TOKEN_TYPES.len()]);
-
-impl TokenCount {
-    pub fn total(&self) -> usize {
-        self.iter().map(|x| x.1).sum()
-    }
-
-    pub fn iter(&self) -> impl Iterator<Item = (&'static TokenType, usize)> {
-        self.0
-            .iter()
-            .enumerate()
-            .map(|(idx, value)| (&TOKEN_TYPES[idx], *value))
-    }
-}
-
-#[derive(Clone, Copy)]
-struct TransferToken {
-    recepient: ThingId,
-    change_type_to: u16,
-}
-
 #[derive(Clone, Copy)]
 struct StartActivity {
     activity_type: &'static ActivityType,
     initiator: ThingId,
     originating_order: ThingId,
-}
-
-fn add_token(source: ThingId, recepient: ThingId, kind: u16, commands: &mut Commands) {
-    let (tok_ref, token) = commands.spawn();
-    token.kind = kind;
-    token.set_flag(Flag::IsToken, true);
-    commands.add_to_list(List::TokensSourced, source, tok_ref);
-    commands.add_to_list(List::TokensHeld, recepient, tok_ref);
 }
 
 fn prepare_response<'a>(sim: &mut Simulation, arena: &'a Arena, request: &Request) -> Response<'a> {
@@ -1473,37 +1313,6 @@ fn prepare_response<'a>(sim: &mut Simulation, arena: &'a Arena, request: &Reques
                 info.id = this.id();
                 info.name = this.name;
                 info.sprite = this.sprite;
-
-                // Populate selected entity influence
-                let tokens = &mut info.influence;
-                for token in ctx.iter_list_get(List::TokensSourced, this.id()) {
-                    let count = match tokens
-                        .iter()
-                        .position(|holder| holder.id == token.parent(List::TokensHeld))
-                    {
-                        Some(idx) => &mut tokens[idx],
-                        None => {
-                            let holder = token.parent(List::TokensHeld).get(ctx);
-                            let entry = TokenHolderInfo {
-                                id: holder.id(),
-                                name: holder.name,
-                                tokens: TokenCount::default(),
-                            };
-                            tokens.push(entry);
-                            tokens.last_mut().unwrap()
-                        }
-                    };
-                    count.tokens.0[token.kind as usize] += 1;
-                }
-                // Sort the entries. First the unclaimed one (null id),
-                // thereafter the remaining in order of count.
-                tokens.sort_by_key(|x| {
-                    if x.id.is_null() {
-                        0
-                    } else {
-                        1000 - x.tokens.total() + 1
-                    }
-                });
 
                 // Populate selected entity paretcipants
                 if this.flag(Flag::IsActivity) {

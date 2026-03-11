@@ -120,21 +120,6 @@ pub(super) fn root<'a>(
                         );
                     }
 
-                    if !selected_entity.influence.is_empty() {
-                        gui.heading("Influence", 6.);
-                        for holder in &selected_entity.influence {
-                            gui.row(|mut gui| {
-                                let name = if holder.id.is_null() {
-                                    "Unclaimed:"
-                                } else {
-                                    gui.arena().alloc_str(holder.name)
-                                };
-                                gui.line_sized(name, 2.);
-                                let str = token_string(gui.arena(), &holder.tokens);
-                                gui.line_sized(str, 6.);
-                            });
-                        }
-                    }
                     if selected_entity.show_partecipants {
                         gui.heading("Partecipants", 6.);
                         for &(id, name) in &selected_entity.partecipants {
@@ -353,15 +338,4 @@ pub(super) fn root<'a>(
             }
         },
     )
-}
-
-fn token_string<'a>(arena: &'a Arena, count: &TokenCount) -> &'a str {
-    let mut str = arena.new_string_with_capacity(20);
-    for (tok, count) in count.iter() {
-        if count > 0 {
-            let text = arena.fmt(format_args!("$sprite${} {count} ", tok.sprite));
-            str.push_str(text);
-        }
-    }
-    str.into_bump_str()
 }

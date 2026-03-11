@@ -57,8 +57,6 @@ pub(crate) enum Flag {
     IsPerson,
     IsPath,
     IsActivity,
-    // Tokens are an abstract kind of thing used to model control of some kind of resource or power share.
-    IsToken,
     Teleport,
     IsInvisible,
     // Insideness
